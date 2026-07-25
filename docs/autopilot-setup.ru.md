@@ -9,6 +9,10 @@ Desktop каждые пять минут проверяет durable очеред
 завершается до открытия Browser. Непустая очередь атомарно арендуется и
 обрабатывается в этом же scheduled run на Sol High.
 
+Каждый непустой claim получает до `commenter_memory_limit` точных публичных
+взаимодействий с тем же стабильным X user ID. Более глубокая сохраненная история
+доступна Sol через `commenter-history`, только когда она полезна текущему ответу.
+
 Codex CLI намеренно исключен из Browser-работы. Официальное руководство Codex
 указывает, что встроенный Browser недоступен в Codex CLI и IDE extension.
 `scripts/autopilot_resume.py` является fail-closed защитой старой установки.
@@ -38,6 +42,7 @@ Codex CLI намеренно исключен из Browser-работы. Офи�
   "autopilot_state_file": "var/autopilot-dispatch.json",
   "autopilot_health_file": "var/autopilot-health.json",
   "browser_owner_cwd": "/absolute/path/to/browser-owner-workspace",
+  "commenter_memory_limit": 12,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }
@@ -128,8 +133,7 @@ python3 scripts/render_launchd.py \
 5. Загрузите poll/watchdog и активируйте Desktop automation, не передавая ей
    event ID.
 6. Требуйте естественное повторное обнаружение через API, один атомарный claim,
-   verified publication или обоснованный durable skip, exact history и durable
-   resolution.
+   одну verified publication на событие, exact history и durable resolution.
 7. Подтвердите пустую очередь и пустой dispatch state.
 
 Нельзя имитировать успех прямой вставкой resolution.

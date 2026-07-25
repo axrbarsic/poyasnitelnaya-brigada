@@ -21,5 +21,7 @@
   "keychain_service": "axrbarsic-x-mention-watcher",
   "keychain_account": "axrbarsic",
   "queue_direct_replies_only": true,
+  "mandatory_response_mode": true,
+  "commenter_memory_limit": 12,
   "notifications_enabled": true
 }

@@ -9,8 +9,8 @@ an X reply.
 2. The first successful live poll stores available history, advances
    `since_id`, and queues every direct reply for an initial audit.
 3. The initial audit remains incomplete until every direct reply has a durable
-   `published`, `skip`, or contract-level `blocked` resolution. Queue state
-   alone cannot satisfy this invariant.
+   `published`, proven `already-answered` skip, or terminal contract-level
+   `blocked` resolution. Queue state alone cannot satisfy this invariant.
 4. Later polls queue direct replies and replies in any conversation whose exact
    history already contains an `alex` turn.
 5. SQLite deduplicates immutable event IDs and advances `since_id`.
@@ -21,7 +21,8 @@ an X reply.
    scheduled run.
 9. A separate one-minute watchdog checks poll freshness and failure count.
 10. Sol High opens the complete live X subtree, classifies text and media in
-   context, and resolves an event only after publication or skip is durable.
+    context, and resolves an event only after publication, exact proof of an
+    existing direct Alex child reply, or a terminal blocker.
 11. `initial-audit-next` performs only free mechanical grouping and exact-text
     extraction. It never decides stance, relevance, or whether to publish.
 12. `initial-audit-expire --hours H --as-of UTC` fixes Alex's requested
@@ -37,24 +38,32 @@ an X reply.
     and it fails closed on missing history or mismatched chain metadata. A
     publication must include both the inspected user turn and the exact
     verified Alex turn linked to that user event.
+15. `autopilot_bridge` enriches each claimed event with compact
+    `commenter_memory` keyed by stable X user ID. It contains source-linked
+    public turns and exact Alex children from any stored conversation. A deeper
+    `commenter-history` query can search all retained years without adding the
+    full archive to every Sol prompt.
 
 Each event resolution can preserve stance, confidence, media meaning, and
 multiple evidence notes. This prevents a media-only reply from disappearing
 into an undifferentiated skip category.
 
 An explicit later scope expansion or recovered contract dependency may revise
-`skip` to `published`, `skip` to `blocked`, `blocked` to `published`, or
-`blocked` to `skip`. A published resolution is terminal. The immutable audit
+`skip` to `skip`, `skip` to `published`, `skip` to `blocked`, `blocked` to
+`published`, or `blocked` to `skip`. A published resolution is terminal. The immutable audit
 row stores both versions and the revision reason before the current resolution
 changes. Browser synchronization requires explicit
 `supersedes_existing_resolution` and `resolution_revision_reason` fields, so
 an ordinary duplicate or stale handoff cannot overwrite a decision.
 
-`blocked` is not a content classification and not a synonym for `skip`. It
-means the event requires action, but a required workflow dependency is
-currently unavailable, such as the exact historical Pro conversation URL. A
-blocked event remains visible in status and export data and may be revised
-auditably after the dependency is recovered.
+`blocked` is not a content classification and not a synonym for `skip`. In
+mandatory response mode it requires an allowed terminal `blocker_code`.
+Temporary Browser, Pro, rate, and validation failures remain queued for retry.
+
+`mandatory-response-requeue` selects recent content-based skips with no exact
+direct Alex child reply, records their prior resolution in
+`response_policy_requeues`, and returns them to the ordinary wake queue without
+receiving target IDs.
 
 The stable `stance` field keeps one of four broad classes. `stance_detail`
 preserves the exact Sol classification without weakening deterministic
@@ -75,6 +84,11 @@ The same SQLite database stores append-only conversation chains:
   turn hint without deleting or rewriting the original JSONL record;
 - canonical JSONL export provides a reviewable private Git backup without
   including API credentials, cookies, or Browser state.
+
+The author-memory layer is evidence memory, not a psychological profile. Sol
+may cite an exact prior public statement to identify a contradiction, changed
+standard, or repeated claim. It may not infer hidden motives, sensitive
+attributes, or optimize political persuasion around personal vulnerabilities.
 
 ## Failure containment
 
@@ -102,6 +116,8 @@ The same SQLite database stores append-only conversation chains:
   operation can remove them from the X workflow.
 - `resolve` requires the exact inspected event turn in conversation history.
   The final audit gate also rejects legacy resolutions missing that turn.
+- In mandatory response mode, `resolve` rejects every content-based skip and
+  accepts skip only after exact history proves the direct Alex child reply.
 - Published resolutions require the exact Alex turn, verified reply URL, and
   parent link back to the inspected event.
 - Browser handoff synchronization accepts only explicit pending resolution
@@ -112,8 +128,9 @@ The same SQLite database stores append-only conversation chains:
   thinking event is never aged out during active work.
 - A resolution revision is append-only. A transition to `published` requires a
   matching exact Alex publication turn. Only the audited transitions
-  `skip` to `published`, `skip` to `blocked`, `blocked` to `published`, and
-  `blocked` to `skip` are permitted.
+  `skip` to `skip`, `skip` to `published`, `skip` to `blocked`, `blocked` to
+  `published`, and `blocked` to `skip` are permitted. The skip-to-skip
+  transition is allowed only in mandatory mode with existing-reply proof.
 - A process lock prevents overlapping pollers from racing the cursor.
 - Repeated pagination tokens and excessive page counts fail closed.
 - Background output is discarded so LaunchAgent logs cannot grow without bound.

@@ -9,6 +9,10 @@ automation checks the durable queue every five minutes. An empty queue exits
 before opening Browser. A non-empty queue is leased atomically and processed
 inside that same scheduled run on Sol High.
 
+Each non-empty claim includes up to `commenter_memory_limit` source-linked prior
+interactions for the same stable X user ID. Sol may query deeper retained
+history with `commenter-history` only when it is useful to the current reply.
+
 Codex CLI is intentionally excluded from Browser work. The official Codex
 manual states that the built-in Browser is unavailable in Codex CLI and the
 IDE extension. `scripts/autopilot_resume.py` is a fail-closed retirement guard.
@@ -38,6 +42,7 @@ Add local values to ignored `config.json`:
   "autopilot_state_file": "var/autopilot-dispatch.json",
   "autopilot_health_file": "var/autopilot-health.json",
   "browser_owner_cwd": "/absolute/path/to/browser-owner-workspace",
+  "commenter_memory_limit": 12,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }
@@ -126,8 +131,8 @@ Use one or more real unresolved replies:
    events.
 5. Load poll/watchdog and activate the Desktop automation without giving it
    event IDs.
-6. Require natural API rediscovery, one atomic claim, verified publication or
-   justified durable skip, exact history, and durable resolution.
+6. Require natural API rediscovery, one atomic claim, one verified publication
+   per event, exact history, and durable resolution.
 7. Confirm queue and dispatch state are empty.
 
 Never simulate success by directly inserting a resolution.

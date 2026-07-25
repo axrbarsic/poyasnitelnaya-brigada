@@ -23,9 +23,16 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 7
 TOKEN_ENV_NAMES = ("X_BEARER_TOKEN", "X_API_BEARER_TOKEN", "TWITTER_BEARER_TOKEN")
 INITIAL_AUDIT_EXPIRY_PROVENANCE = "stored_api_auto_expiry_v1"
+TERMINAL_BLOCKER_CODES = {
+    "account_unavailable",
+    "missing_historical_pro_conversation",
+    "reply_restricted",
+    "safety_restriction",
+    "target_unavailable",
+}
 
 
 def utc_now() -> datetime:
@@ -77,6 +84,8 @@ class Config:
     keychain_service: str
     keychain_account: str
     queue_direct_replies_only: bool
+    mandatory_response_mode: bool
+    commenter_memory_limit: int
     notifications_enabled: bool
 
 
@@ -108,6 +117,8 @@ def load_config(path: Path) -> Config:
         keychain_service=str(raw.get("keychain_service", "")).strip(),
         keychain_account=str(raw.get("keychain_account", "")).strip(),
         queue_direct_replies_only=bool(raw.get("queue_direct_replies_only", True)),
+        mandatory_response_mode=bool(raw.get("mandatory_response_mode", False)),
+        commenter_memory_limit=int(raw.get("commenter_memory_limit", 12)),
         notifications_enabled=bool(raw.get("notifications_enabled", True)),
     )
     positive_values = {
@@ -118,6 +129,7 @@ def load_config(path: Path) -> Config:
         "watchdog_interval_seconds": config.watchdog_interval_seconds,
         "request_timeout_seconds": config.request_timeout_seconds,
         "max_pages_per_poll": config.max_pages_per_poll,
+        "commenter_memory_limit": config.commenter_memory_limit,
     }
     invalid = [name for name, value in positive_values.items() if value <= 0]
     if invalid:
@@ -216,6 +228,15 @@ def connect_database(path: Path) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS conversation_turns_chain_idx
         ON conversation_turns(chain_id, posted_at, status_id);
 
+        CREATE INDEX IF NOT EXISTS conversation_turns_parent_actor_idx
+        ON conversation_turns(parent_status_id, actor, posted_at, status_id);
+
+        CREATE INDEX IF NOT EXISTS events_author_idx
+        ON events(author_id, created_at, event_id);
+
+        CREATE INDEX IF NOT EXISTS events_username_idx
+        ON events(username, created_at, event_id);
+
         CREATE TABLE IF NOT EXISTS conversation_sources (
             status_id TEXT NOT NULL,
             source_url TEXT NOT NULL,
@@ -228,6 +249,7 @@ def connect_database(path: Path) -> sqlite3.Connection:
             disposition TEXT NOT NULL,
             reason TEXT NOT NULL,
             reply_url TEXT,
+            blocker_code TEXT,
             stance TEXT,
             stance_detail TEXT,
             confidence TEXT,
@@ -246,6 +268,15 @@ def connect_database(path: Path) -> sqlite3.Connection:
             revised_at TEXT NOT NULL,
             FOREIGN KEY(event_id) REFERENCES events(event_id)
         );
+
+        CREATE TABLE IF NOT EXISTS response_policy_requeues (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            event_id TEXT NOT NULL,
+            previous_resolution_json TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            requeued_at TEXT NOT NULL,
+            FOREIGN KEY(event_id) REFERENCES events(event_id)
+        );
         """
     )
     resolution_columns = {
@@ -253,6 +284,7 @@ def connect_database(path: Path) -> sqlite3.Connection:
         for row in connection.execute("PRAGMA table_info(event_resolutions)")
     }
     for column, declaration in {
+        "blocker_code": "TEXT",
         "stance": "TEXT",
         "stance_detail": "TEXT",
         "confidence": "TEXT",
@@ -382,6 +414,136 @@ def queued_events(connection: sqlite3.Connection) -> list[dict[str, Any]]:
             }
         )
     return result
+
+
+def _commenter_memory_excerpt(value: str, limit: int = 400) -> dict[str, Any]:
+    code_points = list(value)
+    truncated = len(code_points) > limit
+    excerpt = "".join(code_points[:limit])
+    return {
+        "text": excerpt,
+        "truncated": truncated,
+    }
+
+
+def commenter_history_for_event(
+    connection: sqlite3.Connection,
+    event_id: str,
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    if limit <= 0:
+        raise ValueError("Commenter history limit must be positive")
+    event_id = _validate_status_id(str(event_id), "event_id")
+    current = connection.execute(
+        """
+        SELECT event_id, author_id, username
+        FROM events
+        WHERE event_id = ?
+        """,
+        (event_id,),
+    ).fetchone()
+    if current is None:
+        raise KeyError(f"Unknown event {event_id}")
+    author_id = current["author_id"]
+    username = current["username"]
+    if author_id:
+        identity_clause = "e.author_id = ?"
+        identity_value = str(author_id)
+        identity_kind = "x_user_id"
+    elif username:
+        identity_clause = "LOWER(e.username) = LOWER(?)"
+        identity_value = str(username)
+        identity_kind = "x_handle_fallback"
+    else:
+        return {
+            "event_id": event_id,
+            "identity_kind": "unavailable",
+            "author_id": None,
+            "username": None,
+            "total_prior_interactions": 0,
+            "first_interaction_at": None,
+            "last_interaction_at": None,
+            "returned_interactions": 0,
+            "interactions": [],
+        }
+
+    aggregate = connection.execute(
+        f"""
+        SELECT COUNT(*) AS count,
+               MIN(e.created_at) AS first_interaction_at,
+               MAX(e.created_at) AS last_interaction_at
+        FROM events e
+        WHERE e.event_id != ? AND {identity_clause}
+        """,
+        (event_id, identity_value),
+    ).fetchone()
+    rows = connection.execute(
+        f"""
+        SELECT e.event_id, e.username, e.created_at, e.conversation_id,
+               e.payload_json, r.disposition, r.stance, r.stance_detail
+        FROM events e
+        LEFT JOIN event_resolutions r ON r.event_id = e.event_id
+        WHERE e.event_id != ? AND {identity_clause}
+        ORDER BY e.created_at DESC, CAST(e.event_id AS INTEGER) DESC
+        LIMIT ?
+        """,
+        (event_id, identity_value, limit),
+    ).fetchall()
+    interactions: list[dict[str, Any]] = []
+    for row in rows:
+        status_id = str(row["event_id"])
+        payload = json.loads(str(row["payload_json"]))
+        exact_text = str(payload.get("text") or "")
+        prior_username = row["username"]
+        target_url = (
+            f"https://x.com/{prior_username}/status/{status_id}"
+            if prior_username
+            else f"https://x.com/i/web/status/{status_id}"
+        )
+        alex_rows = connection.execute(
+            """
+            SELECT status_id, url, exact_text, posted_at
+            FROM conversation_turns
+            WHERE parent_status_id = ? AND actor = 'alex'
+            ORDER BY posted_at, CAST(status_id AS INTEGER)
+            LIMIT 3
+            """,
+            (status_id,),
+        ).fetchall()
+        alex_replies = [
+            {
+                "status_id": str(reply["status_id"]),
+                "url": str(reply["url"]),
+                "posted_at": reply["posted_at"],
+                **_commenter_memory_excerpt(str(reply["exact_text"])),
+            }
+            for reply in alex_rows
+        ]
+        interactions.append(
+            {
+                "status_id": status_id,
+                "url": target_url,
+                "created_at": row["created_at"],
+                "conversation_id": row["conversation_id"],
+                "disposition": row["disposition"],
+                "stance": row["stance"],
+                "stance_detail": row["stance_detail"],
+                **_commenter_memory_excerpt(exact_text),
+                "alex_replies": alex_replies,
+            }
+        )
+    return {
+        "event_id": event_id,
+        "identity_kind": identity_kind,
+        "author_id": str(author_id) if author_id else None,
+        "username": username,
+        "total_prior_interactions": int(aggregate["count"]),
+        "first_interaction_at": aggregate["first_interaction_at"],
+        "last_interaction_at": aggregate["last_interaction_at"],
+        "returned_interactions": len(interactions),
+        "interactions": interactions,
+    }
 
 
 def refresh_wake_file(config: Config, connection: sqlite3.Connection) -> dict[str, Any]:
@@ -614,9 +776,19 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             FROM events e
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
-              AND NOT EXISTS (
-                  SELECT 1 FROM event_resolutions r
-                  WHERE r.event_id = e.event_id
+              AND (
+                  NOT EXISTS (
+                      SELECT 1 FROM event_resolutions r
+                      WHERE r.event_id = e.event_id
+                  )
+                  OR (
+                      e.delivery_state = 'queued'
+                      AND EXISTS (
+                          SELECT 1 FROM event_resolutions r
+                          WHERE r.event_id = e.event_id
+                            AND r.disposition = 'skip'
+                      )
+                  )
               )
             """,
             (configured_user_id,),
@@ -633,6 +805,7 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
               AND NOT EXISTS (
                   SELECT 1 FROM event_resolutions r
                   WHERE r.event_id = e.event_id
+                    AND r.disposition IN ('published', 'blocked')
               )
             """,
             (configured_user_id,),
@@ -645,6 +818,10 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             FROM event_resolutions r
             JOIN events e ON e.event_id = r.event_id
             WHERE e.is_reply = 1 AND e.in_reply_to_user_id = ?
+              AND NOT (
+                  e.delivery_state = 'queued'
+                  AND r.disposition = 'skip'
+              )
             """,
             (configured_user_id,),
         ).fetchone()["count"]
@@ -658,6 +835,10 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             LEFT JOIN conversation_turns t ON t.status_id = r.event_id
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
+              AND NOT (
+                  e.delivery_state = 'queued'
+                  AND r.disposition = 'skip'
+              )
               AND t.status_id IS NULL
             """,
             (configured_user_id,),
@@ -773,6 +954,7 @@ def initial_audit_next(
           AND NOT EXISTS (
               SELECT 1 FROM event_resolutions r
               WHERE r.event_id = e.event_id
+                AND r.disposition IN ('published', 'blocked')
           )
         GROUP BY COALESCE(e.conversation_id, e.event_id)
         ORDER BY latest_created_at DESC,
@@ -795,6 +977,7 @@ def initial_audit_next(
               AND NOT EXISTS (
                   SELECT 1 FROM event_resolutions r
                   WHERE r.event_id = e.event_id
+                    AND r.disposition IN ('published', 'blocked')
               )
             ORDER BY e.created_at, CAST(e.event_id AS INTEGER)
             """,
@@ -1238,6 +1421,108 @@ def start_initial_audit(
     }
 
 
+def requeue_unanswered_skips(
+    config: Config,
+    connection: sqlite3.Connection,
+    *,
+    response_window_hours: float,
+    now: datetime,
+    dry_run: bool,
+) -> dict[str, Any]:
+    if not config.mandatory_response_mode:
+        raise ValueError(
+            "mandatory_response_mode must be enabled before policy requeue"
+        )
+    if response_window_hours <= 0 or not math.isfinite(response_window_hours):
+        raise ValueError("Response window hours must be a positive number")
+    if now.tzinfo is None or now.utcoffset() is None:
+        raise ValueError("Policy requeue --as-of must be timezone-aware")
+    current = now.astimezone(timezone.utc)
+    cutoff = current - timedelta(hours=response_window_hours)
+    candidates: list[sqlite3.Row] = []
+    rows = connection.execute(
+        """
+        SELECT e.*, r.*
+        FROM events e
+        JOIN event_resolutions r ON r.event_id = e.event_id
+        WHERE r.disposition = 'skip'
+          AND e.delivery_state != 'queued'
+        ORDER BY e.created_at, CAST(e.event_id AS INTEGER)
+        """
+    ).fetchall()
+    for row in rows:
+        created_at = parse_time(row["created_at"])
+        if (
+            created_at is None
+            or created_at.tzinfo is None
+            or created_at.utcoffset() is None
+        ):
+            continue
+        created_at_utc = created_at.astimezone(timezone.utc)
+        if created_at_utc < cutoff or created_at_utc > current:
+            continue
+        if not is_eligible_reply(
+            connection,
+            config,
+            is_reply=bool(row["is_reply"]),
+            in_reply_to_user_id=row["in_reply_to_user_id"],
+            conversation_id=row["conversation_id"],
+        ):
+            continue
+        if _matching_alex_reply_turns(connection, str(row["event_id"])):
+            continue
+        candidates.append(row)
+
+    requeued_at = isoformat(current)
+    if not dry_run and candidates:
+        with connection:
+            delete_meta(connection, "initial_audit_completed_at")
+            for row in candidates:
+                event_id = str(row["event_id"])
+                connection.execute(
+                    """
+                    INSERT INTO response_policy_requeues(
+                        event_id, previous_resolution_json, reason, requeued_at
+                    ) VALUES(?, ?, 'mandatory_response_policy_migration', ?)
+                    """,
+                    (
+                        event_id,
+                        json.dumps(
+                            _resolution_row_payload(row),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        requeued_at,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE events
+                    SET delivery_state = 'queued'
+                    WHERE event_id = ?
+                    """,
+                    (event_id,),
+                )
+    wake = (
+        refresh_wake_file(config, connection)
+        if not dry_run
+        else {"pending_count": len(queued_events(connection))}
+    )
+    if not dry_run:
+        write_health(config, connection, last_new_count=0)
+    return {
+        "dry_run": dry_run,
+        "as_of": isoformat(current),
+        "cutoff": isoformat(cutoff),
+        "hours": response_window_hours,
+        "candidate_count": len(candidates),
+        "candidate_event_ids": [
+            str(row["event_id"]) for row in candidates
+        ],
+        "pending_count": wake["pending_count"],
+    }
+
+
 def complete_initial_audit(
     config: Config,
     connection: sqlite3.Connection,
@@ -1249,9 +1534,19 @@ def complete_initial_audit(
             FROM events e
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
-              AND NOT EXISTS (
-                  SELECT 1 FROM event_resolutions r
-                  WHERE r.event_id = e.event_id
+              AND (
+                  NOT EXISTS (
+                      SELECT 1 FROM event_resolutions r
+                      WHERE r.event_id = e.event_id
+                  )
+                  OR (
+                      e.delivery_state = 'queued'
+                      AND EXISTS (
+                          SELECT 1 FROM event_resolutions r
+                          WHERE r.event_id = e.event_id
+                            AND r.disposition = 'skip'
+                      )
+                  )
               )
             """,
             (config.user_id,),
@@ -1271,6 +1566,10 @@ def complete_initial_audit(
             LEFT JOIN conversation_turns t ON t.status_id = r.event_id
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
+              AND NOT (
+                  e.delivery_state = 'queued'
+                  AND r.disposition = 'skip'
+              )
               AND t.status_id IS NULL
             """,
             (config.user_id,),
@@ -1360,11 +1659,60 @@ def _require_matching_published_alex_turn(
     return turn
 
 
+def _matching_alex_reply_turns(
+    connection: sqlite3.Connection,
+    event_id: str,
+) -> list[sqlite3.Row]:
+    return connection.execute(
+        """
+        SELECT *
+        FROM conversation_turns
+        WHERE parent_status_id = ?
+          AND actor = 'alex'
+          AND url LIKE 'https://x.com/axrbarsic/status/%'
+        ORDER BY posted_at, CAST(status_id AS INTEGER)
+        """,
+        (event_id,),
+    ).fetchall()
+
+
+def _enforce_mandatory_response_resolution(
+    config: Config,
+    connection: sqlite3.Connection,
+    *,
+    event_id: str,
+    disposition: str,
+    blocker_code: str | None,
+) -> None:
+    if blocker_code is not None and blocker_code not in TERMINAL_BLOCKER_CODES:
+        allowed = ", ".join(sorted(TERMINAL_BLOCKER_CODES))
+        raise ValueError("Unknown blocker_code. Allowed values: " + allowed)
+    if disposition != "blocked" and blocker_code is not None:
+        raise ValueError("blocker_code is valid only for blocked resolutions")
+    if not config.mandatory_response_mode:
+        return
+    if disposition == "skip" and not _matching_alex_reply_turns(
+        connection,
+        event_id,
+    ):
+        raise ValueError(
+            "Mandatory response mode forbids content-based skip. Publish a "
+            "reply or import the exact existing Alex child reply first."
+        )
+    if disposition == "blocked" and blocker_code not in TERMINAL_BLOCKER_CODES:
+        allowed = ", ".join(sorted(TERMINAL_BLOCKER_CODES))
+        raise ValueError(
+            "Mandatory response mode requires a terminal blocker_code: "
+            + allowed
+        )
+
+
 def _resolution_row_payload(row: sqlite3.Row) -> dict[str, Any]:
     return {
         "disposition": row["disposition"],
         "reason": row["reason"],
         "reply_url": row["reply_url"],
+        "blocker_code": row["blocker_code"],
         "stance": row["stance"],
         "stance_detail": row["stance_detail"],
         "confidence": row["confidence"],
@@ -1382,6 +1730,7 @@ def resolve_event(
     disposition: str,
     reason: str,
     reply_url: str | None,
+    blocker_code: str | None = None,
     stance: str | None = None,
     stance_detail: str | None = None,
     confidence: str | None = None,
@@ -1400,6 +1749,7 @@ def resolve_event(
     if not clean_reason:
         raise ValueError("Resolution reason must not be empty")
     clean_reply_url = reply_url.strip() if reply_url else None
+    clean_blocker_code = blocker_code.strip() if blocker_code else None
     clean_stance = stance.strip() if stance else None
     if clean_stance not in {None, "supportive", "opposing", "neutral", "ambiguous"}:
         raise ValueError("Stance must be supportive, opposing, neutral, or ambiguous")
@@ -1422,6 +1772,13 @@ def resolve_event(
         raise ValueError(
             "Skip and blocked resolutions must not include reply_url"
         )
+    _enforce_mandatory_response_resolution(
+        config,
+        connection,
+        event_id=event_id,
+        disposition=disposition,
+        blocker_code=clean_blocker_code,
+    )
     history_turn = connection.execute(
         "SELECT 1 FROM conversation_turns WHERE status_id = ?",
         (event_id,),
@@ -1446,6 +1803,7 @@ def resolve_event(
         "disposition": disposition,
         "reason": clean_reason,
         "reply_url": clean_reply_url,
+        "blocker_code": clean_blocker_code,
         "stance": clean_stance,
         "stance_detail": clean_stance_detail,
         "confidence": clean_confidence,
@@ -1463,16 +1821,17 @@ def resolve_event(
             connection.execute(
                 """
                 INSERT INTO event_resolutions(
-                    event_id, disposition, reason, reply_url, stance,
+                    event_id, disposition, reason, reply_url, blocker_code, stance,
                     stance_detail, confidence, media_meaning, evidence_json,
                     resolved_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     event_id,
                     disposition,
                     clean_reason,
                     clean_reply_url,
+                    clean_blocker_code,
                     clean_stance,
                     clean_stance_detail,
                     clean_confidence,
@@ -1502,6 +1861,7 @@ def resolve_event(
         "disposition": disposition,
         "reason": clean_reason,
         "reply_url": clean_reply_url,
+        "blocker_code": clean_blocker_code,
         "stance": clean_stance,
         "stance_detail": clean_stance_detail,
         "confidence": clean_confidence,
@@ -1521,6 +1881,7 @@ def revise_event_resolution(
     reason: str,
     reply_url: str | None,
     revision_reason: str,
+    blocker_code: str | None = None,
     stance: str | None = None,
     stance_detail: str | None = None,
     confidence: str | None = None,
@@ -1550,6 +1911,7 @@ def revise_event_resolution(
     if not clean_reason:
         raise ValueError("Resolution reason must not be empty")
     clean_reply_url = reply_url.strip() if reply_url else None
+    clean_blocker_code = blocker_code.strip() if blocker_code else None
     clean_stance = stance.strip() if stance else None
     if clean_stance not in {
         None,
@@ -1580,10 +1942,18 @@ def revise_event_resolution(
         raise ValueError(
             "Skip and blocked resolutions must not include reply_url"
         )
+    _enforce_mandatory_response_resolution(
+        config,
+        connection,
+        event_id=event_id,
+        disposition=disposition,
+        blocker_code=clean_blocker_code,
+    )
     expected = {
         "disposition": disposition,
         "reason": clean_reason,
         "reply_url": clean_reply_url,
+        "blocker_code": clean_blocker_code,
         "stance": clean_stance,
         "stance_detail": clean_stance_detail,
         "confidence": clean_confidence,
@@ -1602,11 +1972,20 @@ def revise_event_resolution(
             "health": health["status"],
         }
     allowed_transitions = {
+        ("skip", "skip"),
         ("skip", "published"),
         ("skip", "blocked"),
         ("blocked", "published"),
         ("blocked", "skip"),
     }
+    if (
+        existing["disposition"] == "skip"
+        and disposition == "skip"
+        and not config.mandatory_response_mode
+    ):
+        raise ValueError(
+            "Skip to skip revision requires mandatory response mode"
+        )
     if (existing["disposition"], disposition) not in allowed_transitions:
         raise ValueError(
             "Unsupported resolution revision transition "
@@ -1661,7 +2040,8 @@ def revise_event_resolution(
         connection.execute(
             """
             UPDATE event_resolutions
-            SET disposition = ?, reason = ?, reply_url = ?, stance = ?,
+            SET disposition = ?, reason = ?, reply_url = ?, blocker_code = ?,
+                stance = ?,
                 stance_detail = ?, confidence = ?, media_meaning = ?,
                 evidence_json = ?, resolved_at = ?
             WHERE event_id = ?
@@ -1670,6 +2050,7 @@ def revise_event_resolution(
                 disposition,
                 clean_reason,
                 clean_reply_url,
+                clean_blocker_code,
                 clean_stance,
                 clean_stance_detail,
                 clean_confidence,
@@ -1691,6 +2072,7 @@ def revise_event_resolution(
         "revised": True,
         "disposition": disposition,
         "reply_url": clean_reply_url,
+        "blocker_code": clean_blocker_code,
         "revision_reason": clean_revision_reason,
         "pending_count": wake["pending_count"],
         "health": health["status"],
@@ -1707,8 +2089,9 @@ def export_audit_resolutions(
         """
         SELECT
             e.event_id, e.created_at, e.conversation_id, e.username,
-            r.disposition, r.reason, r.reply_url, r.stance, r.stance_detail,
-            r.confidence, r.media_meaning, r.evidence_json, r.resolved_at
+            r.disposition, r.reason, r.reply_url, r.blocker_code, r.stance,
+            r.stance_detail, r.confidence, r.media_meaning, r.evidence_json,
+            r.resolved_at
         FROM event_resolutions r
         JOIN events e ON e.event_id = r.event_id
         ORDER BY CAST(e.event_id AS INTEGER)
@@ -1748,6 +2131,7 @@ def export_audit_resolutions(
                         "disposition": row["disposition"],
                         "reason": row["reason"],
                         "reply_url": row["reply_url"],
+                        "blocker_code": row["blocker_code"],
                         "stance": row["stance"],
                         "stance_detail": row["stance_detail"],
                         "confidence": row["confidence"],
@@ -2304,6 +2688,10 @@ def sync_browser_handoffs(
                 "disposition": record.get("disposition"),
                 "reason": record.get("reason"),
                 "reply_url": record.get("reply_url"),
+                "existing_alex_reply_url": record.get(
+                    "existing_alex_reply_url"
+                ),
+                "blocker_code": record.get("blocker_code"),
                 "stance": record.get("stance"),
                 "stance_detail": record.get("stance_detail"),
                 "confidence": record.get("confidence"),
@@ -2448,6 +2836,11 @@ def sync_browser_handoffs(
                 f"Browser handoff {event_id} has an invalid publication marker"
             )
         reply_url = _optional_text(record, "reply_url")
+        existing_alex_reply_url = _optional_text(
+            record,
+            "existing_alex_reply_url",
+        )
+        blocker_code = _optional_text(record, "blocker_code")
         reply_match = (
             re.fullmatch(
                 r"https://x\.com/axrbarsic/status/([0-9]{1,19})",
@@ -2481,6 +2874,31 @@ def sync_browser_handoffs(
             raise ValueError(
                 f"Browser handoff {event_id} has reply_url without publication"
             )
+        if disposition == "skip" and config.mandatory_response_mode:
+            if record.get("alex_history_status") != "exact_alex_turn_appended":
+                raise ValueError(
+                    f"Browser handoff {event_id} lacks exact existing Alex "
+                    "history confirmation"
+                )
+            matching_turns = _matching_alex_reply_turns(connection, event_id)
+            matching_urls = {str(turn["url"]) for turn in matching_turns}
+            if existing_alex_reply_url not in matching_urls:
+                raise ValueError(
+                    f"Browser handoff {event_id} lacks a matching existing "
+                    "Alex child reply URL"
+                )
+        elif existing_alex_reply_url is not None:
+            raise ValueError(
+                f"Browser handoff {event_id} has an unexpected existing "
+                "Alex reply URL"
+            )
+        _enforce_mandatory_response_resolution(
+            config,
+            connection,
+            event_id=event_id,
+            disposition=disposition,
+            blocker_code=blocker_code,
+        )
         stance = _optional_text(record, "stance")
         if stance not in {None, "supportive", "opposing", "neutral", "ambiguous"}:
             raise ValueError(
@@ -2496,6 +2914,7 @@ def sync_browser_handoffs(
             "disposition": disposition,
             "reason": _required_text(record, "reason"),
             "reply_url": reply_url,
+            "blocker_code": blocker_code,
             "stance": stance,
             "stance_detail": _optional_text(record, "stance_detail"),
             "confidence": confidence,
@@ -2523,6 +2942,7 @@ def sync_browser_handoffs(
                 "disposition": item["disposition"],
                 "reason": item["reason"],
                 "reply_url": item["reply_url"],
+                "blocker_code": item["blocker_code"],
                 "stance": item["stance"],
                 "stance_detail": item["stance_detail"],
                 "confidence": item["confidence"],
@@ -2549,6 +2969,7 @@ def sync_browser_handoffs(
                 reason=item["reason"],
                 reply_url=item["reply_url"],
                 revision_reason=item["revision_reason"],
+                blocker_code=item["blocker_code"],
                 stance=item["stance"],
                 stance_detail=item["stance_detail"],
                 confidence=item["confidence"],
@@ -2569,6 +2990,7 @@ def sync_browser_handoffs(
                 disposition=item["disposition"],
                 reason=item["reason"],
                 reply_url=item["reply_url"],
+                blocker_code=item["blocker_code"],
                 stance=item["stance"],
                 stance_detail=item["stance_detail"],
                 confidence=item["confidence"],
@@ -3229,6 +3651,29 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Validate and report candidates without changing durable state.",
     )
+    response_requeue = commands.add_parser(
+        "mandatory-response-requeue",
+        help=(
+            "Requeue recent content-based skips that have no exact Alex child "
+            "reply."
+        ),
+    )
+    response_requeue.add_argument(
+        "--hours",
+        type=float,
+        required=True,
+        help="Recent lookback window to reconcile under mandatory mode.",
+    )
+    response_requeue.add_argument(
+        "--as-of",
+        required=True,
+        help="Timezone-aware ISO-8601 reconciliation time.",
+    )
+    response_requeue.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report candidates without changing queue state.",
+    )
     commands.add_parser(
         "initial-audit-complete",
         help="Complete first review only when the queue is empty.",
@@ -3269,6 +3714,20 @@ def build_parser() -> argparse.ArgumentParser:
         "history-status",
         help="Show conversation history database counts.",
     )
+    commenter_history = commands.add_parser(
+        "commenter-history",
+        help=(
+            "Show source-linked public interaction history for the author of "
+            "one stored event."
+        ),
+    )
+    commenter_history.add_argument("event_id")
+    commenter_history.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum prior interactions to return, newest-first.",
+    )
 
     acknowledge = commands.add_parser("ack", help="Acknowledge queued event IDs.")
     acknowledge.add_argument("event_ids", nargs="+")
@@ -3288,6 +3747,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     resolve.add_argument("--reason", required=True)
     resolve.add_argument("--reply-url")
+    resolve.add_argument(
+        "--blocker-code",
+        choices=tuple(sorted(TERMINAL_BLOCKER_CODES)),
+    )
     resolve.add_argument(
         "--stance",
         choices=("supportive", "opposing", "neutral", "ambiguous"),
@@ -3314,6 +3777,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     revise.add_argument("--reason", required=True)
     revise.add_argument("--reply-url")
+    revise.add_argument(
+        "--blocker-code",
+        choices=tuple(sorted(TERMINAL_BLOCKER_CODES)),
+    )
     revise.add_argument("--revision-reason", required=True)
     revise.add_argument(
         "--stance",
@@ -3474,6 +3941,31 @@ def main() -> int:
                 return 2
             return 0
 
+        if args.command == "mandatory-response-requeue":
+            try:
+                requeue_as_of = parse_time(args.as_of)
+                if (
+                    requeue_as_of is None
+                    or requeue_as_of.tzinfo is None
+                    or requeue_as_of.utcoffset() is None
+                ):
+                    raise ValueError(
+                        "Policy requeue --as-of must be timezone-aware"
+                    )
+                print_json(
+                    requeue_unanswered_skips(
+                        config,
+                        connection,
+                        response_window_hours=args.hours,
+                        now=requeue_as_of,
+                        dry_run=args.dry_run,
+                    )
+                )
+            except ValueError as error:
+                print_json({"status": "blocked", "message": str(error)})
+                return 2
+            return 0
+
         if args.command == "initial-audit-export":
             print_json(export_audit_resolutions(connection, args.output))
             return 0
@@ -3513,6 +4005,20 @@ def main() -> int:
             print_json(history_status(connection))
             return 0
 
+        if args.command == "commenter-history":
+            try:
+                print_json(
+                    commenter_history_for_event(
+                        connection,
+                        args.event_id,
+                        limit=args.limit,
+                    )
+                )
+            except (KeyError, ValueError) as error:
+                print_json({"status": "not_found", "message": str(error)})
+                return 2
+            return 0
+
         if args.command == "ack":
             try:
                 print_json(acknowledge_events(config, connection, args.event_ids))
@@ -3531,6 +4037,7 @@ def main() -> int:
                         disposition=args.disposition,
                         reason=args.reason,
                         reply_url=args.reply_url,
+                        blocker_code=args.blocker_code,
                         stance=args.stance,
                         stance_detail=args.stance_detail,
                         confidence=args.confidence,
@@ -3554,6 +4061,7 @@ def main() -> int:
                         reason=args.reason,
                         reply_url=args.reply_url,
                         revision_reason=args.revision_reason,
+                        blocker_code=args.blocker_code,
                         stance=args.stance,
                         stance_detail=args.stance_detail,
                         confidence=args.confidence,

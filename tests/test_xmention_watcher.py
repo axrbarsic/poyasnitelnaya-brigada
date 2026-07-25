@@ -8,6 +8,7 @@ import plistlib
 import sys
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -1386,6 +1387,295 @@ class WatcherTests(unittest.TestCase):
                 reason="reviewed",
                 reply_url=None,
             )
+
+    def test_mandatory_response_rejects_content_skip(self) -> None:
+        watcher.ingest_response(
+            self.config,
+            self.connection,
+            self.fixture,
+            source="x_api",
+        )
+        event_id = "2080696811623190996"
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": event_id,
+                "root_status_id": event_id,
+                "provenance": "short",
+                "turns": [
+                    {
+                        "status_id": event_id,
+                        "actor": "user",
+                        "url": f"https://x.com/i/status/{event_id}",
+                        "exact_text": "Insult without a factual thesis",
+                    }
+                ],
+            },
+        )
+        strict_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "forbids content-based skip",
+        ):
+            watcher.resolve_event(
+                strict_config,
+                self.connection,
+                event_id,
+                disposition="skip",
+                reason="content-free insult",
+                reply_url=None,
+            )
+
+    def test_mandatory_response_allows_proven_already_answered(self) -> None:
+        watcher.ingest_response(
+            self.config,
+            self.connection,
+            self.fixture,
+            source="x_api",
+        )
+        event_id = "2080696811623190996"
+        reply_id = "2080858504571605419"
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": event_id,
+                "root_status_id": event_id,
+                "provenance": "short",
+                "turns": [
+                    {
+                        "status_id": event_id,
+                        "actor": "user",
+                        "url": f"https://x.com/i/status/{event_id}",
+                        "exact_text": "Target",
+                    },
+                    {
+                        "status_id": reply_id,
+                        "parent_status_id": event_id,
+                        "actor": "alex",
+                        "url": (
+                            f"https://x.com/axrbarsic/status/{reply_id}"
+                        ),
+                        "exact_text": "Existing exact reply",
+                    },
+                ],
+            },
+        )
+        strict_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+
+        result = watcher.resolve_event(
+            strict_config,
+            self.connection,
+            event_id,
+            disposition="skip",
+            reason="exact direct Alex child reply already exists",
+            reply_url=None,
+            evidence=[f"https://x.com/axrbarsic/status/{reply_id}"],
+        )
+
+        self.assertEqual(result["disposition"], "skip")
+
+    def test_commenter_history_crosses_conversations_with_exact_provenance(
+        self,
+    ) -> None:
+        self.insert_direct_event(
+            event_id="3001",
+            created_at="2020-01-02T03:04:05Z",
+            conversation_id="3000",
+            parent_status_id="2999",
+            text="Old public claim",
+        )
+        self.insert_direct_event(
+            event_id="4001",
+            created_at="2026-07-25T20:00:00Z",
+            conversation_id="4000",
+            parent_status_id="3999",
+            text="Current public claim",
+        )
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": "3000",
+                "root_status_id": "3000",
+                "provenance": "short",
+                "turns": [
+                    {
+                        "status_id": "3001",
+                        "actor": "user",
+                        "author": "@target_user",
+                        "url": "https://x.com/target_user/status/3001",
+                        "exact_text": "Old public claim",
+                        "posted_at": "2020-01-02T03:04:05Z",
+                    },
+                    {
+                        "status_id": "3002",
+                        "parent_status_id": "3001",
+                        "actor": "alex",
+                        "author": "@axrbarsic",
+                        "url": "https://x.com/axrbarsic/status/3002",
+                        "exact_text": "Old exact Alex reply",
+                        "posted_at": "2020-01-02T03:05:05Z",
+                    },
+                ],
+            },
+        )
+
+        result = watcher.commenter_history_for_event(
+            self.connection,
+            "4001",
+            limit=12,
+        )
+
+        self.assertEqual(result["identity_kind"], "x_user_id")
+        self.assertEqual(result["author_id"], "901")
+        self.assertEqual(result["total_prior_interactions"], 1)
+        self.assertEqual(result["first_interaction_at"], "2020-01-02T03:04:05Z")
+        self.assertEqual(result["returned_interactions"], 1)
+        interaction = result["interactions"][0]
+        self.assertEqual(interaction["status_id"], "3001")
+        self.assertEqual(interaction["text"], "Old public claim")
+        self.assertEqual(
+            interaction["alex_replies"][0]["text"],
+            "Old exact Alex reply",
+        )
+        self.assertEqual(
+            interaction["alex_replies"][0]["url"],
+            "https://x.com/axrbarsic/status/3002",
+        )
+
+    def test_mandatory_response_requires_terminal_blocker_code(self) -> None:
+        watcher.ingest_response(
+            self.config,
+            self.connection,
+            self.fixture,
+            source="x_api",
+        )
+        event_id = "2080696811623190996"
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": event_id,
+                "root_status_id": event_id,
+                "provenance": "pro",
+                "turns": [
+                    {
+                        "status_id": event_id,
+                        "actor": "user",
+                        "url": f"https://x.com/i/status/{event_id}",
+                        "exact_text": "Pro follow-up",
+                    }
+                ],
+            },
+        )
+        strict_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "requires a terminal blocker_code",
+        ):
+            watcher.resolve_event(
+                strict_config,
+                self.connection,
+                event_id,
+                disposition="blocked",
+                reason="temporary Browser timeout",
+                reply_url=None,
+            )
+        result = watcher.resolve_event(
+            strict_config,
+            self.connection,
+            event_id,
+            disposition="blocked",
+            reason="historical Pro conversation cannot be recovered",
+            reply_url=None,
+            blocker_code="missing_historical_pro_conversation",
+        )
+        self.assertEqual(
+            result["blocker_code"],
+            "missing_historical_pro_conversation",
+        )
+
+    def test_mandatory_response_requeue_is_target_agnostic(self) -> None:
+        watcher.ingest_response(
+            self.config,
+            self.connection,
+            self.fixture,
+            source="x_api",
+        )
+        event_id = "2080696811623190996"
+        event = self.connection.execute(
+            "SELECT * FROM events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": event_id,
+                "root_status_id": event_id,
+                "provenance": "short",
+                "turns": [
+                    {
+                        "status_id": event_id,
+                        "actor": "user",
+                        "url": f"https://x.com/i/status/{event_id}",
+                        "exact_text": "Previously skipped insult",
+                    }
+                ],
+            },
+        )
+        watcher.resolve_event(
+            self.config,
+            self.connection,
+            event_id,
+            disposition="skip",
+            reason="old content-based skip",
+            reply_url=None,
+        )
+        strict_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+        as_of = watcher.parse_time(event["created_at"]) + timedelta(hours=1)
+
+        preview = watcher.requeue_unanswered_skips(
+            strict_config,
+            self.connection,
+            response_window_hours=12,
+            now=as_of,
+            dry_run=True,
+        )
+        applied = watcher.requeue_unanswered_skips(
+            strict_config,
+            self.connection,
+            response_window_hours=12,
+            now=as_of,
+            dry_run=False,
+        )
+
+        self.assertEqual(preview["candidate_event_ids"], [event_id])
+        self.assertEqual(applied["candidate_event_ids"], [event_id])
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT delivery_state FROM events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()["delivery_state"],
+            "queued",
+        )
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT COUNT(*) FROM response_policy_requeues"
+            ).fetchone()[0],
+            1,
+        )
 
     def test_resolve_can_enrich_missing_stance_detail_once(self) -> None:
         watcher.ingest_response(

@@ -17,6 +17,12 @@ except ModuleNotFoundError:
     import autopilot_contract  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
 
+try:
+    import xmention_watcher as watcher
+except ModuleNotFoundError:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+    import xmention_watcher as watcher  # type: ignore[no-redef]
+
 
 def resolve_path(config_path: Path, value: str) -> Path:
     candidate = Path(value).expanduser()
@@ -110,6 +116,34 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         return {"status": status, **result}
 
     events = list(result["events"])
+    watcher_config = watcher.load_config(config_path)
+    connection = watcher.connect_database(watcher_config.database)
+    try:
+        enriched_events: list[dict[str, Any]] = []
+        for event in events:
+            try:
+                memory = watcher.commenter_history_for_event(
+                    connection,
+                    str(event["id"]),
+                    limit=watcher_config.commenter_memory_limit,
+                )
+            except (KeyError, ValueError):
+                memory = {
+                    "event_id": str(event["id"]),
+                    "identity_kind": "unavailable",
+                    "total_prior_interactions": 0,
+                    "returned_interactions": 0,
+                    "interactions": [],
+                }
+            enriched_events.append(
+                {
+                    **event,
+                    "commenter_memory": memory,
+                }
+            )
+        events = enriched_events
+    finally:
+        connection.close()
     event_ids = [str(event["id"]) for event in events]
     claim_token = str(result["claim_token"])
     prompt = autopilot_contract.build_prompt(

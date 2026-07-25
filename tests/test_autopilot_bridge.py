@@ -7,6 +7,7 @@ import unittest
 from contextlib import closing
 from pathlib import Path
 
+import xmention_watcher as watcher
 from scripts import autopilot_bridge
 
 
@@ -78,6 +79,11 @@ class AutopilotBridgeTests(unittest.TestCase):
             "Следующий X API poll выполняет LaunchAgent",
             result["prompt"],
         )
+        self.assertIn("Content-based skip запрещен", result["prompt"])
+        self.assertIn("`satirical-media`", result["prompt"])
+        self.assertIn("`377` или `Ложкин`", result["prompt"])
+        self.assertIn("`commenter_memory`", result["prompt"])
+        self.assertIn('"commenter_memory":', result["prompt"])
         self.assertNotIn("сделай один свежий poll", result["prompt"])
         self.assertNotIn("\u2013", result["prompt"])
         self.assertNotIn("\u2014", result["prompt"])
@@ -100,6 +106,91 @@ class AutopilotBridgeTests(unittest.TestCase):
             )
         )
         self.assertEqual(dispatch["events"], {})
+
+    def test_claim_includes_cross_thread_commenter_memory(self) -> None:
+        watcher_config = watcher.load_config(self.config)
+        connection = watcher.connect_database(watcher_config.database)
+        current = self.event()
+        prior_id = "2080000000000000001"
+        with connection:
+            for event_id, text, conversation_id, created_at in (
+                (
+                    prior_id,
+                    "Prior exact public claim",
+                    "2080000000000000000",
+                    "2020-01-02T03:04:05Z",
+                ),
+                (
+                    current["event_id"],
+                    "Current exact public claim",
+                    current["conversation_id"],
+                    current["created_at"],
+                ),
+            ):
+                payload = {
+                    "id": event_id,
+                    "author_id": "901",
+                    "text": text,
+                    "created_at": created_at,
+                    "conversation_id": conversation_id,
+                    "in_reply_to_user_id": "16337609",
+                    "referenced_tweets": [
+                        {"type": "replied_to", "id": str(int(event_id) - 1)}
+                    ],
+                }
+                connection.execute(
+                    """
+                    INSERT INTO events(
+                        event_id, author_id, username, created_at,
+                        conversation_id, in_reply_to_user_id, is_reply,
+                        payload_json, first_seen_at, delivery_state
+                    ) VALUES(?, '901', 'Timyr316661', ?, ?, '16337609', 1,
+                             ?, ?, 'queued')
+                    """,
+                    (
+                        event_id,
+                        created_at,
+                        conversation_id,
+                        json.dumps(payload, sort_keys=True),
+                        watcher.isoformat(),
+                    ),
+                )
+        watcher.import_history_snapshot(
+            connection,
+            {
+                "chain_id": "2080000000000000000",
+                "root_status_id": "2080000000000000000",
+                "provenance": "short",
+                "turns": [
+                    {
+                        "status_id": prior_id,
+                        "actor": "user",
+                        "author": "@Timyr316661",
+                        "url": f"https://x.com/Timyr316661/status/{prior_id}",
+                        "exact_text": "Prior exact public claim",
+                    },
+                    {
+                        "status_id": "2080000000000000002",
+                        "parent_status_id": prior_id,
+                        "actor": "alex",
+                        "author": "@axrbarsic",
+                        "url": (
+                            "https://x.com/axrbarsic/status/"
+                            "2080000000000000002"
+                        ),
+                        "exact_text": "Prior exact Alex reply",
+                    },
+                ],
+            },
+        )
+        connection.close()
+        self.write_events([current])
+
+        result = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        self.assertIn('"identity_kind":"x_user_id"', result["prompt"])
+        self.assertIn("Prior exact public claim", result["prompt"])
+        self.assertIn("Prior exact Alex reply", result["prompt"])
 
     def test_overlapping_claim_preserves_work_in_progress_health(self) -> None:
         self.write_events([self.event()])

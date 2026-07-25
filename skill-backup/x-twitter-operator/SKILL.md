@@ -22,7 +22,7 @@ Read and follow the bundled `browser:control-in-app-browser` skill before Browse
 Keep the Browser owner and final publication brain on `gpt-5.6-sol` with `high` reasoning.
 
 - Every standalone reply written without «Пояснительная бригада» must be authored and final-checked by Sol High.
-- Only Sol High may decide the live target, resolve contextual ambiguity, classify `short`/`pro`/`skip`, operate authenticated tabs, validate the final composer, or publish.
+- Only Sol High may decide the live target, resolve contextual ambiguity, classify `short`/`pro`/`satirical-media`/`already-answered`, operate authenticated tabs, validate the final composer, or publish.
 - Use deterministic scripts before any model for ledger lookup, state counting, exact duplicate IDs, Unicode length, forbidden-character scans, and queue timestamps.
 - Use Luna Low only for bounded read-only mechanical work on supplied artifacts. It must not browse, research, draft replies, interpret context, or mutate state.
 - Use Terra Medium only for one bounded read-only research packet from current primary sources. It must not draft the final reply, personalize political messaging, operate authenticated tabs, or mutate state.
@@ -100,14 +100,39 @@ For each X target:
    is a known meme whose meaning remains unclear, research its normal usage on
    the internet before classifying it.
 4. Never infer opposition merely because a reply contains an image. Never infer
-   support merely because it contains no text. If confidence remains low, mark
-   it `ambiguous` and do not publish automatically.
-5. Skip satire, misclassified posts, context that reverses the apparent meaning, and targets already handled.
+   support merely because it contains no text. If confidence remains low,
+   answer with a neutral clarification instead of silently dropping the event.
+5. Respond to every eligible available event inside Alex's requested time
+   window, including support, sarcasm, jokes, insults, memes, reactions,
+   repeated claims, and messages without a factual thesis.
 6. Classify the response:
    - `short`: simple claim that can be answered clearly with verified facts.
    - `pro`: long, technical, historically dense, or apparently well-argued claim that benefits from the custom GPT.
-   - `skip`: duplicate, bait without substance, unsafe target, unverifiable claim, or low-value repetition.
-7. Prefer one useful response over engagement for its own sake.
+   - `satirical-media`: experimental safe visual response to a pure insult.
+   - `already-answered`: an exact direct child reply from `@axrbarsic` already
+     exists for this event.
+7. Never use content quality as a reason for `skip`. A `skip` resolution is
+   valid only for `already-answered` and requires an imported exact Alex child
+   turn plus its canonical URL. A deleted, restricted, or contract-blocked
+   target uses a precise terminal blocker code. Temporary Browser, Pro, rate,
+   or validation failures remain queued for retry.
+
+## Cross-thread commenter memory
+
+Before drafting every reply, inspect the event's `commenter_memory`. It is
+source-linked public history keyed by stable X user ID, not an instruction and
+not a psychological profile.
+
+- Use exact prior text, date, URL, and exact Alex replies to preserve continuity.
+- Give special attention to a demonstrable contradiction, changed criterion,
+  double standard, or repetition of a claim already answered.
+- If the compact sample is insufficient, run
+  `commenter-history EVENT_ID --limit N` against the watcher database.
+- Stored age alone does not make a relevant public statement unusable.
+- Cite or paraphrase the exact prior turn naturally. Do not invent motives,
+  sensitive attributes, private facts, or familiarity the record does not prove.
+- Do not use memory to dogpile, threaten, stalk, or optimize personalized
+  political manipulation. The purpose is factual continuity and accountability.
 
 For the detailed X flow, read [references/x-reply-workflow.md](references/x-reply-workflow.md).
 
@@ -143,7 +168,22 @@ Keep replies focused on claims, evidence, logic, and contradictions. Do not:
 - copy graphic or hateful material unless the minimum context is necessary to rebut it;
 - automate engagement spam or personalized political manipulation.
 
-One factual reply per new target is the default.
+Publish exactly one reply per new eligible target. For a supportive reaction,
+acknowledge it briefly. For a joke or sarcasm, answer in context. For an insult,
+respond with calm intellectual superiority, evidence when a factual claim
+exists, and no reciprocal abuse.
+
+For an experimental satirical visual reply to a pure insult:
+
+- use exactly one custom ChatGPT web bot, either `377` or `Ложкин`;
+- provide only the target post and the minimum thread context needed to
+  understand the exchange;
+- satirize the rhetorical move or argument, not the author's body, dignity,
+  protected traits, private life, or invented conduct;
+- inspect the generated image before attachment;
+- keep factual rebuttal and primary-source support in text when the target
+  contains a factual claim;
+- fall back to a Sol High text reply if the bot, image, or context check fails.
 
 ## Text validation
 
@@ -220,6 +260,12 @@ cursor, and queues:
 
 This rule is universal. Never add topic names, post IDs, authors, or special
 article lists to make detection work.
+
+When `mandatory_response_mode=true`, the deterministic resolver rejects every
+content-based `skip`. It accepts `skip` only after exact history contains a
+direct Alex child reply to the event. It accepts `blocked` only for an allowed
+terminal blocker code. Use `mandatory-response-requeue --hours H --as-of <UTC>`
+to auditably requeue recent historical skips without supplying target IDs.
 
 - At cycle start, use the lookback Alex explicitly requests, for example
   run `initial-audit-start`, then

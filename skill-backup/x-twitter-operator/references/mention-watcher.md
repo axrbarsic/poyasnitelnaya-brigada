@@ -54,6 +54,8 @@ python3 xmention_watcher.py --config config.json initial-audit-expire \
 python3 xmention_watcher.py --config config.json browser-handoff-sync \
   --history-file /absolute/path/to/conversation-history.jsonl \
   --ledger-file /absolute/path/to/run-ledger.jsonl
+python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \
+  --limit 50
 python3 xmention_watcher.py --config config.json watchdog
 ```
 
@@ -64,6 +66,12 @@ Never use `ack` for a direct reply. The watcher rejects that path. Use
 `resolve EVENT_ID --disposition published|skip|blocked` so every removal has a
 durable reason and verified reply URL when applicable. `blocked` is reserved
 for an actionable event whose mandatory workflow dependency is unavailable.
+
+With `mandatory_response_mode=true`, `skip` is not a content classification.
+It is accepted only when exact history proves an existing direct Alex child
+reply for that event. A terminal `blocked` resolution requires an allowed
+`blocker_code`. Temporary Browser, generation, rate, and validation failures
+stay queued for retry.
 
 ## Installation gate
 
@@ -93,22 +101,27 @@ When the queue becomes non-empty:
    skill.
 3. It reads the complete stored chain with `history-show STATUS_ID` and checks
    the live X thread for any missing or changed context.
-4. It checks the ledger for the parent publication type and historical
+4. It reads `commenter_memory` from the claim. When a prior public turn may
+   reveal a contradiction, changed criterion, double standard, or repeated
+   claim, it may use `commenter-history EVENT_ID --limit N` for deeper exact
+   history across other stored conversations.
+5. It checks the ledger for the parent publication type and historical
    ChatGPT conversation URL.
-5. A follow-up to a prior Pro reply continues in that exact conversation with
+6. A follow-up to a prior Pro reply continues in that exact conversation with
    one screenshot and zero text.
-6. A follow-up to a short reply is classified by Sol High using the complete
+7. A follow-up to a short reply is classified by Sol High using the complete
    ordered X chain, exact earlier reply text, and prior source URLs.
-7. Before any `resolve`, including `skip`, append and import the exact inspected
+8. Before any `resolve`, including `skip`, append and import the exact inspected
    user turn from live X with parent, author, timestamps, canonical URL,
    unnormalized text, and `media_json`. An empty `media_json` is valid only
    after live inspection confirms no media. For a verified publication, append
    and import the exact new Alex turn as well. Flat
    `initial_audit_event_turn` records must include `chain_provenance` when a
    chain is new. Existing chains inherit their stored provenance.
-8. Call `resolve` only after a skip, contract blocker, or verified publication
-   is durably recorded. Store the stable broad class in `stance` and the exact
-   Sol label in `stance-detail`. Do not call `ack`.
+9. Call `resolve` only after an exact already-answered proof, terminal contract
+   blocker, or verified publication is durably recorded. Store the stable
+   broad class in `stance` and the exact Sol label in `stance-detail`. Do not
+   call `ack`.
 
 The broad `stance` field accepts only `supportive`, `opposing`, `neutral`, or
 `ambiguous`. Descriptions such as `corrective`, `hostile`, `sarcastic`, or
@@ -139,12 +152,13 @@ idempotent. A publication also blocks unless its verified reply URL resolves to
 an imported Alex turn whose parent is the inspected event.
 
 When live X shows that Alex already answered an event before the current audit,
-record the audit disposition as `skip` with `reply_url=null`. Preserve the
-existing Alex URL in `evidence` and exact conversation history. The `reply_url`
-field is reserved for a `published` disposition created by the current
-resolution handoff. If an invalid skip already contains a reply URL, append a
-corrected handoff with `supersedes_invalid_handoff=true`; never rewrite the old
-line.
+record the audit disposition as `skip` with `reply_url=null`,
+`existing_alex_reply_url=<canonical URL>`, and
+`alex_history_status=exact_alex_turn_appended`. Import the exact direct Alex
+child turn first. The `reply_url` field is reserved for a `published`
+disposition created by the current resolution handoff. If an invalid skip
+already contains a reply URL, append a corrected handoff with
+`supersedes_invalid_handoff=true`; never rewrite the old line.
 
 If a required historical Pro conversation URL cannot be recovered, do not
 create a replacement conversation and do not classify the event as an ordinary
@@ -192,7 +206,7 @@ a hot-wave priority. After completing each live conversation branch, call
 created events first and preserve their exact parent chain so a fast dialogue
 does not become stale. A queued Pro event in `thinking` or
 `unverified_background_pending` state must remain unresolved, but it must not
-prevent processing other fresh short or skip events returned in the same
+prevent processing other fresh short or already-answered events returned in the same
 newest-first batch.
 
 ## Initial audit
@@ -255,6 +269,24 @@ authority for queued eligible replies.
     `completed_with_warning`; do not release or republish resolved events.
 14. Keep the automation itself free of a final X poll. The one-minute
     LaunchAgent owns token-free polling.
+
+## Mandatory response reconciliation
+
+After enabling mandatory response mode, run a target-agnostic reconciliation:
+
+```bash
+python3 xmention_watcher.py --config config.json mandatory-response-requeue \
+  --hours 12 --as-of 2026-07-25T20:00:00Z --dry-run
+python3 xmention_watcher.py --config config.json mandatory-response-requeue \
+  --hours 12 --as-of 2026-07-25T20:00:00Z
+```
+
+Use the same `--as-of` for dry-run and apply. The command receives no event ID.
+It selects recent eligible `skip` resolutions with no exact direct Alex child,
+records the prior resolution in `response_policy_requeues`, and returns them to
+the ordinary wake queue. The scheduled Sol run then discovers them through the
+same queue contract as any new event. Existing publications and proven
+already-answered events remain untouched.
 
 ## Conversation history commands
 

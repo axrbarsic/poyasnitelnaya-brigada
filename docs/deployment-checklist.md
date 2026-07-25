@@ -52,6 +52,9 @@
   dispatcher prunes the claim.
 - [x] Confirm postflight Keychain failure is represented as a warning after
   durable resolution, not as a rolled-back result.
+- [x] Confirm mandatory response mode rejects content-based skips.
+- [x] Confirm a clean API canary rediscovers prior content skips and publishes
+  exactly one reply to each without receiving target IDs.
 
 ## Gate 4: backup
 

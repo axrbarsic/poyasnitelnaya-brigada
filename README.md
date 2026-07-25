@@ -15,8 +15,8 @@ content decisions:
 - A Codex Desktop automation exits early on an empty queue and atomically claims
   a non-empty batch.
 - The same Sol High run opens the real X thread in the authenticated Codex
-  Browser, checks context and sources, prevents duplicates, and decides whether
-  to reply.
+  Browser, checks context and sources, prevents duplicates, and publishes one
+  response per eligible event.
 - Long follow-ups can continue in the exact historical custom GPT conversation.
 - SQLite and append-only JSONL preserve conversation history and audit evidence.
 
@@ -33,12 +33,25 @@ It does not:
 - draft or publish replies;
 - access Browser cookies, storage, or credentials;
 - store API tokens in files;
-- decide whether an event deserves a response.
+- make content-based skip decisions.
 
 When Alex explicitly grants standing autopilot authority, a Codex Desktop
 scheduled automation claims the durable queue and becomes the Browser owner for
 that run. The retired CLI launcher is not used because the built-in Browser is
 unavailable in Codex CLI. Sol High remains the only publication brain.
+
+With `mandatory_response_mode=true`, every eligible available event inside the
+requested lookback receives exactly one reply. Support, sarcasm, jokes, insults,
+memes, and content-free reactions are not skip reasons. A `skip` is accepted
+only when exact history proves an existing direct Alex child reply. Terminal
+technical blockers require a machine-readable `blocker_code`.
+
+Before drafting, Sol receives compact cross-thread memory keyed by the stable X
+user ID: exact public turns, dates, URLs, and exact Alex replies. The
+`commenter-history` command can retrieve deeper stored history without an age
+cutoff. Prior statements may support a source-linked contradiction or expose a
+changed standard, but must not become speculative profiling, sensitive-trait
+inference, or persistent personal targeting.
 
 ## Current checkpoint
 
@@ -56,6 +69,15 @@ recognized token and no credits, X returns HTTP 402 with the
 ## Configure
 
 Copy `config.example.json` to `config.json`, then set the numeric X user ID.
+Keep `mandatory_response_mode=true` for the no-content-skip contract.
+Set `commenter_memory_limit` to the compact number of prior interactions placed
+in each automation handoff. Deeper history remains available on demand:
+
+```bash
+python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \
+  --limit 50
+```
+
 Provide the bearer token only through one of these environment variables:
 
 - `X_BEARER_TOKEN`
@@ -274,8 +296,9 @@ runs are idempotent. A `published` handoff additionally requires
 `alex_history_status=exact_alex_turn_appended` and a matching stored Alex turn
 whose parent is the resolved event.
 
-Use `blocked` only for an actionable event whose mandatory workflow dependency
-is unavailable. For example, a follow-up to a Pro reply is blocked when its
+Use `blocked` only for an actionable event whose terminal mandatory workflow
+dependency is unavailable, and include an allowed `blocker_code`. For example,
+a follow-up to a Pro reply is blocked when its
 exact historical ChatGPT conversation URL cannot be recovered and opening a
 new conversation would violate the continuity contract. It is not an ordinary
 skip. The Browser handoff marker must be
@@ -283,11 +306,20 @@ skip. The Browser handoff marker must be
 URL.
 
 If live X proves that Alex already answered before the current audit, use
-`skip` with `reply_url=null`; keep the existing Alex URL in evidence and
-conversation history. The `reply_url` field belongs only to a `published`
-handoff created by the current resolution. Correct a malformed append-only
-handoff by appending `supersedes_invalid_handoff=true`, never by editing the old
-line.
+`skip` with `reply_url=null`, `existing_alex_reply_url=<canonical URL>`, and
+`alex_history_status=exact_alex_turn_appended`. The direct Alex child turn must
+already be in exact conversation history. The `reply_url` field belongs only
+to a `published` handoff created by the current resolution.
+
+After enabling the strict policy, reconcile recent historical content skips
+without supplying event IDs:
+
+```bash
+python3 xmention_watcher.py --config config.json mandatory-response-requeue \
+  --hours 12 --as-of 2026-07-25T20:00:00Z --dry-run
+python3 xmention_watcher.py --config config.json mandatory-response-requeue \
+  --hours 12 --as-of 2026-07-25T20:00:00Z
+```
 
 Never rewrite an old ledger record when scope changes or a contract dependency
 is recovered. Append a replacement handoff with
