@@ -212,9 +212,38 @@ Before relying on incremental monitoring:
 
 The incremental five-minute watcher is authoritative only after this gate.
 
-The watcher must not autonomously wake a model merely because polling occurred.
-Use the durable queue and local notification as the boundary between free
-mechanical detection and model work.
+Without standing authority, do not wake a model merely because polling
+occurred. Use the durable queue and local notification as the boundary between
+free mechanical detection and model work.
+
+## Standing autopilot
+
+Enable this mode only after Alex explicitly grants continuing publication
+authority for queued direct replies.
+
+1. Keep the Python watcher read-only and token-free.
+2. Run the read-only `scripts/autopilot_dispatch.py snapshot` from one Codex
+   scheduled task every five minutes using Luna with low reasoning.
+3. In a projectless sandbox, keep `leased_event_ids`, `lease_expires_at`, and
+   `last_delivery_at` in that automation's persistent `memory.md`.
+4. Let Luna read only the compact snapshot JSON. It must not open Browser, X, or
+   ChatGPT and must not research, classify, draft, or publish.
+5. If every pending ID has an active lease, finish without sending a message.
+6. For eligible IDs, record a 30-minute lease before sending one wake message
+   to the exact existing pinned
+   Browser-owner task and override that turn to Sol High.
+7. Include only eligible event IDs, canonical URLs, and the standing workflow
+   contract in the wake message. Never create a new Codex task per event.
+8. If wake delivery fails, remove the newly leased IDs. Otherwise keep the
+   lease until the Browser owner resolves the events or 30 minutes pass.
+9. Use one X tab, one ChatGPT tab, and at most one active Pro conversation on
+   Alex's 8 GB iMac.
+10. Never let Luna or the watcher publish. Sol High must perform live context
+   inspection, fact checking, duplicate prevention, routing, composer
+   validation, publication, URL verification, history storage, and durable
+   resolution.
+11. Treat the lease as crash recovery, not permission to post twice. Every Sol
+    turn still runs live X and ledger duplicate checks before composer fill.
 
 ## Conversation history commands
 

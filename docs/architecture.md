@@ -15,20 +15,24 @@ an X reply.
 5. SQLite deduplicates immutable event IDs and advances `since_id`.
 6. `wake-request.json` exposes only queued event metadata and canonical URLs.
 7. A macOS notification reports a new queue item without invoking a model.
-8. A separate one-minute watchdog checks poll freshness and failure count.
-9. Sol High opens the complete live X subtree, classifies text and media in
+8. Under explicit standing authority, a scheduled Luna dispatcher reads a
+   compact snapshot, leases new queue IDs in persistent automation memory, and
+   sends one wake message to the existing pinned Browser-owner task. It
+   performs no browsing, classification, or drafting.
+9. A separate one-minute watchdog checks poll freshness and failure count.
+10. Sol High opens the complete live X subtree, classifies text and media in
    context, and resolves an event only after publication or skip is durable.
-10. `initial-audit-next` performs only free mechanical grouping and exact-text
+11. `initial-audit-next` performs only free mechanical grouping and exact-text
     extraction. It never decides stance, relevance, or whether to publish.
-11. `initial-audit-expire --hours H --as-of UTC` fixes Alex's requested
+12. `initial-audit-expire --hours H --as-of UTC` fixes Alex's requested
     per-run lookback cutoff without Browser or model use. Dry-run and apply
     reuse the same timestamp. In one transaction it imports exact stored API
     history and records an age-policy skip only for unresolved events strictly
     older than that cutoff.
-12. New API events preserve expanded attachment metadata and alt text. Missing
+13. New API events preserve expanded attachment metadata and alt text. Missing
     media metadata still requires live Browser inspection and is never treated
     as proof that no media exists.
-13. `browser-handoff-sync` imports exact Browser history and applies only
+14. `browser-handoff-sync` imports exact Browser history and applies only
     already confirmed Sol dispositions. It cannot draft, classify, or publish,
     and it fails closed on missing history or mismatched chain metadata. A
     publication must include both the inspected user turn and the exact
@@ -78,6 +82,13 @@ The same SQLite database stores append-only conversation chains:
 - Credentials, SQLite, queue, health, alerts, and logs are excluded from Git.
 - An API error never advances `since_id`.
 - A duplicate API response never creates a duplicate queue item.
+- Direct dispatcher claims are serialized with a file lock and atomic state
+  replace. A projectless scheduled task instead keeps the same lease fields in
+  supported persistent automation memory. A live lease prevents duplicate task
+  wakeups, while failed delivery removes the new IDs for an immediate retry.
+- Resolved events disappear from the wake file and are pruned from dispatcher
+  state. An unresolved event becomes eligible again after the lease expires,
+  so a crashed Browser-owner turn cannot strand the queue forever.
 - Generic acknowledgement rejects direct replies. Only a durable `resolve`
   operation can remove them from the X workflow.
 - `resolve` requires the exact inspected event turn in conversation history.
@@ -105,5 +116,6 @@ The same SQLite database stores append-only conversation chains:
 ## Token model
 
 Polling, deduplication, queueing, health checks, and notifications use no model
-calls. Model usage begins only after a queued event is intentionally handed to
-the existing X workflow.
+calls. With standing autopilot enabled, a tiny scheduled Luna run checks and
+claims the compact queue every five minutes. Sol High is invoked only when a
+claim contains an event.

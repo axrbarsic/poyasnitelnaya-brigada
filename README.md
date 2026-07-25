@@ -1,6 +1,24 @@
 # X mention watcher
 
+[English](README.md) | [Русский](README.ru.md)
+
 Read-only polling for new X mentions and replies with zero model-token use.
+
+## What this project is
+
+This repository is a reliable bridge between X reply detection and an existing
+Codex Browser-owner task. It separates cheap mechanical work from expensive
+content decisions:
+
+- Python and the official X API detect, deduplicate, persist, and queue replies.
+- A five-minute Luna automation reads only a compact queue snapshot and lease.
+- Sol High opens the real X thread in the authenticated Codex Browser, checks
+  context and sources, prevents duplicates, and decides whether to reply.
+- Long follow-ups can continue in the exact historical custom GPT conversation.
+- SQLite and append-only JSONL preserve conversation history and audit evidence.
+
+Start with [the autopilot setup guide](docs/autopilot-setup.md) to adapt the
+system to another X account and Codex task.
 
 The watcher uses the official X API user mentions endpoint with `since_id`. It
 stores immutable event IDs in SQLite, writes a durable pending queue, and
@@ -11,9 +29,13 @@ It does not:
 
 - draft or publish replies;
 - access Browser cookies, storage, or credentials;
-- wake Codex autonomously;
 - store API tokens in files;
 - decide whether an event deserves a response.
+
+When Alex explicitly grants standing autopilot authority, a separate Codex
+scheduled dispatcher may claim the durable queue and wake the existing pinned
+Browser-owner task. The dispatcher does not open X, inspect context, draft, or
+publish. Sol High remains the only publication brain.
 
 ## Current checkpoint
 
@@ -96,6 +118,42 @@ Prefer `initial-audit-next` for normal backlog work.
 ```bash
 python3 xmention_watcher.py --config config.json poll
 ```
+
+## Standing autopilot dispatcher
+
+The optional dispatcher gives queued event IDs a 30-minute lease and returns
+one compact JSON claim. It prevents duplicate task wakeups while the Browser
+owner is working or a Pro response is still thinking.
+
+```bash
+python3 scripts/autopilot_dispatch.py \
+  --config config.json \
+  --lease-seconds 1800 \
+  claim
+
+python3 scripts/autopilot_dispatch.py \
+  --config config.json \
+  --lease-seconds 1800 \
+  status
+```
+
+If delivery to the pinned Codex task fails, release the exact claim so the next
+scheduled run can retry:
+
+```bash
+python3 scripts/autopilot_dispatch.py \
+  --config config.json \
+  release \
+  --claim-token CLAIM_TOKEN
+```
+
+The scheduled Codex run uses Luna only as a deterministic dispatcher. In a
+saved project it may call `claim` directly. In a projectless sandbox it calls
+the read-only `snapshot` command and stores its 30-minute lease in the
+automation's persistent `memory.md`, which is the supported writable location.
+An empty queue ends without opening Browser or messaging the main task. A
+non-empty claim sends one bounded wake message to the existing Sol High
+Browser-owner task. The watcher and dispatcher never post directly.
 
 On a new empty live database, the first successful poll stores the available
 mention history, establishes `since_id`, and queues every direct reply to the

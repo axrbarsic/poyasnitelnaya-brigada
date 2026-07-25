@@ -38,6 +38,12 @@ Distinguish analysis from publication.
 
 - A request to inspect, diagnose, search, summarize, or draft does not authorize posting, deleting, following, liking, messaging, or changing account state.
 - Publish only when Alex explicitly asks for the post, reply, or clearly bounded batch.
+- If Alex explicitly grants standing autopilot authority, treat later queued
+  direct replies as the same bounded reply workflow until Alex revokes it.
+  This standing authority covers contextual inspection, fact checking, short or
+  Pro routing, publication, verification, and durable resolution. It does not
+  cover likes, reposts, follows, direct messages, unrelated original posts, or
+  deletion of existing posts.
 - Delete or replace an existing post only when Alex explicitly authorizes that exact effect.
 - Do not expose credentials, cookies, local storage, session files, or authentication material.
 - Use the normal signed-in browser flow. If authentication is missing, ask Alex to sign in to the selected browser.

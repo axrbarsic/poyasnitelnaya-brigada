@@ -42,6 +42,12 @@
 - [ ] Acknowledge the event only after the existing X workflow records its
   disposition.
 - [ ] Keep all publishing in the Sol High Browser-owner session.
+- [ ] Confirm one real queued event produces one dispatcher claim and one wake
+  message to the pinned Browser-owner task.
+- [ ] Confirm a second scheduled dispatcher run inside the lease does not send
+  a duplicate wake.
+- [ ] Confirm failed delivery removes the new lease IDs for a later retry.
+- [ ] Confirm the Browser owner resolves the event and the dispatcher prunes it.
 
 ## Gate 4: backup
 

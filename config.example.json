@@ -4,6 +4,7 @@
   "lock_file": "var/poll.lock",
   "health_file": "var/health.json",
   "wake_file": "var/wake-request.json",
+  "autopilot_state_file": "var/autopilot-dispatch.json",
   "alert_file": "var/watchdog-alert.json",
   "poll_interval_seconds": 300,
   "stale_after_seconds": 900,
