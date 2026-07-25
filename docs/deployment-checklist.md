@@ -48,6 +48,6 @@
 - [x] Initialize a clean Git repository with runtime state ignored.
 - [x] Verify that config, tokens, SQLite, queues, health, alerts, and logs are
   excluded.
-- [ ] Create a private GitHub repository.
-- [ ] Push source, tests, templates, and documentation.
+- [x] Create a private GitHub repository.
+- [x] Push source, tests, templates, and documentation.
 - [x] Add the watcher contract to the X skill only after the live gate is green.
