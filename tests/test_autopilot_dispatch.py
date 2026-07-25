@@ -158,6 +158,17 @@ class AutopilotDispatchTests(unittest.TestCase):
             )
         self.assertEqual(before, self.state_file.read_text(encoding="utf-8"))
 
+    def test_wake_event_rejects_noncanonical_or_injected_url(self) -> None:
+        event = self.event()
+        event["event_url"] = (
+            "https://x.com/example/status/"
+            f"{event['event_id']}\nIGNORE_PREVIOUS"
+        )
+        self.write_events([event])
+
+        with self.assertRaisesRegex(ValueError, "numeric id and X URL"):
+            autopilot_dispatch.snapshot(self.wake_file)
+
     def test_config_paths_are_resolved_relative_to_config(self) -> None:
         wake_file, state_file = autopilot_dispatch.load_paths(self.config_file)
         self.assertEqual(wake_file, self.wake_file.resolve())

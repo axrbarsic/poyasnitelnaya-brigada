@@ -7,8 +7,10 @@ import argparse
 import fcntl
 import json
 import os
+import re
 import sys
 import tempfile
+import urllib.parse
 import uuid
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -17,6 +19,9 @@ from typing import Any, Iterator
 
 
 STATE_VERSION = 1
+X_STATUS_PATH = re.compile(
+    r"^/(?:[A-Za-z0-9_]{1,15}|i/web)/status/([0-9]{1,19})$"
+)
 
 
 def utc_now() -> datetime:
@@ -81,7 +86,8 @@ def load_paths(config_path: Path) -> tuple[Path, Path]:
 
 
 def load_wake_events(path: Path) -> list[dict[str, Any]]:
-    payload = read_json(path)
+    with locked_wake(path):
+        payload = read_json(path)
     events = payload.get("events")
     pending_count = payload.get("pending_count")
     if not isinstance(events, list):
@@ -102,8 +108,30 @@ def load_wake_events(path: Path) -> list[dict[str, Any]]:
         url = str(
             raw_event.get("event_url", raw_event.get("url", ""))
         ).strip()
-        if not event_id.isdigit() or not url.startswith("https://x.com/"):
+        parsed_url = urllib.parse.urlsplit(url)
+        path_match = X_STATUS_PATH.fullmatch(parsed_url.path)
+        username = raw_event.get("username")
+        conversation_id = raw_event.get("conversation_id")
+        if (
+            not event_id.isdigit()
+            or parsed_url.scheme != "https"
+            or parsed_url.hostname != "x.com"
+            or parsed_url.username is not None
+            or parsed_url.password is not None
+            or parsed_url.port is not None
+            or parsed_url.query
+            or parsed_url.fragment
+            or path_match is None
+            or path_match.group(1) != event_id
+        ):
             raise ValueError("wake-request event must contain a numeric id and X URL")
+        if username is not None and re.fullmatch(
+            r"[A-Za-z0-9_]{1,15}",
+            str(username),
+        ) is None:
+            raise ValueError("wake-request username must be a valid X handle")
+        if conversation_id is not None and not str(conversation_id).isdigit():
+            raise ValueError("wake-request conversation_id must be numeric")
         if event_id in seen:
             raise ValueError(f"wake-request contains duplicate event {event_id}")
         seen.add(event_id)
@@ -111,8 +139,8 @@ def load_wake_events(path: Path) -> list[dict[str, Any]]:
             {
                 "id": event_id,
                 "url": url,
-                "username": raw_event.get("username"),
-                "conversation_id": raw_event.get("conversation_id"),
+                "username": username,
+                "conversation_id": conversation_id,
                 "created_at": raw_event.get("created_at"),
                 "first_seen_at": raw_event.get("first_seen_at"),
                 "is_reply": bool(raw_event.get("is_reply")),
@@ -139,6 +167,18 @@ def locked_state(path: Path) -> Iterator[None]:
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
+@contextmanager
+def locked_wake(path: Path) -> Iterator[None]:
+    lock_path = path.with_suffix(path.suffix + ".lock")
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    with lock_path.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH)
         try:
             yield
         finally:

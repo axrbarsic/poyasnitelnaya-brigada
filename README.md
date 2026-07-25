@@ -11,7 +11,8 @@ Codex Browser-owner task. It separates cheap mechanical work from expensive
 content decisions:
 
 - Python and the official X API detect, deduplicate, persist, and queue replies.
-- A five-minute Luna automation reads only a compact queue snapshot and lease.
+- A local event launcher checks the compact queue without a model and starts
+  Codex only when an event is eligible.
 - Sol High opens the real X thread in the authenticated Codex Browser, checks
   context and sources, prevents duplicates, and decides whether to reply.
 - Long follow-ups can continue in the exact historical custom GPT conversation.
@@ -32,17 +33,21 @@ It does not:
 - store API tokens in files;
 - decide whether an event deserves a response.
 
-When Alex explicitly grants standing autopilot authority, a separate Codex
-scheduled dispatcher may claim the durable queue and wake the existing pinned
-Browser-owner task. The dispatcher does not open X, inspect context, draft, or
-publish. Sol High remains the only publication brain.
+When Alex explicitly grants standing autopilot authority, a third LaunchAgent
+claims the durable queue and resumes one lightweight Browser-owner task with
+`Sol High` and `--ephemeral`. Empty checks use only Python, create no Codex
+tasks, and consume no model tokens. Event runs continue the same dedicated task
+instead of creating sidebar clutter. The launcher does not inspect context,
+draft, or publish. Sol High remains the only publication brain.
 
 ## Current checkpoint
 
-The live gate passed on 2026-07-24. The poll and watchdog LaunchAgents are
-installed for `@axrbarsic`. Polling runs every five minutes and the watchdog
-runs every minute. A complete initial review remains a separate gate and must
-finish before an empty incremental queue is treated as proof of completeness.
+The live gate passed on 2026-07-25. Poll, watchdog, and event-driven autopilot
+LaunchAgents are installed for `@axrbarsic`. Polling runs every five minutes,
+the watchdog runs every minute, and the local launcher reacts to queue-file
+changes with a one-minute safety interval. A complete initial review remains a
+separate gate and must finish before an empty incremental queue is treated as
+proof of completeness.
 
 Live polling also requires a positive prepaid X API credit balance. With a
 recognized token and no credits, X returns HTTP 402 with the
@@ -119,7 +124,7 @@ Prefer `initial-audit-next` for normal backlog work.
 python3 xmention_watcher.py --config config.json poll
 ```
 
-## Standing autopilot dispatcher
+## Standing autopilot launcher
 
 The optional dispatcher gives queued event IDs a 30-minute lease and returns
 one compact JSON claim. It prevents duplicate task wakeups while the Browser
@@ -147,13 +152,28 @@ python3 scripts/autopilot_dispatch.py \
   --claim-token CLAIM_TOKEN
 ```
 
-The scheduled Codex run uses Luna only as a deterministic dispatcher. In a
-saved project it may call `claim` directly. In a projectless sandbox it calls
-the read-only `snapshot` command and stores its 30-minute lease in the
-automation's persistent `memory.md`, which is the supported writable location.
-An empty queue ends without opening Browser or messaging the main task. A
-non-empty claim sends one bounded wake message to the existing Sol High
-Browser-owner task. The watcher and dispatcher never post directly.
+`scripts/autopilot_resume.py` combines the claim with one official Codex CLI
+resume. It resumes an existing lightweight Browser-owner task with
+`gpt-5.6-sol`, High, and `--ephemeral`. The task must first pass one IAB
+preflight inside Codex Desktop. Later runs receive authenticated Browser access
+without creating another sidebar task.
+
+```bash
+python3 scripts/autopilot_resume.py \
+  --config config.json \
+  --lease-seconds 1800
+```
+
+An empty queue exits before starting Codex. A non-empty claim sends only the
+eligible event metadata and standing contract. The Browser owner reads exact
+conversation history from SQLite, the append-only ledger, and recorded custom
+GPT URLs. The watcher and launcher never post directly.
+
+Codex CLI 0.146 still records a resumed ephemeral turn in the owner task.
+Therefore the owner must remain dedicated and lightweight. Monitor cumulative
+history and rotate to another preflight-verified owner before it becomes a
+large general-purpose conversation. The launcher health file counts completed
+runs and raises a rotation recommendation at the configured threshold.
 
 On a new empty live database, the first successful poll stores the available
 mention history, establishes `since_id`, and queues every direct reply to the
@@ -349,9 +369,10 @@ and applies the correction atomically, so append-only history remains intact.
 
 ## Background service
 
-The `macos/` directory contains LaunchAgent templates for a five-minute poll
-and a one-minute independent watchdog. They run only Python and macOS system
-tools, so idle checks consume no model tokens and create no Codex tasks.
+The `macos/` directory contains LaunchAgent templates for a five-minute poll,
+a one-minute independent watchdog, and the event-driven autopilot launcher.
+Idle checks run only Python and macOS system tools, so they consume no model
+tokens and create no Codex tasks.
 
 Do not install the LaunchAgents on another machine until a live shadow run with
 the official X API has matched a manual Browser scan.
@@ -364,8 +385,8 @@ python3 scripts/render_launchd.py \
   --output-dir /absolute/path/to/staging
 ```
 
-Rendering validates both plists. Loading them with `launchctl` is a separate,
-explicit production step.
+Rendering validates all three plists. Loading them with `launchctl` is a
+separate, explicit production step.
 
 ## Tests
 

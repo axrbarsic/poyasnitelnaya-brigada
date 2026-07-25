@@ -13,10 +13,9 @@
 1. Python watcher каждые пять минут читает официальный endpoint упоминаний X.
 2. `since_id` и SQLite не дают одному статусу попасть в очередь дважды.
 3. `wake-request.json` содержит только неразрешенные прямые ответы и их URL.
-4. Dispatcher выдает новым событиям 30-минутную аренду. В projectless sandbox
-   она хранится в persistent `memory.md` автоматики.
-5. Маленькая модель Luna получает только компактный JSON и пробуждает
-   существующую задачу Codex.
+4. Локальный dispatcher выдает новым событиям 30-минутную аренду.
+5. Event-driven LaunchAgent запускает Codex только при наличии eligible ID.
+   Пустые проверки выполняются Python без токенов и новых задач.
 6. Sol High открывает живую ветку X, анализирует текст и изображения, проверяет
    первичные источники, историю диалога и отсутствие дубля.
 7. Короткий ответ пишет Sol High. Длинный follow-up может продолжаться только в
@@ -30,7 +29,7 @@ Watcher и dispatcher сами никогда ничего не публикую
 ## Зачем такое разделение
 
 - Пустая проверка X не расходует токены модели.
-- Каждые пять минут запускается только дешевая Luna, причем она не читает X.
+- Пустые проверки выполняются без модели и не создают задачи в sidebar.
 - Дорогая Sol High включается только при наличии реального ответа.
 - Ручное открытие уведомлений X не ломает обнаружение, потому что watcher
   использует ID статусов API, а не синий индикатор интерфейса.
@@ -38,6 +37,9 @@ Watcher и dispatcher сами никогда ничего не публикую
   или генерация Pro.
 - Если задача упала, событие снова станет доступно после окончания аренды.
 - SQLite, ledger и история ветки защищают от повторной публикации.
+- Все event runs продолжают одну выделенную Browser-owner задачу, а не создают
+  новую задачу на каждый ответ. Ее суммарный контекст надо периодически
+  контролировать. Health state рекомендует ротацию после заданного числа runs.
 
 ## Быстрый старт
 
@@ -75,9 +77,9 @@ python3 xmention_watcher.py --config config.json poll
 python3 xmention_watcher.py --config config.json status
 ```
 
-После этого установите LaunchAgents по инструкции в
-[deployment checklist](docs/deployment-checklist.md) и создайте Codex
-автоматику по [русскому руководству автопилота](docs/autopilot-setup.ru.md).
+После этого инициализируйте легкую Browser-owner задачу и установите три
+LaunchAgent по [русскому руководству автопилота](docs/autopilot-setup.ru.md) и
+[deployment checklist](docs/deployment-checklist.md).
 
 ## Важные контракты
 
@@ -107,6 +109,10 @@ python3 scripts/autopilot_dispatch.py \
 python3 scripts/autopilot_dispatch.py \
   --config config.json \
   snapshot
+
+python3 scripts/autopilot_resume.py \
+  --config config.json \
+  --lease-seconds 1800
 ```
 
 Runtime-файлы, SQLite, токены, Browser cookies и локальные журналы исключены из

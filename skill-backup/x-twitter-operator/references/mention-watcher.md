@@ -222,28 +222,31 @@ Enable this mode only after Alex explicitly grants continuing publication
 authority for queued direct replies.
 
 1. Keep the Python watcher read-only and token-free.
-2. Run the read-only `scripts/autopilot_dispatch.py snapshot` from one Codex
-   scheduled task every five minutes using Luna with low reasoning.
-3. In a projectless sandbox, keep `leased_event_ids`, `lease_expires_at`, and
-   `last_delivery_at` in that automation's persistent `memory.md`.
-4. Let Luna read only the compact snapshot JSON. It must not open Browser, X, or
-   ChatGPT and must not research, classify, draft, or publish.
-5. If every pending ID has an active lease, finish without sending a message.
-6. For eligible IDs, record a 30-minute lease before sending one wake message
-   to the exact existing pinned
-   Browser-owner task and override that turn to Sol High.
-7. Include only eligible event IDs, canonical URLs, and the standing workflow
-   contract in the wake message. Never create a new Codex task per event.
-8. If wake delivery fails, remove the newly leased IDs. Otherwise keep the
-   lease until the Browser owner resolves the events or 30 minutes pass.
+2. Run `scripts/autopilot_resume.py` from a local LaunchAgent triggered by the
+   wake file, with a one-minute safety interval.
+3. Initialize one lightweight Browser-owner task through Codex Desktop and
+   confirm an authenticated IAB preflight there.
+4. Resume that exact task through the official Codex CLI with
+   `gpt-5.6-sol`, High, and `--ephemeral`.
+5. If every pending ID has an active lease, exit before starting Codex.
+6. For eligible IDs, atomically record a 30-minute lease before the resume.
+7. Include only eligible event IDs, canonical URLs, local state paths, and the
+   standing workflow contract. The ephemeral run must read exact history from
+   SQLite, the ledger, and recorded ChatGPT conversation URLs.
+8. If Codex fails to start, remove the new lease immediately. Otherwise keep it
+   until the Browser owner resolves the events or 30 minutes pass.
 9. Use one X tab, one ChatGPT tab, and at most one active Pro conversation on
    Alex's 8 GB iMac.
-10. Never let Luna or the watcher publish. Sol High must perform live context
-   inspection, fact checking, duplicate prevention, routing, composer
-   validation, publication, URL verification, history storage, and durable
-   resolution.
+10. Never let the watcher or local launcher publish. Sol High must perform live
+    context inspection, fact checking, duplicate prevention, routing, composer
+    validation, publication, URL verification, history storage, and durable
+    resolution.
 11. Treat the lease as crash recovery, not permission to post twice. Every Sol
     turn still runs live X and ledger duplicate checks before composer fill.
+12. Keep the lightweight Browser-owner task unarchived and dedicated. Current
+    CLI versions still record resumed ephemeral turns, so monitor cumulative
+    history and rotate to another preflight-verified lightweight owner before
+    the context becomes large. Never use a huge general-purpose X task.
 
 ## Conversation history commands
 

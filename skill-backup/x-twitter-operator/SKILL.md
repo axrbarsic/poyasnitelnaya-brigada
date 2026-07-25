@@ -262,6 +262,11 @@ Separate these failure classes:
 
 If the Browser owner loses access, do not solve it by launching multiple child Browser operators. Keep research and drafts, pause mutations, and resume only in one Browser-capable session that passes preflight.
 
+A local IAB timeout or reset inside one turn does not by itself prove that the
+shared Browser backend is unavailable. Keep the same Browser-owner task, start
+one fresh turn, run the official bundled Browser bootstrap once, and require a
+successful authenticated read-only preflight before resuming mutations.
+
 Read [references/recovery-and-concurrency.md](references/recovery-and-concurrency.md) when Browser availability, screen locking, session interruption, or delegation is involved.
 
 ## Reporting

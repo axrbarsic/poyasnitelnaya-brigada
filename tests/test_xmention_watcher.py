@@ -2399,7 +2399,7 @@ class WatcherTests(unittest.TestCase):
             self.config.source_path,
             output,
         )
-        self.assertEqual(len(rendered), 2)
+        self.assertEqual(len(rendered), 3)
         for path in rendered:
             payload = plistlib.loads(path.read_bytes())
             arguments = payload["ProgramArguments"]
@@ -2408,6 +2408,16 @@ class WatcherTests(unittest.TestCase):
             self.assertEqual(Path(arguments[3]), self.config.source_path)
             self.assertEqual(payload["StandardOutPath"], "/dev/null")
             self.assertEqual(payload["StandardErrorPath"], "/dev/null")
+        autopilot = plistlib.loads(
+            (
+                output / "com.axrbarsic.xmention.autopilot.plist"
+            ).read_bytes()
+        )
+        self.assertEqual(
+            Path(autopilot["WatchPaths"][0]),
+            self.config.wake_file,
+        )
+        self.assertEqual(autopilot["StartInterval"], 60)
 
 
 if __name__ == "__main__":

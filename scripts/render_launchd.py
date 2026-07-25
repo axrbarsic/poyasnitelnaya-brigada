@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import plistlib
 from pathlib import Path
 
@@ -13,11 +14,20 @@ TEMPLATE_DIR = PROJECT_ROOT / "macos"
 TEMPLATES = (
     "com.axrbarsic.xmention.poll.plist",
     "com.axrbarsic.xmention.watchdog.plist",
+    "com.axrbarsic.xmention.autopilot.plist",
 )
 
 
 def render(config_path: Path, output_dir: Path) -> list[Path]:
     config = config_path.expanduser().resolve()
+    config_payload = json.loads(config.read_text(encoding="utf-8"))
+    wake_value = str(config_payload.get("wake_file", "var/wake-request.json"))
+    wake_candidate = Path(wake_value).expanduser()
+    wake_path = (
+        wake_candidate
+        if wake_candidate.is_absolute()
+        else (config.parent / wake_candidate).resolve()
+    )
     output = output_dir.expanduser().resolve()
     output.mkdir(parents=True, exist_ok=True)
     rendered: list[Path] = []
@@ -27,6 +37,7 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
         text = template.read_text(encoding="utf-8")
         text = text.replace("REPLACE_PROJECT_DIR", str(PROJECT_ROOT))
         text = text.replace("REPLACE_CONFIG_PATH", str(config))
+        text = text.replace("REPLACE_WAKE_PATH", str(wake_path))
         if "REPLACE_" in text:
             raise RuntimeError(f"Unresolved placeholder in {template.name}")
         payload = text.encode("utf-8")

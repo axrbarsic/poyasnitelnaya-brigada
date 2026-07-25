@@ -61,6 +61,12 @@ Action:
 - keep the session on read-only research if useful;
 - resume mutations only in one session that passes Browser preflight.
 
+If this follows a local control-kernel timeout inside the established
+Browser-owner task, start one fresh turn in that same task and run the official
+bundled Browser bootstrap once. A successful authenticated read-only preflight
+proves that the failure was turn-local. Do not create another Browser-owner
+task and do not resume mutations before that preflight.
+
 ### Unverified submission
 
 Symptoms:

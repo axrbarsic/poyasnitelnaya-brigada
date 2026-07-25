@@ -35,17 +35,18 @@
 
 ## Gate 3: production
 
-- [x] Render the two machine-specific LaunchAgent plists.
+- [x] Render the three machine-specific LaunchAgent plists.
 - [x] Inspect their absolute paths and load them explicitly with `launchctl`.
-- [x] Confirm poll and watchdog complete independently with exit code 0.
+- [x] Confirm poll, watchdog, and empty autopilot launcher complete with exit
+  code 0.
 - [ ] Confirm a real new mention creates one queue item and one notification.
 - [ ] Acknowledge the event only after the existing X workflow records its
   disposition.
 - [ ] Keep all publishing in the Sol High Browser-owner session.
-- [ ] Confirm one real queued event produces one dispatcher claim and one wake
-  message to the pinned Browser-owner task.
-- [ ] Confirm a second scheduled dispatcher run inside the lease does not send
-  a duplicate wake.
+- [ ] Confirm one real queued event produces one dispatcher claim and one
+  `resume --ephemeral` Sol High run.
+- [ ] Confirm a second launcher run inside the lease does not start a duplicate
+  Sol turn.
 - [ ] Confirm failed delivery removes the new lease IDs for a later retry.
 - [ ] Confirm the Browser owner resolves the event and the dispatcher prunes it.
 

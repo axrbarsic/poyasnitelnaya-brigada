@@ -367,7 +367,14 @@ def refresh_wake_file(config: Config, connection: sqlite3.Connection) -> dict[st
         "pending_count": len(events),
         "events": events,
     }
-    atomic_write_json(config.wake_file, payload)
+    wake_lock = config.wake_file.with_suffix(config.wake_file.suffix + ".lock")
+    wake_lock.parent.mkdir(parents=True, exist_ok=True)
+    with wake_lock.open("a+", encoding="utf-8") as handle:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        try:
+            atomic_write_json(config.wake_file, payload)
+        finally:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
     return payload
 
 

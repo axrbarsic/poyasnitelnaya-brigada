@@ -15,10 +15,9 @@ an X reply.
 5. SQLite deduplicates immutable event IDs and advances `since_id`.
 6. `wake-request.json` exposes only queued event metadata and canonical URLs.
 7. A macOS notification reports a new queue item without invoking a model.
-8. Under explicit standing authority, a scheduled Luna dispatcher reads a
-   compact snapshot, leases new queue IDs in persistent automation memory, and
-   sends one wake message to the existing pinned Browser-owner task. It
-   performs no browsing, classification, or drafting.
+8. Under explicit standing authority, a local event launcher leases new queue
+   IDs and resumes one lightweight Codex Browser-owner task with Sol High and
+   `--ephemeral`. Empty checks invoke no model and create no Codex task.
 9. A separate one-minute watchdog checks poll freshness and failure count.
 10. Sol High opens the complete live X subtree, classifies text and media in
    context, and resolves an event only after publication or skip is durable.
@@ -82,13 +81,23 @@ The same SQLite database stores append-only conversation chains:
 - Credentials, SQLite, queue, health, alerts, and logs are excluded from Git.
 - An API error never advances `since_id`.
 - A duplicate API response never creates a duplicate queue item.
-- Direct dispatcher claims are serialized with a file lock and atomic state
-  replace. A projectless scheduled task instead keeps the same lease fields in
-  supported persistent automation memory. A live lease prevents duplicate task
-  wakeups, while failed delivery removes the new IDs for an immediate retry.
+- Dispatcher claims are serialized with a file lock and atomic state replace.
+  Queue snapshots and watcher replacements share a separate wake-file lock.
+  A live lease prevents duplicate Browser-owner runs, while a failed Codex CLI
+  start removes the new IDs for an immediate retry.
 - Resolved events disappear from the wake file and are pruned from dispatcher
   state. An unresolved event becomes eligible again after the lease expires,
   so a crashed Browser-owner turn cannot strand the queue forever.
+- The Browser-owner task is initialized once through Codex Desktop. Later
+  `resume --ephemeral` runs reuse its IAB eligibility without creating sidebar
+  tasks. Current CLI versions still record resumed turns in that task, so it
+  stays dedicated and is rotated before its cumulative context becomes large.
+- An IAB timeout is classified per execution turn. One fresh turn in the same
+  Browser-owner task may run the official bootstrap once; publication resumes
+  only after an authenticated read-only preflight succeeds.
+- A successful CLI exit is verified against the queue. Remaining leased IDs
+  produce `completed_unresolved` health and one local notification instead of
+  being reported as a successful cycle.
 - Generic acknowledgement rejects direct replies. Only a durable `resolve`
   operation can remove them from the X workflow.
 - `resolve` requires the exact inspected event turn in conversation history.
@@ -115,7 +124,6 @@ The same SQLite database stores append-only conversation chains:
 
 ## Token model
 
-Polling, deduplication, queueing, health checks, and notifications use no model
-calls. With standing autopilot enabled, a tiny scheduled Luna run checks and
-claims the compact queue every five minutes. Sol High is invoked only when a
-claim contains an event.
+Polling, deduplication, queueing, health checks, lease checks, and notifications
+use no model calls. Sol High is invoked only when an atomic claim contains an
+event.
