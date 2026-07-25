@@ -3,7 +3,7 @@
 ## Purpose
 
 Use `/Users/alexlane/Developer/x-mention-watcher` for deterministic polling of
-new direct replies to `@axrbarsic`. Polling and watchdog execution consume no
+new X replies involving `@axrbarsic`. Polling and watchdog execution consume no
 model tokens and create no Codex tasks. Official X API resource charges still
 apply.
 
@@ -26,10 +26,13 @@ drafts, posts, deletes, likes, follows, or changes X account state.
   available direct reply for an initial audit.
 - Never treat a fresh cursor or an empty incremental queue as proof that old
   replies were handled.
-- After the initial audit starts, only direct replies whose
-  `in_reply_to_user_id` equals
-  `16337609` enter the queue.
-- Other mentions and nested replies are stored as `ignored`.
+- After the initial audit starts, queue every direct reply whose
+  `in_reply_to_user_id` equals `16337609`.
+- Also queue a nested reply when its `conversation_id` has an exact stored
+  `conversation_turns` row with `actor=alex`.
+- Store unrelated mentions and nested replies as `ignored`.
+- Never use static topic names, post IDs, authors, or special article lists as
+  an eligibility rule.
 - Deduplicate by immutable X event ID.
 - A successful poll alone may advance `since_id`. Failed polls never do.
 - The legacy `baseline` command is disabled because it could hide unresolved
@@ -74,9 +77,9 @@ Before loading LaunchAgents, require all of the following:
 6. Manual Browser comparison finds no missed direct replies.
 7. X API credits are positive and the spending cap is understood.
 
-The installed poll interval is 300 seconds. The independent watchdog interval
-is 60 seconds. Both write durable state and send local notifications only on
-meaningful changes. Background stdout and stderr go to `/dev/null`.
+The installed poll and independent watchdog intervals are both 60 seconds.
+Both write durable state and send local notifications only on meaningful
+changes. Background stdout and stderr go to `/dev/null`.
 
 If health is `billing_blocked`, do not keep polling. Restore X API credits
 before loading or restarting the LaunchAgents.
@@ -117,9 +120,11 @@ For a large audit, the Browser owner may append a structured
 `initial_audit_disposition` after the exact event turn. Root may then use
 `browser-handoff-sync` instead of manually repeating each `resolve`. The
 sync command only transfers Sol's durable decision. It does not inspect,
-classify, draft, or publish. Every handoff must contain:
+classify, draft, or publish. Every handoff must contain exactly one proven
+route:
 
-- `direct_reply_to_axrbarsic=true`;
+- `direct_reply_to_axrbarsic=true`; or
+- `tracked_conversation_reply=true`;
 - `history_status=exact_user_turn_appended`;
 - `alex_history_status=exact_alex_turn_appended` for a publication;
 - a pending root resolution marker;
@@ -210,7 +215,7 @@ Before relying on incremental monitoring:
 7. Run `initial-audit-complete` only after the queue reaches zero and every
    direct reply has an `event_resolutions` row. Completion checks both facts.
 
-The incremental five-minute watcher is authoritative only after this gate.
+The incremental one-minute watcher is authoritative only after this gate.
 
 Without standing authority, do not wake a model merely because polling
 occurred. Use the durable queue and local notification as the boundary between
@@ -219,34 +224,37 @@ free mechanical detection and model work.
 ## Standing autopilot
 
 Enable this mode only after Alex explicitly grants continuing publication
-authority for queued direct replies.
+authority for queued eligible replies.
 
 1. Keep the Python watcher read-only and token-free.
-2. Run `scripts/autopilot_resume.py` from a local LaunchAgent triggered by the
-   wake file, with a one-minute safety interval.
-3. Initialize one lightweight Browser-owner task through Codex Desktop and
-   confirm an authenticated IAB preflight there.
-4. Resume that exact task through the official Codex CLI with
-   `gpt-5.6-sol`, High, and `--ephemeral`.
-5. If every pending ID has an active lease, exit before starting Codex.
-6. For eligible IDs, atomically record a 30-minute lease before the resume.
+2. Run the poll and watchdog LaunchAgents every minute.
+3. Run one Codex Desktop scheduled automation every five minutes with
+   `gpt-5.6-sol` and High reasoning.
+4. Let the current scheduled run atomically claim the queue with
+   `scripts/autopilot_bridge.py claim`.
+5. If the queue is empty or every pending ID has an active lease, exit before
+   opening Browser.
+6. For eligible IDs, atomically record a 30-minute lease before Browser work.
 7. Include only eligible event IDs, canonical URLs, local state paths, and the
-   standing workflow contract. The ephemeral run must read exact history from
+   standing workflow contract. The scheduled run must read exact history from
    SQLite, the ledger, and recorded ChatGPT conversation URLs.
-8. If Codex fails to start, remove the new lease immediately. Otherwise keep it
-   until the Browser owner resolves the events or 30 minutes pass.
+8. Mark the claim `started`, execute the returned prompt in the same Sol run,
+   and remove the lease only if work fails before durable resolution.
 9. Use one X tab, one ChatGPT tab, and at most one active Pro conversation on
    Alex's 8 GB iMac.
-10. Never let the watcher or local launcher publish. Sol High must perform live
+10. Never let the watcher or bridge publish. Sol High must perform live
     context inspection, fact checking, duplicate prevention, routing, composer
     validation, publication, URL verification, history storage, and durable
     resolution.
 11. Treat the lease as crash recovery, not permission to post twice. Every Sol
     turn still runs live X and ledger duplicate checks before composer fill.
-12. Keep the lightweight Browser-owner task unarchived and dedicated. Current
-    CLI versions still record resumed ephemeral turns, so monitor cumulative
-    history and rotate to another preflight-verified lightweight owner before
-    the context becomes large. Never use a huge general-purpose X task.
+12. Never route Browser work through Codex CLI or a cross-thread app message.
+    The built-in Browser is unavailable in Codex CLI.
+13. After durable history and resolution remove every claimed ID from the wake
+    queue, mark `completed`. If a later API poll cannot read Keychain, mark
+    `completed_with_warning`; do not release or republish resolved events.
+14. Keep the automation itself free of a final X poll. The one-minute
+    LaunchAgent owns token-free polling.
 
 ## Conversation history commands
 

@@ -25,30 +25,33 @@
 - [x] Start with a new empty shadow database.
 - [x] Run one live baseline poll and compare relevant IDs with the manual
   Browser scan and durable publication ledger.
-- [x] Run at least three more polls and confirm no duplicates or missed direct
-  replies.
+- [x] Run at least three more polls and confirm no duplicates or missed
+  eligible replies.
 - [x] Inject two invalid-token failures and confirm the watchdog changes to
   `failing`.
 - [x] Restore the token and confirm a successful poll clears the old error.
 - [x] Complete the supervised trial with healthy recovery and zero pending
-  direct replies.
+  eligible replies.
 
 ## Gate 3: production
 
-- [x] Render the three machine-specific LaunchAgent plists.
+- [x] Render the two machine-specific LaunchAgent plists.
 - [x] Inspect their absolute paths and load them explicitly with `launchctl`.
-- [x] Confirm poll, watchdog, and empty autopilot launcher complete with exit
-  code 0.
-- [ ] Confirm a real new mention creates one queue item and one notification.
+- [x] Confirm poll and watchdog complete with exit code 0.
+- [x] Confirm the retired CLI launcher exits nonzero before claiming an event.
+- [x] Create the Sol High Codex Desktop worker automation.
+- [x] Confirm real new replies create exact queue items.
 - [ ] Acknowledge the event only after the existing X workflow records its
   disposition.
-- [ ] Keep all publishing in the Sol High Browser-owner session.
-- [ ] Confirm one real queued event produces one dispatcher claim and one
-  `resume --ephemeral` Sol High run.
-- [ ] Confirm a second launcher run inside the lease does not start a duplicate
-  Sol turn.
-- [ ] Confirm failed delivery removes the new lease IDs for a later retry.
-- [ ] Confirm the Browser owner resolves the event and the dispatcher prunes it.
+- [x] Keep all publishing inside the claimed Sol High Browser run.
+- [x] Confirm four naturally rediscovered events produce one dispatcher claim.
+- [x] Confirm a second scheduled run inside the lease does not start a
+  duplicate Sol turn.
+- [x] Confirm a failed pre-resolution worker releases the exact claim.
+- [x] Confirm the Browser worker durably resolves every event and the
+  dispatcher prunes the claim.
+- [x] Confirm postflight Keychain failure is represented as a warning after
+  durable resolution, not as a rolled-back result.
 
 ## Gate 4: backup
 

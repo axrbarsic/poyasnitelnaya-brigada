@@ -100,6 +100,33 @@ class WatcherTests(unittest.TestCase):
                 ),
             )
 
+    def insert_alex_turn_for_chain(self, chain_id: str) -> None:
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO conversation_chains(
+                    chain_id, root_status_id, provenance,
+                    created_at, updated_at
+                ) VALUES(?, ?, 'short', ?, ?)
+                """,
+                (chain_id, chain_id, watcher.isoformat(), watcher.isoformat()),
+            )
+            self.connection.execute(
+                """
+                INSERT INTO conversation_turns(
+                    status_id, chain_id, actor, author, url, exact_text,
+                    observed_at, provenance
+                ) VALUES(?, ?, 'alex', 'axrbarsic', ?, 'Prior answer', ?,
+                         'live_x_dom')
+                """,
+                (
+                    str(int(chain_id) + 1),
+                    chain_id,
+                    f"https://x.com/axrbarsic/status/{int(chain_id) + 1}",
+                    watcher.isoformat(),
+                ),
+            )
+
     def test_replay_detects_accumulated_events_and_deduplicates(self) -> None:
         first = watcher.ingest_response(
             self.config,
@@ -182,6 +209,57 @@ class WatcherTests(unittest.TestCase):
         )
         self.assertEqual(result["acknowledged"], ["2080696811623190996"])
         self.assertEqual(result["not_queued"], ["999"])
+
+    def test_tracked_conversation_descendant_is_queued_and_protected(
+        self,
+    ) -> None:
+        tracked_id = "2080312847230210375"
+        self.insert_alex_turn_for_chain(tracked_id)
+        response = {
+            "data": [
+                {
+                    "id": "2081034932135096804",
+                    "author_id": "901",
+                    "text": "Nested Proton continuation",
+                    "created_at": "2026-07-25T15:12:46Z",
+                    "conversation_id": tracked_id,
+                    "in_reply_to_user_id": "2024119407933534209",
+                    "referenced_tweets": [
+                        {
+                            "type": "replied_to",
+                            "id": "2081028119784230951",
+                        }
+                    ],
+                }
+            ],
+            "includes": {
+                "users": [{"id": "901", "username": "target_user"}]
+            },
+            "meta": {"newest_id": "2081034932135096804"},
+        }
+
+        result = watcher.ingest_response(
+            self.config,
+            self.connection,
+            response,
+            source="x_api",
+        )
+
+        self.assertEqual(result["new_event_ids"], ["2081034932135096804"])
+        stored = self.connection.execute(
+            "SELECT delivery_state FROM events WHERE event_id = ?",
+            ("2081034932135096804",),
+        ).fetchone()
+        self.assertEqual(stored["delivery_state"], "queued")
+        with self.assertRaisesRegex(
+            ValueError,
+            "require a durable resolve disposition",
+        ):
+            watcher.acknowledge_events(
+                self.config,
+                self.connection,
+                ["2081034932135096804"],
+            )
 
     def test_record_failure_and_watchdog_threshold(self) -> None:
         watcher.ingest_response(
@@ -1461,6 +1539,96 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(second["resolved_event_ids"], [])
         self.assertEqual(second["already_resolved_event_ids"], [event_id])
 
+    def test_browser_handoff_sync_accepts_tracked_conversation_route(
+        self,
+    ) -> None:
+        tracked_id = "2080312847230210375"
+        self.insert_alex_turn_for_chain(tracked_id)
+        response = {
+            "data": [
+                {
+                    "id": "2081034932135096804",
+                    "author_id": "901",
+                    "text": "Nested Proton continuation",
+                    "created_at": "2026-07-25T15:12:46Z",
+                    "conversation_id": tracked_id,
+                    "in_reply_to_user_id": "2024119407933534209",
+                    "referenced_tweets": [
+                        {
+                            "type": "replied_to",
+                            "id": "2081028119784230951",
+                        }
+                    ],
+                }
+            ],
+            "includes": {
+                "users": [{"id": "901", "username": "target_user"}]
+            },
+            "meta": {"newest_id": "2081034932135096804"},
+        }
+        watcher.ingest_response(
+            self.config,
+            self.connection,
+            response,
+            source="x_api",
+        )
+        event_id = "2081034932135096804"
+        history_file = self.root / "tracked-history.jsonl"
+        ledger_file = self.root / "tracked-ledger.jsonl"
+        history_file.write_text(
+            json.dumps(
+                {
+                    "record_type": "initial_audit_event_turn",
+                    "chain_id": tracked_id,
+                    "conversation_root_id": tracked_id,
+                    "chain_provenance": "short",
+                    "parent_status_id": "2081028119784230951",
+                    "status_id": event_id,
+                    "actor": "user",
+                    "author": "target_user",
+                    "url": f"https://x.com/target_user/status/{event_id}",
+                    "exact_text": "Nested Proton continuation",
+                    "provenance": "live_x_dom",
+                    "media_json": [],
+                    "sources": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        ledger_file.write_text(
+            json.dumps(
+                {
+                    "event": "initial_audit_disposition",
+                    "event_id": event_id,
+                    "conversation_id": tracked_id,
+                    "direct_reply_to_axrbarsic": False,
+                    "tracked_conversation_reply": True,
+                    "history_status": "exact_user_turn_appended",
+                    "watcher_disposition":
+                        "durable_skip_pending_root_resolve",
+                    "disposition": "skip",
+                    "reason": "nested continuation without a new question",
+                    "reply_url": None,
+                    "stance": "neutral",
+                    "confidence": "high",
+                    "media_meaning": None,
+                    "evidence": ["live full chain"],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = watcher.sync_browser_handoffs(
+            self.config,
+            self.connection,
+            history_path=history_file,
+            ledger_path=ledger_file,
+        )
+
+        self.assertEqual(result["resolved_event_ids"], [event_id])
+
     def test_browser_handoff_sync_requires_explicit_correction_marker(self) -> None:
         watcher.ingest_response(
             self.config,
@@ -2399,7 +2567,7 @@ class WatcherTests(unittest.TestCase):
             self.config.source_path,
             output,
         )
-        self.assertEqual(len(rendered), 3)
+        self.assertEqual(len(rendered), 2)
         for path in rendered:
             payload = plistlib.loads(path.read_bytes())
             arguments = payload["ProgramArguments"]
@@ -2408,16 +2576,15 @@ class WatcherTests(unittest.TestCase):
             self.assertEqual(Path(arguments[3]), self.config.source_path)
             self.assertEqual(payload["StandardOutPath"], "/dev/null")
             self.assertEqual(payload["StandardErrorPath"], "/dev/null")
-        autopilot = plistlib.loads(
-            (
-                output / "com.axrbarsic.xmention.autopilot.plist"
-            ).read_bytes()
+            expected_interval = (
+                self.config.poll_interval_seconds
+                if path.name.endswith(".poll.plist")
+                else self.config.watchdog_interval_seconds
+            )
+            self.assertEqual(payload["StartInterval"], expected_interval)
+        self.assertFalse(
+            (output / "com.axrbarsic.xmention.autopilot.plist").exists()
         )
-        self.assertEqual(
-            Path(autopilot["WatchPaths"][0]),
-            self.config.wake_file,
-        )
-        self.assertEqual(autopilot["StartInterval"], 60)
 
 
 if __name__ == "__main__":

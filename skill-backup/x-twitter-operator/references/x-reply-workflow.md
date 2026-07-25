@@ -54,7 +54,7 @@ remains ambiguous after contextual and internet checks, do not publish.
 Perform all of these when available:
 
 1. Search visible thread articles for `@axrbarsic`.
-2. Inspect direct replies below the target.
+2. Inspect the complete reply subtree below the target.
 3. Check the in-run ledger by status ID.
 4. Search `from:axrbarsic to:<target_handle>` with a distinctive phrase when thread rendering is incomplete.
 

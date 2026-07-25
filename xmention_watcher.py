@@ -125,6 +125,31 @@ def load_config(path: Path) -> Config:
     return config
 
 
+def is_eligible_reply(
+    connection: sqlite3.Connection,
+    config: Config,
+    *,
+    is_reply: bool,
+    in_reply_to_user_id: str | None,
+    conversation_id: str | None,
+) -> bool:
+    if not is_reply:
+        return False
+    if in_reply_to_user_id == config.user_id:
+        return True
+    if not conversation_id:
+        return False
+    return connection.execute(
+        """
+        SELECT 1
+        FROM conversation_turns
+        WHERE chain_id = ? AND actor = 'alex'
+        LIMIT 1
+        """,
+        (conversation_id,),
+    ).fetchone() is not None
+
+
 def connect_database(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
@@ -431,8 +456,17 @@ def ingest_response(
             in_reply_to_user_id = (
                 str(event.get("in_reply_to_user_id", "")).strip() or None
             )
-            direct_reply = is_reply and in_reply_to_user_id == config.user_id
-            if config.queue_direct_replies_only and not direct_reply:
+            conversation_id = (
+                str(event.get("conversation_id", "")).strip() or None
+            )
+            eligible_reply = is_eligible_reply(
+                connection,
+                config,
+                is_reply=is_reply,
+                in_reply_to_user_id=in_reply_to_user_id,
+                conversation_id=conversation_id,
+            )
+            if config.queue_direct_replies_only and not eligible_reply:
                 delivery_state = "ignored"
             else:
                 delivery_state = "queued"
@@ -449,7 +483,7 @@ def ingest_response(
                     author_id,
                     users.get(author_id or ""),
                     event.get("created_at"),
-                    event.get("conversation_id"),
+                    conversation_id,
                     in_reply_to_user_id,
                     1 if is_reply else 0,
                     json.dumps(stored_event, ensure_ascii=False, sort_keys=True),
@@ -2262,6 +2296,9 @@ def sync_browser_handoffs(
                 "direct_reply_to_axrbarsic": record.get(
                     "direct_reply_to_axrbarsic"
                 ),
+                "tracked_conversation_reply": record.get(
+                    "tracked_conversation_reply"
+                ),
                 "history_status": record.get("history_status"),
                 "watcher_disposition": record.get("watcher_disposition"),
                 "disposition": record.get("disposition"),
@@ -2327,9 +2364,13 @@ def sync_browser_handoffs(
             if is_revision
             else None
         )
-        if record.get("direct_reply_to_axrbarsic") is not True:
+        confirmed_direct = record.get("direct_reply_to_axrbarsic") is True
+        confirmed_tracked = (
+            record.get("tracked_conversation_reply") is True
+        )
+        if confirmed_direct == confirmed_tracked:
             raise ValueError(
-                f"Browser handoff {event_id} is not a confirmed direct reply"
+                f"Browser handoff {event_id} must confirm exactly one route"
             )
         if record.get("history_status") != "exact_user_turn_appended":
             raise ValueError(
@@ -2341,12 +2382,23 @@ def sync_browser_handoffs(
         ).fetchone()
         if event is None:
             raise KeyError(f"Unknown event {event_id}")
+        event_is_direct = (
+            int(event["is_reply"]) == 1
+            and event["in_reply_to_user_id"] == config.user_id
+        )
+        event_is_tracked = is_eligible_reply(
+            connection,
+            config,
+            is_reply=bool(event["is_reply"]),
+            in_reply_to_user_id=None,
+            conversation_id=event["conversation_id"],
+        )
         if (
-            int(event["is_reply"]) != 1
-            or event["in_reply_to_user_id"] != config.user_id
+            (confirmed_direct and not event_is_direct)
+            or (confirmed_tracked and not event_is_tracked)
         ):
             raise ValueError(
-                f"Browser handoff {event_id} is not a stored direct reply"
+                f"Browser handoff {event_id} route does not match stored event"
             )
         conversation_id = _validate_status_id(
             _required_text(record, "conversation_id"),
@@ -2956,25 +3008,33 @@ def acknowledge_events(
 ) -> dict[str, Any]:
     requested = list(dict.fromkeys(event_ids))
     placeholders = ",".join("?" for _ in requested)
-    direct_rows = connection.execute(
+    protected_rows = connection.execute(
         f"""
-        SELECT event_id
+        SELECT event_id, is_reply, in_reply_to_user_id, conversation_id
         FROM events
         WHERE delivery_state = 'queued'
           AND event_id IN ({placeholders})
-          AND is_reply = 1
-          AND in_reply_to_user_id = ?
         """,
-        [*requested, config.user_id],
+        requested,
     ).fetchall()
-    direct_ids = sorted(
-        (str(row["event_id"]) for row in direct_rows),
+    protected_ids = sorted(
+        (
+            str(row["event_id"])
+            for row in protected_rows
+            if is_eligible_reply(
+                connection,
+                config,
+                is_reply=bool(row["is_reply"]),
+                in_reply_to_user_id=row["in_reply_to_user_id"],
+                conversation_id=row["conversation_id"],
+            )
+        ),
         key=int,
     )
-    if direct_ids:
+    if protected_ids:
         raise ValueError(
-            "Direct reply events require a durable resolve disposition: "
-            + ", ".join(direct_ids)
+            "Eligible reply events require a durable resolve disposition: "
+            + ", ".join(protected_ids)
         )
     rows = connection.execute(
         f"""

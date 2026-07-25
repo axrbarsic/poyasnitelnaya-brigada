@@ -6,15 +6,17 @@ Read-only polling for new X mentions and replies with zero model-token use.
 
 ## What this project is
 
-This repository is a reliable bridge between X reply detection and an existing
-Codex Browser-owner task. It separates cheap mechanical work from expensive
+This repository is a reliable bridge between X reply detection and a local
+Codex Desktop Browser worker. It separates cheap mechanical work from expensive
 content decisions:
 
 - Python and the official X API detect, deduplicate, persist, and queue replies.
-- A local event launcher checks the compact queue without a model and starts
-  Codex only when an event is eligible.
-- Sol High opens the real X thread in the authenticated Codex Browser, checks
-  context and sources, prevents duplicates, and decides whether to reply.
+- A token-free Python dispatcher leases only eligible events.
+- A Codex Desktop automation exits early on an empty queue and atomically claims
+  a non-empty batch.
+- The same Sol High run opens the real X thread in the authenticated Codex
+  Browser, checks context and sources, prevents duplicates, and decides whether
+  to reply.
 - Long follow-ups can continue in the exact historical custom GPT conversation.
 - SQLite and append-only JSONL preserve conversation history and audit evidence.
 
@@ -33,21 +35,18 @@ It does not:
 - store API tokens in files;
 - decide whether an event deserves a response.
 
-When Alex explicitly grants standing autopilot authority, a third LaunchAgent
-claims the durable queue and resumes one lightweight Browser-owner task with
-`Sol High` and `--ephemeral`. Empty checks use only Python, create no Codex
-tasks, and consume no model tokens. Event runs continue the same dedicated task
-instead of creating sidebar clutter. The launcher does not inspect context,
-draft, or publish. Sol High remains the only publication brain.
+When Alex explicitly grants standing autopilot authority, a Codex Desktop
+scheduled automation claims the durable queue and becomes the Browser owner for
+that run. The retired CLI launcher is not used because the built-in Browser is
+unavailable in Codex CLI. Sol High remains the only publication brain.
 
 ## Current checkpoint
 
-The live gate passed on 2026-07-25. Poll, watchdog, and event-driven autopilot
-LaunchAgents are installed for `@axrbarsic`. Polling runs every five minutes,
-the watchdog runs every minute, and the local launcher reacts to queue-file
-changes with a one-minute safety interval. A complete initial review remains a
-separate gate and must finish before an empty incremental queue is treated as
-proof of completeness.
+Polling and watchdog LaunchAgents are installed for `@axrbarsic`. Both run
+every minute, and a Codex Desktop scheduled automation checks the compact queue
+every five minutes. A complete initial
+review remains a separate gate and must finish before an empty incremental
+queue is treated as proof of completeness.
 
 Live polling also requires a positive prepaid X API credit balance. With a
 recognized token and no credits, X returns HTTP 402 with the
@@ -124,7 +123,7 @@ Prefer `initial-audit-next` for normal backlog work.
 python3 xmention_watcher.py --config config.json poll
 ```
 
-## Standing autopilot launcher
+## Standing autopilot worker
 
 The optional dispatcher gives queued event IDs a 30-minute lease and returns
 one compact JSON claim. It prevents duplicate task wakeups while the Browser
@@ -142,38 +141,55 @@ python3 scripts/autopilot_dispatch.py \
   status
 ```
 
-If delivery to the pinned Codex task fails, release the exact claim so the next
-scheduled run can retry:
+The Desktop bridge returns the claim token and immutable wake prompt:
 
 ```bash
-python3 scripts/autopilot_dispatch.py \
+python3 scripts/autopilot_bridge.py \
   --config config.json \
-  release \
+  --lease-seconds 1800 \
+  claim
+```
+
+If `dispatch` is true, the current Sol High scheduled run executes that prompt
+itself and marks the claim as started:
+
+```bash
+python3 scripts/autopilot_bridge.py \
+  --config config.json \
+  started \
   --claim-token CLAIM_TOKEN
 ```
 
-`scripts/autopilot_resume.py` combines the claim with one official Codex CLI
-resume. It resumes an existing lightweight Browser-owner task with
-`gpt-5.6-sol`, High, and `--ephemeral`. The task must first pass one IAB
-preflight inside Codex Desktop. Later runs receive authenticated Browser access
-without creating another sidebar task.
+After exact history and durable resolution remove all claimed IDs from the wake
+queue, it records completion:
 
 ```bash
-python3 scripts/autopilot_resume.py \
+python3 scripts/autopilot_bridge.py \
   --config config.json \
-  --lease-seconds 1800
+  completed \
+  --claim-token CLAIM_TOKEN
 ```
 
-An empty queue exits before starting Codex. A non-empty claim sends only the
-eligible event metadata and standing contract. The Browser owner reads exact
-conversation history from SQLite, the append-only ledger, and recorded custom
-GPT URLs. The watcher and launcher never post directly.
+If work fails before durable resolution, the automation releases the exact
+claim:
 
-Codex CLI 0.146 still records a resumed ephemeral turn in the owner task.
-Therefore the owner must remain dedicated and lightweight. Monitor cumulative
-history and rotate to another preflight-verified owner before it becomes a
-large general-purpose conversation. The launcher health file counts completed
-runs and raises a rotation recommendation at the configured threshold.
+```bash
+python3 scripts/autopilot_bridge.py \
+  --config config.json \
+  failed \
+  --claim-token CLAIM_TOKEN \
+  --error "Browser work failed"
+```
+
+An empty queue exits without opening Browser. A non-empty claim contains only
+eligible event metadata and the standing contract. The scheduled Browser owner
+reads exact conversation history from SQLite, the append-only ledger, and
+recorded custom GPT URLs. The watcher and bridge never post directly.
+
+`scripts/autopilot_resume.py` is a fail-closed retirement guard. It always
+exits nonzero and never claims an event or starts Codex. This prevents an old
+LaunchAgent from repeatedly spending Sol runs on a CLI session that cannot use
+the built-in Browser.
 
 On a new empty live database, the first successful poll stores the available
 mention history, establishes `since_id`, and queues every direct reply to the
@@ -295,8 +311,8 @@ resolution. The generic `ack` command rejects direct replies, so the X workflow
 must use `resolve`. `resolve` itself rejects an event until its exact inspected
 turn is present in conversation history. Completion also rejects any legacy
 resolution missing that history turn, or any published reply missing its exact
-Alex turn and parent link. Later polls use `since_id` and queue only new direct
-replies.
+Alex turn and parent link. Later polls use `since_id` and queue new direct
+replies plus nested replies in conversations with an exact stored Alex turn.
 
 Use `stance` for the stable broad class and `stance-detail` for the exact
 Sol classification, such as `supportive_confirmation`,
@@ -369,10 +385,10 @@ and applies the correction atomically, so append-only history remains intact.
 
 ## Background service
 
-The `macos/` directory contains LaunchAgent templates for a five-minute poll,
-a one-minute independent watchdog, and the event-driven autopilot launcher.
-Idle checks run only Python and macOS system tools, so they consume no model
-tokens and create no Codex tasks.
+The `macos/` directory contains LaunchAgent templates whose intervals come from
+`config.json`. The checked-in deployment uses a one-minute poll and watchdog.
+Codex Desktop owns the five-minute Sol High automation that exits early on an
+empty queue and processes a non-empty claim in the same run.
 
 Do not install the LaunchAgents on another machine until a live shadow run with
 the official X API has matched a manual Browser scan.
@@ -385,7 +401,7 @@ python3 scripts/render_launchd.py \
   --output-dir /absolute/path/to/staging
 ```
 
-Rendering validates all three plists. Loading them with `launchctl` is a
+Rendering validates both plists. Loading them with `launchctl` is a
 separate, explicit production step.
 
 ## Tests
@@ -403,6 +419,8 @@ outside this repository.
 
 Official references:
 
+- https://learn.chatgpt.com/docs/browser?surface=app
+- https://learn.chatgpt.com/docs/automations.md
 - https://docs.x.com/x-api/users/get-mentions
 - https://docs.x.com/x-api/posts/timelines/quickstart/user-mention-quickstart
 - https://docs.x.com/x-api/fundamentals/rate-limits

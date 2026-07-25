@@ -14,13 +14,18 @@ TEMPLATE_DIR = PROJECT_ROOT / "macos"
 TEMPLATES = (
     "com.axrbarsic.xmention.poll.plist",
     "com.axrbarsic.xmention.watchdog.plist",
-    "com.axrbarsic.xmention.autopilot.plist",
 )
 
 
 def render(config_path: Path, output_dir: Path) -> list[Path]:
     config = config_path.expanduser().resolve()
     config_payload = json.loads(config.read_text(encoding="utf-8"))
+    poll_interval = int(config_payload.get("poll_interval_seconds", 300))
+    watchdog_interval = int(
+        config_payload.get("watchdog_interval_seconds", 60)
+    )
+    if poll_interval <= 0 or watchdog_interval <= 0:
+        raise ValueError("LaunchAgent intervals must be positive")
     wake_value = str(config_payload.get("wake_file", "var/wake-request.json"))
     wake_candidate = Path(wake_value).expanduser()
     wake_path = (
@@ -38,6 +43,11 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
         text = text.replace("REPLACE_PROJECT_DIR", str(PROJECT_ROOT))
         text = text.replace("REPLACE_CONFIG_PATH", str(config))
         text = text.replace("REPLACE_WAKE_PATH", str(wake_path))
+        text = text.replace("REPLACE_POLL_INTERVAL", str(poll_interval))
+        text = text.replace(
+            "REPLACE_WATCHDOG_INTERVAL",
+            str(watchdog_interval),
+        )
         if "REPLACE_" in text:
             raise RuntimeError(f"Unresolved placeholder in {template.name}")
         payload = text.encode("utf-8")

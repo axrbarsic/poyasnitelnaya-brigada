@@ -1,90 +1,59 @@
-# Настройка автопилота Codex
+# Настройка автопилота Codex Desktop
 
 [Русский](autopilot-setup.ru.md) | [English](autopilot-setup.md)
 
 ## Назначение
 
-Автопилот запускает Codex только тогда, когда в надежной очереди X есть
-eligible событие. Пустые проверки watcher и dispatcher не используют модель.
-Весь контекст и все мутации остаются у Sol High.
+Watcher обнаруживает ответы X без токенов модели. Локальная automation Codex
+Desktop каждые пять минут проверяет durable очередь. При пустой очереди запуск
+завершается до открытия Browser. Непустая очередь атомарно арендуется и
+обрабатывается в этом же scheduled run на Sol High.
+
+Codex CLI намеренно исключен из Browser-работы. Официальное руководство Codex
+указывает, что встроенный Browser недоступен в Codex CLI и IDE extension.
+`scripts/autopilot_resume.py` является fail-closed защитой старой установки.
+Смотрите официальную документацию
+[Built-in browser](https://learn.chatgpt.com/docs/browser?surface=app) и
+[Scheduled tasks](https://learn.chatgpt.com/docs/automations.md).
 
 ## Компоненты
 
 | Компонент | Частота | Модель | Ответственность |
 | --- | --- | --- | --- |
-| X watcher LaunchAgent | 5 минут | нет | Получение, дедупликация, SQLite, очередь |
-| Watchdog LaunchAgent | 1 минута | нет | Контроль зависания и повторных ошибок |
-| Autopilot LaunchAgent | изменение очереди, fallback 1 минута | нет при пустой очереди | Lease и условный запуск Codex |
-| Легкая Browser-owner задача | по событию | Sol High | Контекст, факты, текст, публикация |
-| Кастомный GPT | только Pro | настроенный Pro | Длинный ответ в точной conversation |
+| X watcher LaunchAgent | 1 минута | нет | Получение, дедупликация, SQLite, очередь |
+| Watchdog LaunchAgent | 1 минута | нет | Контроль polling и ошибок API |
+| Automation Codex Desktop | 5 минут | Sol High | Claim непустой очереди, Browser, решение, публикация, проверка |
+| Кастомный GPT | только Pro | настроенный Pro | Длинный ответ в точной исторической conversation |
 
-## Настройка dispatcher
+Минутный poll не использует токены. Пустой scheduled run расходует небольшой
+контекст Sol, но не открывает Browser и не выполняет содержательную работу,
+пока `dispatch` не равен `true`.
 
-Добавьте локальные значения в `config.json`:
+## Конфигурация
+
+Добавьте локальные значения в игнорируемый `config.json`:
 
 ```json
 {
   "autopilot_state_file": "var/autopilot-dispatch.json",
   "autopilot_health_file": "var/autopilot-health.json",
-  "autopilot_last_message_file": "var/autopilot-last-message.txt",
-  "autopilot_process_lock": "var/autopilot-resume.lock",
-  "autopilot_owner_rotation_after_runs": 20,
-  "browser_owner_thread_id": "REPLACE_WITH_CODEX_TASK_UUID",
   "browser_owner_cwd": "/absolute/path/to/browser-owner-workspace",
-  "codex_cli_path": "~/.local/bin/codex"
+  "poll_interval_seconds": 60,
+  "watchdog_interval_seconds": 60
 }
 ```
 
-Храните runtime state в игнорируемом `var/`, а не в `/tmp`, чтобы lease
-переживал обычные перезапуски.
+Вложенные ответы отслеживаются автоматически, как только в точной истории
+диалога появляется ход `alex`. Список тематических ID корневых постов не нужен.
+Вложенный комментарий всё равно требует живой классификации контекста перед
+ответом автора.
 
-Проверьте состояние:
+Храните runtime state в игнорируемом `var/`. Не коммитьте `config.json`,
+токены, cookies, SQLite, очередь или локальную историю.
 
-```bash
-python3 scripts/autopilot_dispatch.py \
-  --config config.json \
-  --lease-seconds 1800 \
-  status
-```
+## Установка сервисов без токенов
 
-Не коммитьте `config.json`, `var/`, токены, cookies и runtime-state.
-
-## Инициализация Browser owner
-
-Переиспользуйте или создайте одну легкую задачу Codex и оставьте ее
-неархивированной. Один раз выполните в ней через Codex Desktop read-only IAB
-preflight и подтвердите нужный X аккаунт. Этот app turn создает Browser
-eligibility.
-
-Локальный launcher затем использует официальный CLI:
-
-```bash
-codex exec resume --ephemeral TASK_UUID \
-  -m gpt-5.6-sol \
-  -c 'model_reasoning_effort="high"' \
-  --skip-git-repo-check -
-```
-
-`--ephemeral` продолжает IAB-eligible задачу и не создает новую задачу в
-sidebar. Точная история X берется из SQLite, append-only ledger и сохраненных
-ChatGPT conversation URL.
-
-Codex CLI 0.146 все равно показывает resumed ephemeral turns внутри owner
-задачи. Поэтому она должна быть выделенной и маленькой. Следите за суммарной
-историей и заранее ротируйте на другой маленький preflight-verified owner. Не
-направляйте launcher в огромную общую X conversation.
-
-`autopilot-health.json` хранит `completed_runs` и выставляет
-`rotation_recommended` на заданном пороге. Замена owner остается осознанной
-операцией, потому что новая задача сначала должна пройти app IAB preflight.
-
-Нельзя использовать голый `codex exec --ephemeral`: свежая изолированная
-сессия не наследует IAB eligibility. Нельзя продолжать огромную историческую
-задачу, иначе накопленный контекст уничтожит экономию токенов.
-
-## Установка launcher
-
-Сгенерируйте три LaunchAgent:
+Сгенерируйте только poll и watchdog LaunchAgents:
 
 ```bash
 python3 scripts/render_launchd.py \
@@ -92,73 +61,75 @@ python3 scripts/render_launchd.py \
   --output-dir /absolute/path/to/staging
 ```
 
-Установите `com.axrbarsic.xmention.autopilot.plist` вместе с poll и watchdog.
-`WatchPaths` реагирует на изменение очереди, а минутный interval служит
-страховкой восстановления. Пустой запуск завершается до старта Codex.
+Установите и загрузите:
 
-## Контракт сообщения для Sol High
+- `com.axrbarsic.xmention.poll.plist`
+- `com.axrbarsic.xmention.watchdog.plist`
 
-Wake message должен требовать:
+Не устанавливайте устаревший `com.axrbarsic.xmention.autopilot.plist`.
 
-- открыть точные URL из claim;
-- прочитать полную живую ветку и все media;
-- проверить факты по первичным источникам;
-- проверить дубль по X и ledger;
-- выбрать short, Pro или skip;
-- для Pro follow-up открыть точную историческую custom GPT conversation;
-- проверить composer и Unicode до одного клика публикации;
-- проверить живой URL опубликованного ответа;
-- сохранить append-only историю и durable resolution;
-- сделать один финальный poll;
-- на Mac с 8 GB держать одну вкладку X, одну ChatGPT и одну Pro generation.
+## Создание automation Codex Desktop
 
-Владелец аккаунта должен явно дать постоянное разрешение на автопилот. Оно
-ограничивается прямыми ответами. Лайки, репосты, подписки, личные сообщения,
-новые исходные посты и удаления требуют отдельного разрешения.
+Создайте одну локальную запланированную задачу:
+
+- модель: `gpt-5.6-sol`
+- reasoning effort: `high`
+- частота: каждые пять минут
+- уведомления: только при неудачных запусках
+
+Её постоянный prompt должен реализовывать эту машину состояний:
+
+1. Выполнить `autopilot_bridge.py ... claim`.
+2. Если `dispatch` равен `false`, завершиться без Browser, изменений файлов,
+   сообщений и inbox item.
+3. Если `dispatch` равен `true`, выполнить `started --claim-token ...`.
+4. Исполнить возвращенный prompt в текущем запуске как единственный Browser
+   owner.
+5. После exact history и durable resolution всех заявленных событий убедиться,
+   что они исчезли из `wake-request.json`, затем выполнить
+   `completed --claim-token ...`.
+6. При ошибке до durable resolution выполнить
+   `failed --claim-token ... --error ...`.
+7. Не запускать X API postflight poll внутри automation. Polling и доступ к
+   Keychain принадлежат LaunchAgent.
+
+Сохраняйте следующие инварианты prompt:
+
+- один claim token на один pending batch;
+- максимум одна вкладка X, одна ChatGPT и одна активная Pro generation;
+- каждый короткий ответ пишет и проверяет Sol High;
+- никаких тематических исключений;
+- postflight warning не откатывает durable resolution.
 
 ## Поведение при сбоях
 
-- Ошибка API не двигает курсор X.
-- Поврежденный wake JSON останавливает dispatcher до изменения state.
-- Process lock сериализует launcher.
-- Atomic JSON state сериализует claims.
-- Общий wake-file lock не дает claim прочитать файл посреди атомарной замены
-  очереди.
-- Аренда 30 минут подавляет повторные пробуждения.
-- Ошибка запуска Codex сразу освобождает claim.
-- Если задача Sol упала, событие останется unresolved и снова станет доступно
-  после окончания аренды.
-- Перед каждой публикацией Sol все равно проверяет живой X и ledger.
-- Локальный timeout IAB внутри одной сессии не доказывает глобальный отказ
-  Browser. В той же Browser-owner задаче надо начать один свежий turn, один раз
-  выполнить официальный bootstrap и продолжать только после успешного
-  авторизованного read-only preflight.
-- Browser-owner runs используют одну выделенную задачу и не создают задачу на
-  каждое событие. Ее надо ротировать до сильного роста контекста.
-- Если Codex вернул нулевой exit code, но leased event остался в очереди,
-  health получает `completed_unresolved`. Ошибка или такой незавершенный run
-  создают одно локальное macOS уведомление на смену состояния.
+- Ошибка API не двигает cursor X.
+- Очередь и dispatcher state используют file locks и atomic writes.
+- Аренда 30 минут подавляет overlapping scheduled runs.
+- Повторный запуск сохраняет `work_in_progress` и не заменяет активный claim.
+- Ошибка до durable resolution освобождает точный claim.
+- `completed` принимается только после исчезновения заявленных ID из wake
+  queue.
+- `reconcile-completed` дополнительно проверяет каждый event в SQLite перед
+  исправлением postflight health state.
+- `blocked_pending_iab` не является успехом и не resolve событие.
+- Старый CLI launcher завершается с ошибкой до claim и расхода модели.
 
-## Проверка
+## Живой canary
 
-```bash
-python3 -m unittest discover -s tests -v
-python3 scripts/autopilot_dispatch.py \
-  --config config.json \
-  --lease-seconds 1800 \
-  status
-python3 scripts/autopilot_resume.py \
-  --config config.json \
-  --lease-seconds 1800
-```
+Используйте один или несколько реальных unresolved replies:
 
-Затем используйте один реальный прямой ответ как canary:
+1. Поставьте Desktop automation на паузу и выгрузите poll/watchdog.
+2. Сохраните backup SQLite и runtime JSON.
+3. Удалите только canary events и открутите `since_id` до непосредственно
+   предыдущего наблюдаемого ID.
+4. Подтвердите, что очередь, dispatch state, история и resolutions больше не
+   знают эти события.
+5. Загрузите poll/watchdog и активируйте Desktop automation, не передавая ей
+   event ID.
+6. Требуйте естественное повторное обнаружение через API, один атомарный claim,
+   verified publication или обоснованный durable skip, exact history и durable
+   resolution.
+7. Подтвердите пустую очередь и пустой dispatch state.
 
-1. Watcher создает ровно одно событие.
-2. Launcher создает один claim и один ephemeral Sol run.
-3. Повторный запуск внутри аренды не запускает второй Sol turn.
-4. Sol публикует ответ или делает durable skip.
-5. Очередь становится пустой.
-6. Dispatcher удаляет разрешенный ID из своего state.
-7. Новая задача Codex не появляется, а легкий owner остается в выбранном
-   бюджете контекста.
+Нельзя имитировать успех прямой вставкой resolution.

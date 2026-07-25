@@ -39,7 +39,8 @@ Distinguish analysis from publication.
 - A request to inspect, diagnose, search, summarize, or draft does not authorize posting, deleting, following, liking, messaging, or changing account state.
 - Publish only when Alex explicitly asks for the post, reply, or clearly bounded batch.
 - If Alex explicitly grants standing autopilot authority, treat later queued
-  direct replies as the same bounded reply workflow until Alex revokes it.
+  eligible replies and conversation continuations as the same bounded reply
+  workflow until Alex revokes it.
   This standing authority covers contextual inspection, fact checking, short or
   Pro routing, publication, verification, and durable resolution. It does not
   cover likes, reposts, follows, direct messages, unrelated original posts, or
@@ -208,19 +209,26 @@ Poll the Pro queue from the Browser owner session while it continues independent
 
 ## Token-free mention monitoring
 
-For recurring checks of new replies, prefer the deterministic local watcher over
-scheduled Codex tasks. The watcher polls the official X API without invoking a
-model, stores a durable cursor, queues only direct replies to `@axrbarsic`, and
-uses an independent watchdog.
+For recurring checks of new replies, use the deterministic local watcher for
+token-free detection and a Codex Desktop scheduled task for Browser work. The
+watcher polls the official X API without invoking a model, stores a durable
+cursor, and queues:
+
+- every direct reply to `@axrbarsic`;
+- every new reply in a conversation whose exact stored history contains an
+  `alex` turn.
+
+This rule is universal. Never add topic names, post IDs, authors, or special
+article lists to make detection work.
 
 - At cycle start, use the lookback Alex explicitly requests, for example
   run `initial-audit-start`, then
   `initial-audit-expire --hours 3 --as-of <UTC> --dry-run`, followed by the
   apply command with the same hours and identical `--as-of`. Older unresolved
-  direct replies receive exact stored history plus an age-policy skip without
+  eligible replies receive exact stored history plus an age-policy skip without
   Browser or model use.
 - Fix the cutoff once. Do not rerun expiry during the active cycle. Continue
-  every newly arriving direct reply and keep an active Pro target alive until
+  every newly arriving eligible reply and keep an active Pro target alive until
   resolved, even after its original timestamp passes the initial cutoff.
 - Never put X credentials in config, logs, Git, task prompts, or process
   arguments. Use the native Keychain helper.
@@ -230,6 +238,16 @@ uses an independent watchdog.
   Sol High and the Browser owner retain classification and publication.
 - A queued Pro follow-up must return to the exact recorded historical
   «Пояснительная бригада» conversation.
+- Run the token-free poll and watchdog every minute on the 8 GB iMac. Run one
+  Sol High Codex Desktop automation every five minutes. An empty scheduled run
+  must stop immediately before Browser work.
+- The scheduled Sol run atomically claims a non-empty batch and executes the
+  returned wake prompt itself. Do not delegate it through Codex CLI or a
+  cross-thread app message. The built-in Browser is unavailable in Codex CLI.
+- Keep one X tab, one ChatGPT tab, and at most one active Pro generation.
+- A durable resolution remains successful even if a final API poll cannot read
+  Keychain. Record `completed_with_warning`; do not release or republish the
+  resolved event. The LaunchAgent owns the next token-free poll.
 
 Read [references/mention-watcher.md](references/mention-watcher.md) before
 installing, diagnosing, or operating the local watcher.

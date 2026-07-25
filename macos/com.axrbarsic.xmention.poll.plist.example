@@ -14,7 +14,7 @@
     <string>--quiet</string>
   </array>
   <key>StartInterval</key>
-  <integer>300</integer>
+  <integer>REPLACE_POLL_INTERVAL</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>

@@ -5,19 +5,20 @@
 The watcher is a read-only detector. It never drafts, classifies, or publishes
 an X reply.
 
-1. A five-minute Python poll calls the official X user mentions endpoint.
+1. A one-minute Python poll calls the official X user mentions endpoint.
 2. The first successful live poll stores available history, advances
    `since_id`, and queues every direct reply for an initial audit.
 3. The initial audit remains incomplete until every direct reply has a durable
    `published`, `skip`, or contract-level `blocked` resolution. Queue state
    alone cannot satisfy this invariant.
-4. Later polls queue only direct replies newer than the durable cursor.
+4. Later polls queue direct replies and replies in any conversation whose exact
+   history already contains an `alex` turn.
 5. SQLite deduplicates immutable event IDs and advances `since_id`.
 6. `wake-request.json` exposes only queued event metadata and canonical URLs.
 7. A macOS notification reports a new queue item without invoking a model.
-8. Under explicit standing authority, a local event launcher leases new queue
-   IDs and resumes one lightweight Codex Browser-owner task with Sol High and
-   `--ephemeral`. Empty checks invoke no model and create no Codex task.
+8. Under explicit standing authority, a five-minute Sol High Codex Desktop
+   automation leases new queue IDs and becomes the only Browser owner for that
+   scheduled run.
 9. A separate one-minute watchdog checks poll freshness and failure count.
 10. Sol High opens the complete live X subtree, classifies text and media in
    context, and resolves an event only after publication or skip is durable.
@@ -83,22 +84,21 @@ The same SQLite database stores append-only conversation chains:
 - A duplicate API response never creates a duplicate queue item.
 - Dispatcher claims are serialized with a file lock and atomic state replace.
   Queue snapshots and watcher replacements share a separate wake-file lock.
-  A live lease prevents duplicate Browser-owner runs, while a failed Codex CLI
-  start removes the new IDs for an immediate retry.
+  A live lease prevents duplicate Browser-owner runs. Failure before durable
+  resolution removes the claim token for an immediate retry.
 - Resolved events disappear from the wake file and are pruned from dispatcher
   state. An unresolved event becomes eligible again after the lease expires,
   so a crashed Browser-owner turn cannot strand the queue forever.
-- The Browser-owner task is initialized once through Codex Desktop. Later
-  `resume --ephemeral` runs reuse its IAB eligibility without creating sidebar
-  tasks. Current CLI versions still record resumed turns in that task, so it
-  stays dedicated and is rotated before its cumulative context becomes large.
+- The built-in Browser is not available in Codex CLI. The scheduled Desktop
+  automation therefore performs Browser work inside its own Sol High run and
+  never delegates through a CLI resume or a cross-thread app call.
 - An IAB timeout is classified per execution turn. One fresh turn in the same
   Browser-owner task may run the official bootstrap once; publication resumes
   only after an authenticated read-only preflight succeeds.
-- A successful CLI exit is verified against the queue. Remaining leased IDs
-  produce `completed_unresolved` health and one local notification instead of
-  being reported as a successful cycle.
-- Generic acknowledgement rejects direct replies. Only a durable `resolve`
+- `work_in_progress` survives overlapping empty scheduled runs. `completed`
+  requires every claimed ID to leave the wake queue. A postflight warning never
+  overwrites a durable resolution with failure.
+- Generic acknowledgement rejects eligible replies. Only a durable `resolve`
   operation can remove them from the X workflow.
 - `resolve` requires the exact inspected event turn in conversation history.
   The final audit gate also rejects legacy resolutions missing that turn.
@@ -125,5 +125,6 @@ The same SQLite database stores append-only conversation chains:
 ## Token model
 
 Polling, deduplication, queueing, health checks, lease checks, and notifications
-use no model calls. Sol High is invoked only when an atomic claim contains an
-event.
+use no model calls. A five-minute Sol High scheduled run spends a small amount
+of context to check the claim, exits before Browser on an empty queue, and does
+content work only when the atomic claim contains an event.
