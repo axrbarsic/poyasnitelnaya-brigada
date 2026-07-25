@@ -64,23 +64,43 @@ Use the smallest stable tab set:
 - One primary X tab.
 - One ChatGPT tab by default.
 - One additional ChatGPT tab for each concurrent Pro request only when parallel waiting materially helps.
+- Never run more than three simultaneous «Пояснительная бригада»
+  conversations. A fourth Pro target waits for a slot.
 - Optional research tabs only when a connector or direct web lookup cannot cover the source.
 
 Reuse tabs instead of opening duplicates. Do not close or navigate a tab owned by another session. When a tab binding becomes stale, discard only that binding and reacquire the tab from the existing browser. Do not reinitialize the browser for an ordinary stale-tab error.
 
 Before switching a tab, record its role and current URL. After switching, verify origin and page identity before typing or clicking.
 
+On Alex's 8 GB iMac, use the low-memory profile by default:
+
+- one Browser owner, one X tab, and one ChatGPT tab;
+- at most one active Pro conversation at a time;
+- `initial-audit-next --conversations 1`, never routine `status --full`;
+- no helper session for waiting, polling, or mechanical age filtering;
+- close old backlog with one
+  `initial-audit-expire --hours H --as-of <UTC>` run, not Browser tabs.
+
 ## Work classification
 
 For each X target:
 
 1. Open the complete thread and inspect quoted posts, media context, sarcasm, account labels, and surrounding replies.
-2. Skip satire, misclassified posts, context that reverses the apparent meaning, and targets already handled.
-3. Classify the response:
+2. For every media-only reply, determine its exact parent, read visible text or
+   alt text, inspect the image, and classify its stance toward the parent as
+   `supportive`, `opposing`, `neutral`, or `ambiguous`.
+3. Use the author's nearby replies in the same thread as context. If the image
+   is a known meme whose meaning remains unclear, research its normal usage on
+   the internet before classifying it.
+4. Never infer opposition merely because a reply contains an image. Never infer
+   support merely because it contains no text. If confidence remains low, mark
+   it `ambiguous` and do not publish automatically.
+5. Skip satire, misclassified posts, context that reverses the apparent meaning, and targets already handled.
+6. Classify the response:
    - `short`: simple claim that can be answered clearly with verified facts.
    - `pro`: long, technical, historically dense, or apparently well-argued claim that benefits from the custom GPT.
    - `skip`: duplicate, bait without substance, unsafe target, unverifiable claim, or low-value repetition.
-4. Prefer one useful response over engagement for its own sake.
+7. Prefer one useful response over engagement for its own sake.
 
 For the detailed X flow, read [references/x-reply-workflow.md](references/x-reply-workflow.md).
 
@@ -90,6 +110,12 @@ Use two independent checks immediately before every publication:
 
 1. Inspect the target thread for an existing reply from `@axrbarsic`.
 2. Check the in-run ledger for the target post ID or reply ID.
+
+The X display name is not provenance. An account named «Пояснительная
+бригада» may still contain a self-authored Sol reply. Determine `short` or
+`pro` only from the durable ledger, source session, payload record, or exact
+ChatGPT conversation URL. Never invent a historical Pro conversation from the
+display name.
 
 When practical, also search the account's replies using the target author or a distinctive phrase. Treat every prior bot-generated reply as an `@axrbarsic` reply.
 
@@ -143,6 +169,7 @@ Use the custom GPT only for `pro` targets.
 - Never add instructions, captions, greetings, source links, fact checks, length requirements, punctuation, or any other text. The custom GPT already contains its own prompt.
 - Let Pro think as long as needed, including more than ten minutes.
 - Never click `Ответить сейчас` and never interrupt reasoning.
+- Bind the output to the exact submitted screenshot turn. Never reuse a global last assistant answer or `last .markdown.prose`; an older completed answer does not satisfy a newer pending screenshot.
 - Treat the bot output as immutable. Do not edit, shorten, expand, reorder, correct, or append anything.
 - Accept any non-empty output up to and including 4000 Unicode code points. Reject 4001 or more code points, U+2014, and U+2013.
 - Never reject, regenerate, pad, or alter an otherwise valid output merely because it is shorter than 4000 code points.
@@ -180,8 +207,15 @@ scheduled Codex tasks. The watcher polls the official X API without invoking a
 model, stores a durable cursor, queues only direct replies to `@axrbarsic`, and
 uses an independent watchdog.
 
-- Treat the first successful live poll as a baseline. Historical mentions must
-  not become a work queue.
+- At cycle start, use the lookback Alex explicitly requests, for example
+  run `initial-audit-start`, then
+  `initial-audit-expire --hours 3 --as-of <UTC> --dry-run`, followed by the
+  apply command with the same hours and identical `--as-of`. Older unresolved
+  direct replies receive exact stored history plus an age-policy skip without
+  Browser or model use.
+- Fix the cutoff once. Do not rerun expiry during the active cycle. Continue
+  every newly arriving direct reply and keep an active Pro target alive until
+  resolved, even after its original timestamp passes the initial cutoff.
 - Never put X credentials in config, logs, Git, task prompts, or process
   arguments. Use the native Keychain helper.
 - Do not install or load LaunchAgents until replay tests, live deduplication,

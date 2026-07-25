@@ -34,6 +34,21 @@ Open the canonical post and inspect:
 
 Skip a target if its meaning remains ambiguous.
 
+For a reply containing an image, video, GIF, or meme:
+
+1. Verify the exact parent status and author.
+2. Read visible text, alt text, OCR, and the visual action or reaction.
+3. Compare that meaning with the exact parent claim.
+4. Inspect the same author's nearby replies in the thread to determine which
+   side the author supports.
+5. Research an unfamiliar meme or reference on the internet when its normal
+   meaning is material to classification.
+6. Record `media_meaning`, `stance`, `confidence`, and `evidence`.
+
+Use only `supportive`, `opposing`, `neutral`, or `ambiguous` for stance. A
+media-only reply is not a skip merely because `tweetText` is empty. If stance
+remains ambiguous after contextual and internet checks, do not publish.
+
 ## 3. Duplicate checks
 
 Perform all of these when available:
