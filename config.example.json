@@ -1,0 +1,21 @@
+{
+  "user_id": "REPLACE_WITH_X_USER_ID",
+  "database": "var/watcher.sqlite3",
+  "lock_file": "var/poll.lock",
+  "health_file": "var/health.json",
+  "wake_file": "var/wake-request.json",
+  "alert_file": "var/watchdog-alert.json",
+  "poll_interval_seconds": 300,
+  "stale_after_seconds": 900,
+  "failure_threshold": 2,
+  "silence_review_seconds": 21600,
+  "watchdog_interval_seconds": 60,
+  "request_timeout_seconds": 30,
+  "max_pages_per_poll": 20,
+  "api_base": "https://api.x.com/2",
+  "keychain_helper": "var/keychain-helper",
+  "keychain_service": "axrbarsic-x-mention-watcher",
+  "keychain_account": "axrbarsic",
+  "queue_direct_replies_only": true,
+  "notifications_enabled": true
+}

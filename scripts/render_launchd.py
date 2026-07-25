@@ -1,0 +1,52 @@
+#!/usr/bin/env python3
+"""Render portable LaunchAgent templates with absolute local paths."""
+
+from __future__ import annotations
+
+import argparse
+import plistlib
+from pathlib import Path
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TEMPLATE_DIR = PROJECT_ROOT / "macos"
+TEMPLATES = (
+    "com.axrbarsic.xmention.poll.plist",
+    "com.axrbarsic.xmention.watchdog.plist",
+)
+
+
+def render(config_path: Path, output_dir: Path) -> list[Path]:
+    config = config_path.expanduser().resolve()
+    output = output_dir.expanduser().resolve()
+    output.mkdir(parents=True, exist_ok=True)
+    rendered: list[Path] = []
+
+    for name in TEMPLATES:
+        template = TEMPLATE_DIR / f"{name}.example"
+        text = template.read_text(encoding="utf-8")
+        text = text.replace("REPLACE_PROJECT_DIR", str(PROJECT_ROOT))
+        text = text.replace("REPLACE_CONFIG_PATH", str(config))
+        if "REPLACE_" in text:
+            raise RuntimeError(f"Unresolved placeholder in {template.name}")
+        payload = text.encode("utf-8")
+        plistlib.loads(payload)
+        destination = output / name
+        destination.write_bytes(payload)
+        rendered.append(destination)
+
+    return rendered
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, required=True)
+    parser.add_argument("--output-dir", type=Path, required=True)
+    args = parser.parse_args()
+    for path in render(args.config, args.output_dir):
+        print(path)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

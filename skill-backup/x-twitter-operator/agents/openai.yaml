@@ -1,0 +1,4 @@
+interface:
+  display_name: "X / Twitter Operator"
+  short_description: "Надёжная работа с X, вкладками и ответами"
+  default_prompt: "Используй $x-twitter-operator для надёжной работы с X и связанными вкладками браузера."
