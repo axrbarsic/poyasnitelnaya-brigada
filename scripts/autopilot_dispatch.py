@@ -292,6 +292,25 @@ def release(state_file: Path, claim_token: str) -> dict[str, Any]:
         return {"released": sorted(released), "claim_token": claim_token}
 
 
+def finish(state_file: Path, claim_token: str) -> dict[str, Any]:
+    with locked_state(state_file):
+        state = load_state(state_file)
+        finished = sorted(
+            (
+                event_id
+                for event_id, record in state["events"].items()
+                if isinstance(record, dict)
+                and record.get("claim_token") == claim_token
+            ),
+            key=int,
+        )
+        for event_id in finished:
+            del state["events"][event_id]
+        state["updated_at"] = isoformat()
+        atomic_write_json(state_file, state)
+        return {"finished": finished, "claim_token": claim_token}
+
+
 def status(wake_file: Path, state_file: Path, *, lease_seconds: int) -> dict[str, Any]:
     with locked_state(state_file):
         events = load_wake_events(wake_file)

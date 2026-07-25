@@ -94,6 +94,12 @@ class AutopilotBridgeTests(unittest.TestCase):
             )
         )
         self.assertEqual(health["handoff_count"], 1)
+        dispatch = json.loads(
+            (self.root / "var" / "autopilot-dispatch.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(dispatch["events"], {})
 
     def test_overlapping_claim_preserves_work_in_progress_health(self) -> None:
         self.write_events([self.event()])

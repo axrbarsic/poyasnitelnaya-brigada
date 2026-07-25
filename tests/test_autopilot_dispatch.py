@@ -104,6 +104,23 @@ class AutopilotDispatchTests(unittest.TestCase):
         self.assertEqual(released["released"], [self.event()["event_id"]])
         self.assertTrue(second["dispatch"])
 
+    def test_finish_removes_completed_claim_state(self) -> None:
+        self.write_events([self.event()])
+        claimed = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+        )
+
+        finished = autopilot_dispatch.finish(
+            self.state_file,
+            claimed["claim_token"],
+        )
+
+        self.assertEqual(finished["finished"], [self.event()["event_id"]])
+        state = json.loads(self.state_file.read_text(encoding="utf-8"))
+        self.assertEqual(state["events"], {})
+
     def test_expired_lease_is_reclaimed(self) -> None:
         self.write_events([self.event()])
         now = datetime(2026, 7, 25, 13, 0, tzinfo=timezone.utc)

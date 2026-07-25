@@ -173,6 +173,9 @@ def mark_completed(
         raise ValueError(
             "claim still contains pending events: " + ", ".join(unresolved)
         )
+    finished = autopilot_dispatch.finish(state_file, claim_token)
+    if finished["finished"] != event_ids:
+        raise ValueError("claim state changed before completion")
     status = "completed_with_warning" if warning else "completed"
     write_health(
         config_path,
