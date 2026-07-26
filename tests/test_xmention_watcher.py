@@ -1604,6 +1604,177 @@ class WatcherTests(unittest.TestCase):
             "missing_historical_pro_conversation",
         )
 
+    def test_legacy_blocked_resolution_requires_audited_code_revision(
+        self,
+    ) -> None:
+        watcher.ingest_response(
+            self.config,
+            self.connection,
+            self.fixture,
+            source="x_api",
+        )
+        event_id = "2080696811623190996"
+        event = self.connection.execute(
+            "SELECT * FROM events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": event["conversation_id"],
+                "root_status_id": event["conversation_id"],
+                "provenance": "pro",
+                "turns": [
+                    {
+                        "status_id": event_id,
+                        "actor": "user",
+                        "url": f"https://x.com/i/status/{event_id}",
+                        "exact_text": "Legacy blocked target",
+                    }
+                ],
+            },
+        )
+        watcher.set_meta(
+            self.connection,
+            "configured_user_id",
+            self.config.user_id,
+        )
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE events
+                SET is_reply = 0
+                WHERE event_id <> ?
+                """,
+                (event_id,),
+            )
+            self.connection.execute(
+                """
+                INSERT INTO event_resolutions(
+                    event_id, disposition, reason, blocker_code, evidence_json,
+                    resolved_at
+                ) VALUES(?, 'blocked', ?, NULL, '[]', ?)
+                """,
+                (
+                    event_id,
+                    "Legacy blocker without a machine-readable code",
+                    watcher.isoformat(),
+                ),
+            )
+            self.connection.execute(
+                """
+                UPDATE events
+                SET delivery_state = 'acknowledged'
+                WHERE event_id = ?
+                """,
+                (event_id,),
+            )
+            watcher.set_meta(
+                self.connection,
+                "initial_audit_completed_at",
+                watcher.isoformat(),
+            )
+
+        status = watcher.initial_audit_status(self.connection)
+        self.assertFalse(status["complete"])
+        self.assertEqual(status["blocked_resolutions_missing_code"], 1)
+        self.assertFalse(status["blocked_contract_complete"])
+        self.assertFalse(status["history_complete"])
+        self.assertFalse(status["invariant_ok"])
+        with self.assertRaisesRegex(
+            ValueError,
+            "blocked resolutions missing a valid terminal blocker_code",
+        ):
+            watcher.complete_initial_audit(self.config, self.connection)
+
+        strict_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+        revised = watcher.revise_event_resolution(
+            strict_config,
+            self.connection,
+            event_id,
+            disposition="blocked",
+            reason="Exact historical Pro conversation cannot be recovered",
+            reply_url=None,
+            blocker_code="missing_historical_pro_conversation",
+            revision_reason="Backfilled the mandatory terminal blocker code",
+            evidence=["legacy resolution audit"],
+        )
+        self.assertTrue(revised["revised"])
+        self.assertEqual(
+            revised["blocker_code"],
+            "missing_historical_pro_conversation",
+        )
+        revisions = self.connection.execute(
+            """
+            SELECT previous_json, replacement_json
+            FROM event_resolution_revisions
+            WHERE event_id = ?
+            ORDER BY id
+            """,
+            (event_id,),
+        ).fetchall()
+        self.assertEqual(len(revisions), 1)
+        self.assertIsNone(
+            json.loads(revisions[0]["previous_json"])["blocker_code"]
+        )
+        self.assertEqual(
+            json.loads(revisions[0]["replacement_json"])["blocker_code"],
+            "missing_historical_pro_conversation",
+        )
+        status = watcher.initial_audit_status(self.connection)
+        self.assertEqual(status["blocked_resolutions_missing_code"], 0)
+        self.assertTrue(status["blocked_contract_complete"])
+        self.assertTrue(status["history_complete"])
+        self.assertTrue(status["invariant_ok"])
+        self.assertTrue(status["complete"])
+
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE event_resolutions
+                SET blocker_code = 'legacy_unknown_code'
+                WHERE event_id = ?
+                """,
+                (event_id,),
+            )
+        status = watcher.initial_audit_status(self.connection)
+        self.assertEqual(status["blocked_resolutions_missing_code"], 1)
+        self.assertFalse(status["complete"])
+        repaired = watcher.revise_event_resolution(
+            strict_config,
+            self.connection,
+            event_id,
+            disposition="blocked",
+            reason="Exact historical Pro conversation cannot be recovered",
+            reply_url=None,
+            blocker_code="missing_historical_pro_conversation",
+            revision_reason="Replaced an unknown legacy terminal blocker code",
+            evidence=["legacy resolution audit"],
+        )
+        self.assertTrue(repaired["revised"])
+        revisions = self.connection.execute(
+            """
+            SELECT previous_json, replacement_json
+            FROM event_resolution_revisions
+            WHERE event_id = ?
+            ORDER BY id
+            """,
+            (event_id,),
+        ).fetchall()
+        self.assertEqual(len(revisions), 2)
+        self.assertEqual(
+            json.loads(revisions[1]["previous_json"])["blocker_code"],
+            "legacy_unknown_code",
+        )
+        self.assertEqual(
+            json.loads(revisions[1]["replacement_json"])["blocker_code"],
+            "missing_historical_pro_conversation",
+        )
+        self.assertTrue(watcher.initial_audit_status(self.connection)["complete"])
+
     def test_mandatory_response_requeue_is_target_agnostic(self) -> None:
         watcher.ingest_response(
             self.config,

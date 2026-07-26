@@ -408,6 +408,13 @@ skip. The Browser handoff marker must be
 `durable_blocked_pending_root_resolve`, and `blocked` must not include a reply
 URL.
 
+Use the narrowest terminal code. `required_pro_model_unavailable` means the
+exact historical conversation exists but cannot use the required Pro model.
+`target_screenshot_unavailable` means repeated verified capture attempts could
+not produce the mandatory clean target-only screenshot and no contract-safe
+fallback exists. A transient Browser or capture error remains queued and must
+not use either terminal code.
+
 If live X proves that Alex already answered before the current audit, use
 `skip` with `reply_url=null`, `existing_alex_reply_url=<canonical URL>`, and
 `alex_history_status=exact_alex_turn_appended`. The direct Alex child turn must
@@ -429,8 +436,11 @@ is recovered. Append a replacement handoff with
 `supersedes_existing_resolution=true` and a non-empty
 `resolution_revision_reason`. The sync command records both versions in
 `event_resolution_revisions`. It permits only `skip` to `published`, `skip` to
-`blocked`, `blocked` to `published`, and `blocked` to `skip`. A published
-resolution is terminal. Any implicit rewrite fails closed.
+`blocked`, `blocked` to `published`, and `blocked` to `skip`. It also permits
+`blocked` to `blocked` solely for an audited metadata correction such as
+backfilling a terminal `blocker_code`; the previous and replacement payloads
+remain in `event_resolution_revisions`. A published resolution is terminal.
+Any implicit rewrite fails closed.
 
 Only complete the initial audit after every direct reply has a durable
 `published`, `skip`, or `blocked` resolution and the queue reaches zero:

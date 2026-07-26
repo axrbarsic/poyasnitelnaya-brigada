@@ -30,7 +30,9 @@ TERMINAL_BLOCKER_CODES = {
     "account_unavailable",
     "missing_historical_pro_conversation",
     "reply_restricted",
+    "required_pro_model_unavailable",
     "safety_restriction",
+    "target_screenshot_unavailable",
     "target_unavailable",
 }
 
@@ -953,6 +955,28 @@ def baseline_existing_queue(
     }
 
 
+def _blocked_resolution_contract_status(
+    connection: sqlite3.Connection,
+    configured_user_id: str,
+) -> tuple[int, int]:
+    rows = connection.execute(
+        """
+        SELECT r.blocker_code
+        FROM event_resolutions r
+        JOIN events e ON e.event_id = r.event_id
+        WHERE e.is_reply = 1
+          AND e.in_reply_to_user_id = ?
+          AND r.disposition = 'blocked'
+        """,
+        (configured_user_id,),
+    ).fetchall()
+    missing = sum(
+        row["blocker_code"] not in TERMINAL_BLOCKER_CODES
+        for row in rows
+    )
+    return len(rows), missing
+
+
 def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
     configured_user_id = get_meta(connection, "configured_user_id")
     if configured_user_id is None:
@@ -980,6 +1004,8 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             "history_missing_events": 0,
             "published_resolutions": 0,
             "blocked_resolutions": 0,
+            "blocked_resolutions_missing_code": 0,
+            "blocked_contract_complete": True,
             "published_alex_history_missing": 0,
             "published_alex_history_complete": True,
             "history_complete": True,
@@ -1083,18 +1109,9 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             (configured_user_id,),
         ).fetchone()["count"]
     )
-    blocked = int(
-        connection.execute(
-            """
-            SELECT COUNT(*) AS count
-            FROM event_resolutions r
-            JOIN events e ON e.event_id = r.event_id
-            WHERE e.is_reply = 1
-              AND e.in_reply_to_user_id = ?
-              AND r.disposition = 'blocked'
-            """,
-            (configured_user_id,),
-        ).fetchone()["count"]
+    blocked, blocked_missing_code = _blocked_resolution_contract_status(
+        connection,
+        configured_user_id,
     )
     published_alex_history_missing = int(
         connection.execute(
@@ -1122,6 +1139,16 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             (configured_user_id,),
         ).fetchone()["count"]
     )
+    completed_at = get_meta(connection, "initial_audit_completed_at")
+    history_complete = (
+        history_missing == 0
+        and published_alex_history_missing == 0
+        and blocked_missing_code == 0
+    )
+    invariant_ok = (
+        direct_total == unresolved + resolved
+        and blocked_missing_code == 0
+    )
     return {
         "started_at": get_meta(connection, "initial_audit_started_at"),
         "cycle_started_at": get_meta(
@@ -1136,8 +1163,13 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             connection,
             "initial_audit_cycle_expiry_hours",
         ),
-        "completed_at": get_meta(connection, "initial_audit_completed_at"),
-        "complete": get_meta(connection, "initial_audit_completed_at") is not None,
+        "completed_at": completed_at,
+        "complete": (
+            completed_at is not None
+            and unresolved == 0
+            and history_complete
+            and invariant_ok
+        ),
         "direct_events": direct_total,
         "pending_events": unresolved,
         "queued_events": queued,
@@ -1146,15 +1178,14 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
         "history_missing_events": history_missing,
         "published_resolutions": published,
         "blocked_resolutions": blocked,
+        "blocked_resolutions_missing_code": blocked_missing_code,
+        "blocked_contract_complete": blocked_missing_code == 0,
         "published_alex_history_missing": published_alex_history_missing,
         "published_alex_history_complete": (
             published_alex_history_missing == 0
         ),
-        "history_complete": (
-            history_missing == 0
-            and published_alex_history_missing == 0
-        ),
-        "invariant_ok": direct_total == unresolved + resolved,
+        "history_complete": history_complete,
+        "invariant_ok": invariant_ok,
     }
 
 
@@ -1838,6 +1869,16 @@ def complete_initial_audit(
             f"{published_alex_history_missing} published replies missing "
             "matching exact Alex history turns"
         )
+    _, blocked_missing_code = _blocked_resolution_contract_status(
+        connection,
+        config.user_id,
+    )
+    if blocked_missing_code:
+        raise ValueError(
+            "Initial audit cannot complete with "
+            f"{blocked_missing_code} blocked resolutions missing a valid "
+            "terminal blocker_code"
+        )
     completed_at = isoformat()
     with connection:
         set_meta(connection, "configured_user_id", config.user_id)
@@ -2201,6 +2242,7 @@ def revise_event_resolution(
         ("skip", "skip"),
         ("skip", "published"),
         ("skip", "blocked"),
+        ("blocked", "blocked"),
         ("blocked", "published"),
         ("blocked", "skip"),
     }
