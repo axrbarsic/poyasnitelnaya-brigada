@@ -143,10 +143,13 @@ def is_eligible_reply(
     connection: sqlite3.Connection,
     config: Config,
     *,
+    author_id: str | None = None,
     is_reply: bool,
     in_reply_to_user_id: str | None,
     conversation_id: str | None,
 ) -> bool:
+    if author_id == config.user_id:
+        return False
     if not is_reply:
         return False
     if in_reply_to_user_id == config.user_id:
@@ -169,7 +172,11 @@ def event_mentions_configured_account(
     event: sqlite3.Row,
 ) -> bool:
     handle = config.keychain_account.strip().lstrip("@")
-    if not handle or not bool(event["is_reply"]):
+    if (
+        not handle
+        or not bool(event["is_reply"])
+        or event["author_id"] == config.user_id
+    ):
         return False
     try:
         payload = json.loads(str(event["payload_json"]))
@@ -484,6 +491,72 @@ def delete_meta(connection: sqlite3.Connection, key: str) -> None:
 def numeric_max(values: Iterable[str | None]) -> str | None:
     candidates = [value for value in values if value and value.isdigit()]
     return max(candidates, key=int) if candidates else None
+
+
+def _reclassify_self_authored_events(
+    connection: sqlite3.Connection,
+    configured_user_id: str,
+) -> list[str]:
+    rows = connection.execute(
+        """
+        SELECT event_id
+        FROM events
+        WHERE author_id = ?
+          AND delivery_state != 'self_authored'
+          AND NOT EXISTS (
+              SELECT 1 FROM event_resolutions r
+              WHERE r.event_id = events.event_id
+          )
+        ORDER BY CAST(event_id AS INTEGER)
+        """,
+        (configured_user_id,),
+    ).fetchall()
+    event_ids = [str(row["event_id"]) for row in rows]
+    if event_ids:
+        connection.executemany(
+            """
+            UPDATE events
+            SET delivery_state = 'self_authored'
+            WHERE event_id = ?
+            """,
+            [(event_id,) for event_id in event_ids],
+        )
+    return event_ids
+
+
+def reconcile_self_authored_events(
+    config: Config,
+    connection: sqlite3.Connection,
+) -> dict[str, Any]:
+    with connection:
+        set_meta(connection, "configured_user_id", config.user_id)
+        event_ids = _reclassify_self_authored_events(
+            connection,
+            config.user_id,
+        )
+    wake = refresh_wake_file(config, connection)
+    health = write_health(config, connection, last_new_count=0)
+    history_missing_ids = [
+        event_id
+        for event_id in event_ids
+        if connection.execute(
+            """
+            SELECT 1
+            FROM conversation_turns
+            WHERE status_id = ? AND actor = 'alex'
+            """,
+            (event_id,),
+        ).fetchone()
+        is None
+    ]
+    return {
+        "status": "self_authored_reconciled",
+        "reclassified_count": len(event_ids),
+        "reclassified_event_ids": event_ids,
+        "history_missing_event_ids": history_missing_ids,
+        "pending_count": wake["pending_count"],
+        "health": health["status"],
+    }
 
 
 def queued_events(connection: sqlite3.Connection) -> list[dict[str, Any]]:
@@ -840,6 +913,11 @@ def ingest_response(
 
     with connection:
         set_meta(connection, "configured_user_id", config.user_id)
+        reclassified_self_authored_ids = _reclassify_self_authored_events(
+            connection,
+            config.user_id,
+        )
+        observed_self_authored_ids: list[str] = []
         for event in response.get("data", []) or []:
             event_id = str(event.get("id", "")).strip()
             if not event_id:
@@ -868,12 +946,14 @@ def ingest_response(
             eligible_reply = is_eligible_reply(
                 connection,
                 config,
+                author_id=author_id,
                 is_reply=is_reply,
                 in_reply_to_user_id=in_reply_to_user_id,
                 conversation_id=conversation_id,
             )
             if (
-                config.mandatory_response_mode
+                author_id != config.user_id
+                and config.mandatory_response_mode
                 and source == "x_api"
                 and is_reply
             ):
@@ -884,7 +964,9 @@ def ingest_response(
                 # live Browser inspection instead of trusting an incomplete
                 # local history backfill to prove the conversation route.
                 eligible_reply = True
-            if config.queue_direct_replies_only and not eligible_reply:
+            if author_id == config.user_id:
+                delivery_state = "self_authored"
+            elif config.queue_direct_replies_only and not eligible_reply:
                 delivery_state = "ignored"
             else:
                 delivery_state = "queued"
@@ -913,6 +995,8 @@ def ingest_response(
                 observed_ids.append(event_id)
                 if delivery_state == "queued":
                     new_ids.append(event_id)
+                elif delivery_state == "self_authored":
+                    observed_self_authored_ids.append(event_id)
 
         previous_cursor = get_meta(connection, "since_id")
         newest_id = numeric_max(
@@ -958,6 +1042,13 @@ def ingest_response(
         "observed_count": len(observed_ids),
         "new_count": len(new_ids),
         "new_event_ids": sorted(new_ids, key=int),
+        "self_authored_event_ids": sorted(
+            set(
+                reclassified_self_authored_ids
+                + observed_self_authored_ids
+            ),
+            key=int,
+        ),
         "since_id": get_meta(connection, "since_id"),
         "pending_count": wake["pending_count"],
         "health": health["status"],
@@ -994,9 +1085,10 @@ def _blocked_resolution_contract_status(
         JOIN events e ON e.event_id = r.event_id
         WHERE e.is_reply = 1
           AND e.in_reply_to_user_id = ?
+          AND COALESCE(e.author_id, '') != ?
           AND r.disposition = 'blocked'
         """,
-        (configured_user_id,),
+        (configured_user_id, configured_user_id),
     ).fetchall()
     missing = sum(
         row["blocker_code"] not in TERMINAL_BLOCKER_CODES
@@ -1043,10 +1135,12 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
         connection.execute(
             """
             SELECT COUNT(*) AS count
-            FROM events
-            WHERE is_reply = 1 AND in_reply_to_user_id = ?
+            FROM events e
+            WHERE e.is_reply = 1
+              AND e.in_reply_to_user_id = ?
+              AND COALESCE(e.author_id, '') != ?
             """,
-            (configured_user_id,),
+            (configured_user_id, configured_user_id),
         ).fetchone()["count"]
     )
     unresolved = int(
@@ -1056,6 +1150,7 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             FROM events e
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
+              AND COALESCE(e.author_id, '') != ?
               AND (
                   NOT EXISTS (
                       SELECT 1 FROM event_resolutions r
@@ -1071,7 +1166,7 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
                   )
               )
             """,
-            (configured_user_id,),
+            (configured_user_id, configured_user_id),
         ).fetchone()["count"]
     )
     queued = int(
@@ -1081,6 +1176,7 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             FROM events e
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
+              AND COALESCE(e.author_id, '') != ?
               AND e.delivery_state = 'queued'
               AND NOT EXISTS (
                   SELECT 1 FROM event_resolutions r
@@ -1088,7 +1184,7 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
                     AND r.disposition IN ('published', 'blocked')
               )
             """,
-            (configured_user_id,),
+            (configured_user_id, configured_user_id),
         ).fetchone()["count"]
     )
     resolved = int(
@@ -1098,12 +1194,13 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             FROM event_resolutions r
             JOIN events e ON e.event_id = r.event_id
             WHERE e.is_reply = 1 AND e.in_reply_to_user_id = ?
+              AND COALESCE(e.author_id, '') != ?
               AND NOT (
                   e.delivery_state = 'queued'
                   AND r.disposition = 'skip'
               )
             """,
-            (configured_user_id,),
+            (configured_user_id, configured_user_id),
         ).fetchone()["count"]
     )
     history_missing = int(
@@ -1115,13 +1212,14 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             LEFT JOIN conversation_turns t ON t.status_id = r.event_id
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
+              AND COALESCE(e.author_id, '') != ?
               AND NOT (
                   e.delivery_state = 'queued'
                   AND r.disposition = 'skip'
               )
               AND t.status_id IS NULL
             """,
-            (configured_user_id,),
+            (configured_user_id, configured_user_id),
         ).fetchone()["count"]
     )
     published = int(
@@ -1132,9 +1230,10 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
             JOIN events e ON e.event_id = r.event_id
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
+              AND COALESCE(e.author_id, '') != ?
               AND r.disposition = 'published'
             """,
-            (configured_user_id,),
+            (configured_user_id, configured_user_id),
         ).fetchone()["count"]
     )
     blocked, blocked_missing_code = _blocked_resolution_contract_status(
@@ -1157,6 +1256,7 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
              AND alex.url = r.reply_url
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
+              AND COALESCE(e.author_id, '') != ?
               AND r.disposition = 'published'
               AND (
                   r.reply_url NOT LIKE
@@ -1164,7 +1264,7 @@ def initial_audit_status(connection: sqlite3.Connection) -> dict[str, Any]:
                   OR alex.status_id IS NULL
               )
             """,
-            (configured_user_id,),
+            (configured_user_id, configured_user_id),
         ).fetchone()["count"]
     )
     completed_at = get_meta(connection, "initial_audit_completed_at")
@@ -1688,13 +1788,14 @@ def start_initial_audit(
             SET delivery_state = 'queued'
             WHERE is_reply = 1
               AND in_reply_to_user_id = ?
+              AND COALESCE(author_id, '') != ?
               AND delivery_state != 'queued'
               AND NOT EXISTS (
                   SELECT 1 FROM event_resolutions r
                   WHERE r.event_id = events.event_id
               )
             """,
-            (config.user_id,),
+            (config.user_id, config.user_id),
         )
     wake = refresh_wake_file(config, connection)
     health = write_health(config, connection, last_new_count=0)
@@ -1743,6 +1844,8 @@ def requeue_unanswered_skips(
         """
     ).fetchall()
     for row in rows:
+        if row["author_id"] == config.user_id:
+            continue
         created_at = parse_time(row["created_at"])
         if (
             created_at is None
@@ -1762,6 +1865,7 @@ def requeue_unanswered_skips(
             if not is_eligible_reply(
                 connection,
                 config,
+                author_id=row["author_id"],
                 is_reply=bool(row["is_reply"]),
                 in_reply_to_user_id=row["in_reply_to_user_id"],
                 conversation_id=row["conversation_id"],
@@ -1845,6 +1949,7 @@ def complete_initial_audit(
             FROM events e
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
+              AND COALESCE(e.author_id, '') != ?
               AND (
                   NOT EXISTS (
                       SELECT 1 FROM event_resolutions r
@@ -1860,7 +1965,7 @@ def complete_initial_audit(
                   )
               )
             """,
-            (config.user_id,),
+            (config.user_id, config.user_id),
         ).fetchone()["count"]
     )
     if unresolved:
@@ -1877,13 +1982,14 @@ def complete_initial_audit(
             LEFT JOIN conversation_turns t ON t.status_id = r.event_id
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
+              AND COALESCE(e.author_id, '') != ?
               AND NOT (
                   e.delivery_state = 'queued'
                   AND r.disposition = 'skip'
               )
               AND t.status_id IS NULL
             """,
-            (config.user_id,),
+            (config.user_id, config.user_id),
         ).fetchone()["count"]
     )
     if history_missing:
@@ -1907,6 +2013,7 @@ def complete_initial_audit(
              AND alex.url = r.reply_url
             WHERE e.is_reply = 1
               AND e.in_reply_to_user_id = ?
+              AND COALESCE(e.author_id, '') != ?
               AND r.disposition = 'published'
               AND (
                   r.reply_url NOT LIKE
@@ -1914,7 +2021,7 @@ def complete_initial_audit(
                   OR alex.status_id IS NULL
               )
             """,
-            (config.user_id,),
+            (config.user_id, config.user_id),
         ).fetchone()["count"]
     )
     if published_alex_history_missing:
@@ -3120,18 +3227,24 @@ def sync_browser_handoffs(
         ).fetchone()
         if event is None:
             raise KeyError(f"Unknown event {event_id}")
+        event_is_self_authored = event["author_id"] == config.user_id
         event_is_direct = (
-            int(event["is_reply"]) == 1
+            not event_is_self_authored
+            and int(event["is_reply"]) == 1
             and event["in_reply_to_user_id"] == config.user_id
         )
         event_is_tracked = is_eligible_reply(
             connection,
             config,
+            author_id=event["author_id"],
             is_reply=bool(event["is_reply"]),
             in_reply_to_user_id=None,
             conversation_id=event["conversation_id"],
         )
-        event_is_mention = event_mentions_configured_account(config, event)
+        event_is_mention = (
+            not event_is_self_authored
+            and event_mentions_configured_account(config, event)
+        )
         if (
             (confirmed_direct and not event_is_direct)
             or (confirmed_tracked and not event_is_tracked)
@@ -4041,7 +4154,8 @@ def acknowledge_events(
     placeholders = ",".join("?" for _ in requested)
     protected_rows = connection.execute(
         f"""
-        SELECT event_id, is_reply, in_reply_to_user_id, conversation_id
+        SELECT event_id, author_id, is_reply, in_reply_to_user_id,
+               conversation_id
         FROM events
         WHERE delivery_state = 'queued'
           AND event_id IN ({placeholders})
@@ -4055,6 +4169,7 @@ def acknowledge_events(
             if is_eligible_reply(
                 connection,
                 config,
+                author_id=row["author_id"],
                 is_reply=bool(row["is_reply"]),
                 in_reply_to_user_id=row["in_reply_to_user_id"],
                 conversation_id=row["conversation_id"],
@@ -4212,6 +4327,13 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser(
         "baseline",
         help="Legacy recovery command. Do not use for a normal first audit.",
+    )
+    commands.add_parser(
+        "self-authored-reconcile",
+        help=(
+            "Remove unresolved posts authored by the configured account from "
+            "the inbound reply queue without creating an event resolution."
+        ),
     )
     commands.add_parser(
         "initial-audit-start",
@@ -4511,6 +4633,10 @@ def main() -> int:
                 }
             )
             return 2
+
+        if args.command == "self-authored-reconcile":
+            print_json(reconcile_self_authored_events(config, connection))
+            return 0
 
         if args.command == "initial-audit-start":
             print_json(start_initial_audit(config, connection))

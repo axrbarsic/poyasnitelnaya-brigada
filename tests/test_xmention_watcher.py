@@ -834,6 +834,94 @@ class WatcherTests(unittest.TestCase):
         ).fetchone()["delivery_state"]
         self.assertEqual(state, "queued")
 
+    def test_mandatory_mode_never_queues_self_authored_reply(self) -> None:
+        watcher.set_meta(self.connection, "first_success_at", watcher.isoformat())
+        payload = json.loads(json.dumps(self.fixture))
+        event = payload["data"][0]
+        event_id = event["id"]
+        event["author_id"] = self.config.user_id
+        event["in_reply_to_user_id"] = self.config.user_id
+        payload["data"] = [event]
+        payload["includes"]["users"].append(
+            {"id": self.config.user_id, "username": "axrbarsic"}
+        )
+        payload["meta"]["newest_id"] = event_id
+        strict_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+
+        result = watcher.ingest_response(
+            strict_config,
+            self.connection,
+            payload,
+            source="x_api",
+        )
+
+        self.assertEqual(result["new_count"], 0)
+        self.assertEqual(result["self_authored_event_ids"], [event_id])
+        self.assertEqual(result["pending_count"], 0)
+        stored = self.connection.execute(
+            """
+            SELECT author_id, delivery_state
+            FROM events
+            WHERE event_id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(stored["author_id"], self.config.user_id)
+        self.assertEqual(stored["delivery_state"], "self_authored")
+
+    def test_self_authored_reconcile_repairs_legacy_queue_idempotently(
+        self,
+    ) -> None:
+        event_id = "2081490627879997803"
+        self.insert_direct_event(
+            event_id=event_id,
+            created_at="2026-07-26T21:23:32Z",
+            conversation_id="2081434236486029792",
+            parent_status_id="2081434236486029792",
+            text="Manual supplement",
+        )
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE events
+                SET author_id = ?, username = 'axrbarsic'
+                WHERE event_id = ?
+                """,
+                (self.config.user_id, event_id),
+            )
+        watcher.refresh_wake_file(self.config, self.connection)
+
+        first = watcher.reconcile_self_authored_events(
+            self.config,
+            self.connection,
+        )
+        second = watcher.reconcile_self_authored_events(
+            self.config,
+            self.connection,
+        )
+        audit = watcher.start_initial_audit(self.config, self.connection)
+
+        self.assertEqual(first["reclassified_event_ids"], [event_id])
+        self.assertEqual(first["pending_count"], 0)
+        self.assertEqual(second["reclassified_event_ids"], [])
+        self.assertEqual(audit["requeued"], 0)
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT delivery_state FROM events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()["delivery_state"],
+            "self_authored",
+        )
+        self.assertIsNone(
+            self.connection.execute(
+                "SELECT 1 FROM event_resolutions WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+        )
+
     def test_baseline_existing_queue_preserves_cursor(self) -> None:
         watcher.ingest_response(
             self.config,
