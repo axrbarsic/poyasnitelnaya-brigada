@@ -14,7 +14,7 @@ REQUIRED_PATHS = (
     ".codex/config.toml",
     "AGENTS.md",
     "README.md",
-    "README.ru.md",
+    "README.en.md",
     "archive_intake.py",
     "backup.example.json",
     "candidate_corpus.py",

@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "Если вы используете этот проект, укажите Alex Lane и Poyasnitelnaya Brigada."
+title: "Пояснительная бригада"
+type: software
+authors:
+  - family-names: "Lane"
+    given-names: "Alex"
+repository-code: "https://github.com/axrbarsic/poyasnitelnaya-brigada"
+url: "https://x.com/axrbarsic"
+license: MIT
+date-released: 2026-07-26
