@@ -3348,7 +3348,7 @@ class WatcherTests(unittest.TestCase):
             self.config.source_path,
             output,
         )
-        self.assertEqual(len(rendered), 2)
+        self.assertEqual(len(rendered), 3)
         for path in rendered:
             payload = plistlib.loads(path.read_bytes())
             arguments = payload["ProgramArguments"]
@@ -3357,11 +3357,12 @@ class WatcherTests(unittest.TestCase):
             self.assertEqual(Path(arguments[3]), self.config.source_path)
             self.assertEqual(payload["StandardOutPath"], "/dev/null")
             self.assertEqual(payload["StandardErrorPath"], "/dev/null")
-            expected_interval = (
-                self.config.poll_interval_seconds
-                if path.name.endswith(".poll.plist")
-                else self.config.watchdog_interval_seconds
-            )
+            if path.name.endswith(".poll.plist"):
+                expected_interval = self.config.poll_interval_seconds
+            elif path.name.endswith(".watchdog.plist"):
+                expected_interval = self.config.watchdog_interval_seconds
+            else:
+                expected_interval = 300
             self.assertEqual(payload["StartInterval"], expected_interval)
         self.assertFalse(
             (output / "com.axrbarsic.xmention.autopilot.plist").exists()

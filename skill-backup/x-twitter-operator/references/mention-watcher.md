@@ -269,21 +269,25 @@ Enable this mode only after Alex explicitly grants continuing publication
 authority for queued eligible replies.
 
 1. Keep the Python watcher read-only and token-free.
-2. Run the poll and watchdog LaunchAgents every minute.
+2. Run the poll and watchdog LaunchAgents every minute. Run the model-free
+   session janitor LaunchAgent every five minutes.
 3. Run one Codex Desktop scheduled automation every five minutes with
    `gpt-5.6-sol` and High reasoning.
 4. Let the current scheduled run atomically claim the queue with
    `scripts/autopilot_bridge.py claim`.
-5. If the queue is empty or every pending ID has an active lease, exit before
-   opening Browser.
-6. For eligible IDs, atomically record a 30-minute lease before Browser work.
+5. Run the mechanical claim before loading X skills and references. If the
+   queue is empty, another global owner is active, or memory is deferred, use
+   no Browser, no `list_threads`, and no task archival. Finish normally before
+   opening Browser. Never self-archive the current active run.
+6. For eligible IDs, atomically record one global 30-minute owner lease before
+   Browser work. A newly arriving event must wait for this owner.
 7. Include only eligible event IDs, canonical URLs, local state paths, and the
    standing workflow contract. The scheduled run must read exact history from
    SQLite, the ledger, and recorded ChatGPT conversation URLs.
 8. Mark the claim `started`, execute the returned prompt in the same Sol run,
    and remove the lease only if work fails before durable resolution.
-9. Use one X tab, one ChatGPT tab, and at most one active Pro conversation on
-   Alex's 8 GB iMac.
+9. Use one X tab for short work. Open one ChatGPT tab only for a proven Pro
+   route. Never run more than one active Pro conversation on Alex's 8 GB iMac.
 10. Never let the watcher or bridge publish. Sol High must perform live
     context inspection, fact checking, duplicate prevention, routing, composer
     validation, publication, URL verification, history storage, and durable
@@ -297,6 +301,13 @@ authority for queued eligible replies.
     `completed_with_warning`; do not release or republish resolved events.
 14. Keep the automation itself free of a final X poll. The one-minute
     LaunchAgent owns token-free polling.
+15. Close all task-owned Browser tabs and finish normally for every terminal
+    outcome. The model-free janitor archives old exact service tasks through
+    the local Codex app-server.
+16. After a Codex restart, a changed runtime ID may immediately reclaim an old
+    owner. After a stream disconnect in the same runtime, the janitor releases
+    the claim only when its related task is inactive and stale. A fresh
+    `notLoaded` status is not sufficient.
 
 ## Mandatory response reconciliation
 

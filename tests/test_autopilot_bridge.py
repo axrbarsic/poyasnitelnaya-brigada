@@ -10,6 +10,7 @@ from pathlib import Path
 import xmention_watcher as watcher
 import candidate_corpus
 from scripts import autopilot_bridge
+from scripts import resource_guard
 
 
 class AutopilotBridgeTests(unittest.TestCase):
@@ -366,6 +367,72 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertEqual(health["status"], "work_in_progress")
         self.assertEqual(health["event_ids"], [self.event()["event_id"]])
         self.assertEqual(health["claim_token"], first["claim_token"])
+
+    def test_new_event_cannot_replace_active_owner_or_health(self) -> None:
+        first_event = self.event()
+        second_event = {
+            **self.event(),
+            "event_id": "2081050838240211435",
+            "event_url":
+                "https://x.com/Timyr316661/status/2081050838240211435",
+        }
+        self.write_events([first_event])
+        first = autopilot_bridge.claim(self.config, lease_seconds=1800)
+        autopilot_bridge.mark_started(self.config, first["claim_token"])
+        self.write_events([first_event, second_event])
+
+        second = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        self.assertFalse(second["dispatch"])
+        self.assertTrue(second["owner_busy"])
+        self.assertEqual(
+            second["active_claim_token"],
+            first["claim_token"],
+        )
+        health = json.loads(
+            (self.root / "var" / "autopilot-health.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(health["status"], "work_in_progress")
+        self.assertEqual(health["event_ids"], [first_event["event_id"]])
+
+    def test_memory_guard_defers_without_claiming(self) -> None:
+        payload = json.loads(self.config.read_text(encoding="utf-8"))
+        payload.update(
+            {
+                "memory_guard_enabled": True,
+                "memory_guard_max_codex_rss_mb": 1000,
+                "memory_guard_max_renderer_count": 8,
+                "memory_guard_max_node_repl_count": 6,
+                "memory_guard_max_mcp_process_count": 10,
+                "memory_guard_min_free_percent": 12,
+            }
+        )
+        self.config.write_text(json.dumps(payload), encoding="utf-8")
+        self.write_events([self.event()])
+        original_collect = resource_guard.collect
+        resource_guard.collect = lambda: resource_guard.ResourceSample(
+            codex_rss_mb=2500,
+            renderer_count=6,
+            node_repl_count=4,
+            mcp_process_count=6,
+            free_percent=20,
+        )
+        try:
+            result = autopilot_bridge.claim(
+                self.config,
+                lease_seconds=1800,
+            )
+        finally:
+            resource_guard.collect = original_collect
+
+        self.assertFalse(result["dispatch"])
+        self.assertEqual(result["status"], "memory_deferred")
+        self.assertFalse(
+            (self.root / "var" / "autopilot-dispatch.json").exists()
+        )
+        self.assertTrue(result["resource_guard"]["defer"])
 
     def test_completed_with_warning_is_success_after_queue_resolves(self) -> None:
         self.write_events([self.event()])

@@ -79,14 +79,28 @@ Reuse tabs instead of opening duplicates. Do not close or navigate a tab owned b
 
 Before switching a tab, record its role and current URL. After switching, verify origin and page identity before typing or clicking.
 
-On Alex's 8 GB iMac, use the low-memory profile by default:
+On Alex's 8 GB iMac, let the resource guard choose efficiency, balanced, or
+performance automatically. The profile controls whether Browser work may
+start, never the quality of Sol High reasoning or fact checking:
 
-- one Browser owner, one X tab, and one ChatGPT tab;
+- idle scheduled runs own zero Browser tabs;
+- short work owns one X tab;
+- open ChatGPT only after the Pro route is proven;
+- Pro work owns one X tab, one ChatGPT tab, and one generation;
 - at most one active Pro conversation at a time;
 - `initial-audit-next --conversations 1`, never routine `status --full`;
 - no helper session for waiting, polling, or mechanical age filtering;
 - close old backlog with one
   `initial-audit-expire --hours H --as-of <UTC>` run, not Browser tabs.
+- close every task-owned Browser tab before the scheduled run exits;
+- run the mechanical claim before loading this skill on an empty service run;
+- never run `list_threads` or archive tasks inside the scheduled model run;
+- let the model-free `session_janitor.py` LaunchAgent archive exact completed
+  service tasks through the local Codex app-server;
+- never self-archive the current active run, because this can block normal
+  completion;
+- never let a newly arrived event start a second owner while any global owner
+  lease is active.
 
 ## Work classification
 
@@ -301,7 +315,11 @@ without supplying target IDs.
 - The scheduled Sol run atomically claims a non-empty batch and executes the
   returned wake prompt itself. Do not delegate it through Codex CLI or a
   cross-thread app message. The built-in Browser is unavailable in Codex CLI.
-- Keep one X tab, one ChatGPT tab, and at most one active Pro generation.
+- Keep zero Browser tabs while idle, one X tab for short work, and add one
+  ChatGPT tab only for a proven Pro route.
+- Close all task-owned tabs and finish normally. The model-free session
+  janitor archives the task after its minimum age. `notLoaded` alone is not
+  proof that a live owner died.
 - A durable resolution remains successful even if a final API poll cannot read
   Keychain. Record `completed_with_warning`; do not release or republish the
   resolved event. The LaunchAgent owns the next token-free poll.

@@ -20,8 +20,15 @@
 - Keep the Browser owner on `gpt-5.6-sol` with high reasoning.
 - Only the Browser owner may operate authenticated tabs, classify a live
   target, author a short reply, validate the composer, or publish.
-- Keep one X tab, one ChatGPT tab, and at most one active Pro generation on
-  Alex's 8 GB iMac.
+- Idle runs own zero Browser tabs. Short replies use one X tab. Open ChatGPT
+  only after a Pro route is proven. A Pro reply may own one X tab, one ChatGPT
+  tab, and one active generation.
+- Close every task-owned Browser tab before the scheduled run ends. Never close
+  a user-owned tab.
+- One global owner lease covers the whole queue. A new event must wait while
+  any prior owner is active, even if the new event has never been leased.
+- If the resource guard defers a run, leave every event unresolved and close
+  the scheduled task without Browser work.
 - Use deterministic scripts for queue state, exact IDs, duplicate checks,
   Unicode length, forbidden characters, and timestamp filtering.
 - Treat helper results as evidence. Sol High performs the final live-context
