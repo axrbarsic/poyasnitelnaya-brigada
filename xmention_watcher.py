@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 9
 TOKEN_ENV_NAMES = ("X_BEARER_TOKEN", "X_API_BEARER_TOKEN", "TWITTER_BEARER_TOKEN")
 INITIAL_AUDIT_EXPIRY_PROVENANCE = "stored_api_auto_expiry_v1"
 TERMINAL_BLOCKER_CODES = {
@@ -277,6 +277,93 @@ def connect_database(path: Path) -> sqlite3.Connection:
             requeued_at TEXT NOT NULL,
             FOREIGN KEY(event_id) REFERENCES events(event_id)
         );
+
+        CREATE TABLE IF NOT EXISTS archive_imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            archive_fingerprint TEXT NOT NULL UNIQUE,
+            account_user_id TEXT NOT NULL,
+            username TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            imported_at TEXT NOT NULL,
+            post_count INTEGER NOT NULL,
+            inserted_post_count INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS archive_posts (
+            status_id TEXT PRIMARY KEY,
+            first_import_id INTEGER NOT NULL,
+            author_id TEXT NOT NULL,
+            username_at_import TEXT NOT NULL,
+            posted_at TEXT NOT NULL,
+            exact_text TEXT NOT NULL,
+            parent_status_id TEXT,
+            counterparty_user_id TEXT,
+            counterparty_username TEXT,
+            conversation_id TEXT,
+            canonical_url TEXT NOT NULL,
+            source_member TEXT NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            FOREIGN KEY(first_import_id) REFERENCES archive_imports(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS archive_posts_counterparty_idx
+        ON archive_posts(counterparty_user_id, posted_at, status_id);
+
+        CREATE INDEX IF NOT EXISTS archive_posts_parent_idx
+        ON archive_posts(parent_status_id, posted_at, status_id);
+
+        CREATE TABLE IF NOT EXISTS archive_account_aliases (
+            account_user_id TEXT NOT NULL,
+            username TEXT NOT NULL COLLATE NOCASE,
+            first_import_id INTEGER NOT NULL,
+            last_import_id INTEGER NOT NULL,
+            PRIMARY KEY(account_user_id, username),
+            FOREIGN KEY(first_import_id) REFERENCES archive_imports(id),
+            FOREIGN KEY(last_import_id) REFERENCES archive_imports(id)
+        );
+
+        CREATE TABLE IF NOT EXISTS candidate_corpus_imports (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            corpus_fingerprint TEXT NOT NULL UNIQUE,
+            subject_user_id TEXT NOT NULL,
+            expected_handle TEXT NOT NULL,
+            source_name TEXT NOT NULL,
+            imported_at TEXT NOT NULL,
+            record_count INTEGER NOT NULL,
+            inserted_record_count INTEGER NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS candidate_public_posts (
+            status_id TEXT PRIMARY KEY,
+            first_import_id INTEGER NOT NULL,
+            subject_user_id TEXT NOT NULL,
+            account_handle TEXT NOT NULL,
+            created_at TEXT,
+            exact_text TEXT,
+            text_state TEXT NOT NULL,
+            canonical_url TEXT NOT NULL,
+            source_verification_state TEXT NOT NULL,
+            trust_state TEXT NOT NULL
+                CHECK(trust_state = 'unverified_candidate'),
+            source_file TEXT NOT NULL,
+            payload_sha256 TEXT NOT NULL,
+            FOREIGN KEY(first_import_id)
+                REFERENCES candidate_corpus_imports(id)
+        );
+
+        CREATE INDEX IF NOT EXISTS candidate_public_posts_subject_idx
+        ON candidate_public_posts(subject_user_id, created_at, status_id);
+
+        CREATE TABLE IF NOT EXISTS candidate_post_verifications (
+            status_id TEXT PRIMARY KEY,
+            exact_text TEXT NOT NULL,
+            canonical_url TEXT NOT NULL,
+            observed_at TEXT NOT NULL,
+            verification_method TEXT NOT NULL,
+            verified_by TEXT NOT NULL,
+            exact_text_sha256 TEXT NOT NULL,
+            FOREIGN KEY(status_id) REFERENCES candidate_public_posts(status_id)
+        );
         """
     )
     resolution_columns = {
@@ -466,6 +553,18 @@ def commenter_history_for_event(
             "last_interaction_at": None,
             "returned_interactions": 0,
             "interactions": [],
+            "total_prior_archive_alex_replies": 0,
+            "first_archive_alex_reply_at": None,
+            "last_archive_alex_reply_at": None,
+            "returned_archive_alex_replies": 0,
+            "archive_alex_replies": [],
+            "total_candidate_public_posts": 0,
+            "returned_candidate_public_posts": 0,
+            "candidate_public_posts": [],
+            "candidate_memory_contract": (
+                "Unverified candidates are search hints only. Verify the "
+                "exact live X post before quoting or using it as evidence."
+            ),
         }
 
     aggregate = connection.execute(
@@ -533,6 +632,121 @@ def commenter_history_for_event(
                 "alex_replies": alex_replies,
             }
         )
+    archive_replies: list[dict[str, Any]] = []
+    archive_aggregate = {
+        "count": 0,
+        "first_reply_at": None,
+        "last_reply_at": None,
+    }
+    candidate_posts: list[dict[str, Any]] = []
+    candidate_total = 0
+    if author_id:
+        archive_aggregate_row = connection.execute(
+            """
+            SELECT COUNT(*) AS count,
+                   MIN(post.posted_at) AS first_reply_at,
+                   MAX(post.posted_at) AS last_reply_at
+            FROM archive_posts AS post
+            LEFT JOIN conversation_turns AS turn
+              ON turn.status_id = post.status_id
+            WHERE post.counterparty_user_id = ?
+              AND turn.status_id IS NULL
+            """,
+            (str(author_id),),
+        ).fetchone()
+        archive_aggregate = {
+            "count": int(archive_aggregate_row["count"]),
+            "first_reply_at": archive_aggregate_row["first_reply_at"],
+            "last_reply_at": archive_aggregate_row["last_reply_at"],
+        }
+        archive_limit = min(limit, max(3, math.ceil(limit / 3)))
+        archive_rows = connection.execute(
+            """
+            SELECT post.status_id, post.parent_status_id, post.posted_at,
+                   post.exact_text, post.canonical_url,
+                   post.counterparty_username, post.source_member
+            FROM archive_posts AS post
+            LEFT JOIN conversation_turns AS turn
+              ON turn.status_id = post.status_id
+            WHERE post.counterparty_user_id = ?
+              AND turn.status_id IS NULL
+            ORDER BY post.posted_at DESC, CAST(post.status_id AS INTEGER) DESC
+            LIMIT ?
+            """,
+            (str(author_id), archive_limit),
+        ).fetchall()
+        archive_replies = [
+            {
+                "status_id": str(reply["status_id"]),
+                "parent_status_id": reply["parent_status_id"],
+                "url": str(reply["canonical_url"]),
+                "posted_at": reply["posted_at"],
+                "counterparty_username": reply["counterparty_username"],
+                "source_kind": "official_x_archive_alex_reply",
+                "source_member": str(reply["source_member"]),
+                **_commenter_memory_excerpt(str(reply["exact_text"])),
+            }
+            for reply in archive_rows
+        ]
+        candidate_total = int(
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM candidate_public_posts
+                WHERE subject_user_id = ?
+                """,
+                (str(author_id),),
+            ).fetchone()[0]
+        )
+        candidate_limit = min(limit, 3)
+        candidate_rows = connection.execute(
+            """
+            SELECT post.status_id, post.created_at,
+                   post.exact_text AS candidate_text,
+                   post.canonical_url AS candidate_url,
+                   post.text_state, post.source_verification_state,
+                   post.source_file,
+                   verification.exact_text AS verified_exact_text,
+                   verification.canonical_url AS verified_url,
+                   verification.observed_at AS verified_at,
+                   verification.verification_method
+            FROM candidate_public_posts AS post
+            LEFT JOIN candidate_post_verifications AS verification
+              ON verification.status_id = post.status_id
+            WHERE post.subject_user_id = ?
+            ORDER BY post.created_at DESC,
+                     CAST(post.status_id AS INTEGER) DESC
+            LIMIT ?
+            """,
+            (str(author_id), candidate_limit),
+        ).fetchall()
+        for post in candidate_rows:
+            verified = post["verified_exact_text"] is not None
+            candidate_text = (
+                str(post["verified_exact_text"])
+                if verified
+                else str(post["candidate_text"] or "")
+            )
+            candidate_posts.append(
+                {
+                    "status_id": str(post["status_id"]),
+                    "url": str(
+                        post["verified_url"]
+                        if verified
+                        else post["candidate_url"]
+                    ),
+                    "created_at": post["created_at"],
+                    "text_state": str(post["text_state"]),
+                    "source_verification_state": str(
+                        post["source_verification_state"]
+                    ),
+                    "source_file": str(post["source_file"]),
+                    "verification_method": post["verification_method"],
+                    "verified_at": post["verified_at"],
+                    "usable_as_evidence": verified,
+                    **_commenter_memory_excerpt(candidate_text),
+                }
+            )
     return {
         "event_id": event_id,
         "identity_kind": identity_kind,
@@ -543,6 +757,18 @@ def commenter_history_for_event(
         "last_interaction_at": aggregate["last_interaction_at"],
         "returned_interactions": len(interactions),
         "interactions": interactions,
+        "total_prior_archive_alex_replies": archive_aggregate["count"],
+        "first_archive_alex_reply_at": archive_aggregate["first_reply_at"],
+        "last_archive_alex_reply_at": archive_aggregate["last_reply_at"],
+        "returned_archive_alex_replies": len(archive_replies),
+        "archive_alex_replies": archive_replies,
+        "total_candidate_public_posts": candidate_total,
+        "returned_candidate_public_posts": len(candidate_posts),
+        "candidate_public_posts": candidate_posts,
+        "candidate_memory_contract": (
+            "Unverified candidates are search hints only. Verify the exact "
+            "live X post before quoting or using it as evidence."
+        ),
     }
 
 

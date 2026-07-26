@@ -8,6 +8,7 @@ from contextlib import closing
 from pathlib import Path
 
 import xmention_watcher as watcher
+import candidate_corpus
 from scripts import autopilot_bridge
 
 
@@ -191,6 +192,147 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertIn('"identity_kind":"x_user_id"', result["prompt"])
         self.assertIn("Prior exact public claim", result["prompt"])
         self.assertIn("Prior exact Alex reply", result["prompt"])
+
+    def test_claim_includes_official_archive_alex_reply_memory(self) -> None:
+        watcher_config = watcher.load_config(self.config)
+        connection = watcher.connect_database(watcher_config.database)
+        current = self.event()
+        payload = {
+            "id": current["event_id"],
+            "author_id": "901",
+            "text": "Current exact public claim",
+            "created_at": current["created_at"],
+            "conversation_id": current["conversation_id"],
+            "in_reply_to_user_id": "16337609",
+        }
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO events(
+                    event_id, author_id, username, created_at,
+                    conversation_id, in_reply_to_user_id, is_reply,
+                    payload_json, first_seen_at, delivery_state
+                ) VALUES(?, '901', 'Timyr316661', ?, ?, '16337609', 1,
+                         ?, ?, 'queued')
+                """,
+                (
+                    current["event_id"],
+                    current["created_at"],
+                    current["conversation_id"],
+                    json.dumps(payload, sort_keys=True),
+                    watcher.isoformat(),
+                ),
+            )
+            import_id = connection.execute(
+                """
+                INSERT INTO archive_imports(
+                    archive_fingerprint, account_user_id, username,
+                    source_name, imported_at, post_count, inserted_post_count
+                ) VALUES(
+                    'fixture-archive', '16337609', 'axrbarsic',
+                    'fixture.zip', ?, 1, 1
+                )
+                """,
+                (watcher.isoformat(),),
+            ).lastrowid
+            connection.execute(
+                """
+                INSERT INTO archive_posts(
+                    status_id, first_import_id, author_id,
+                    username_at_import, posted_at, exact_text,
+                    parent_status_id, counterparty_user_id,
+                    counterparty_username, conversation_id,
+                    canonical_url, source_member, payload_sha256
+                ) VALUES(
+                    '7000000000000000001', ?, '16337609', 'axrbarsic',
+                    '2020-01-02T03:04:05Z',
+                    'Exact old Alex archive reply',
+                    '6999999999999999999', '901', 'Timyr316661', NULL,
+                    'https://x.com/i/web/status/7000000000000000001',
+                    'data/tweets.js', 'fixture-sha'
+                )
+                """,
+                (import_id,),
+            )
+        connection.close()
+        self.write_events([current])
+
+        result = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        self.assertIn("Exact old Alex archive reply", result["prompt"])
+        self.assertIn("official_x_archive_alex_reply", result["prompt"])
+
+    def test_claim_quarantines_external_candidate_memory(self) -> None:
+        watcher_config = watcher.load_config(self.config)
+        connection = watcher.connect_database(watcher_config.database)
+        current = self.event()
+        candidate_path = self.root / "candidate.jsonl"
+        candidate_path.write_text(
+            json.dumps(
+                {
+                    "record_type": "x_post",
+                    "status_id": "7000000000000000001",
+                    "account_handle": "Timyr316661",
+                    "created_at_utc": "2020-01-02T03:04:05Z",
+                    "canonical_url": (
+                        "https://x.com/Timyr316661/status/"
+                        "7000000000000000001"
+                    ),
+                    "text_state": "full_as_returned",
+                    "text_verbatim": "Unverified external candidate",
+                    "verification_state": "model_native_search_result",
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        payload = {
+            "id": current["event_id"],
+            "author_id": "901",
+            "text": "Current exact public claim",
+            "created_at": current["created_at"],
+            "conversation_id": current["conversation_id"],
+            "in_reply_to_user_id": "16337609",
+        }
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO events(
+                    event_id, author_id, username, created_at,
+                    conversation_id, in_reply_to_user_id, is_reply,
+                    payload_json, first_seen_at, delivery_state
+                ) VALUES(?, '901', 'Timyr316661', ?, ?, '16337609', 1,
+                         ?, ?, 'queued')
+                """,
+                (
+                    current["event_id"],
+                    current["created_at"],
+                    current["conversation_id"],
+                    json.dumps(payload, sort_keys=True),
+                    watcher.isoformat(),
+                ),
+            )
+        plan = candidate_corpus.plan_candidate_import(
+            [candidate_path],
+            subject_user_id="901",
+            expected_handle="Timyr316661",
+        )
+        candidate_corpus.apply_candidate_import(connection, plan)
+        connection.close()
+        self.write_events([current])
+
+        result = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        self.assertIn("Unverified external candidate", result["prompt"])
+        self.assertIn('"usable_as_evidence":false', result["prompt"])
+        self.assertIn(
+            "Verify the exact live X post before quoting",
+            result["prompt"],
+        )
+        self.assertIn(
+            "запрещено цитировать запись",
+            result["prompt"],
+        )
 
     def test_overlapping_claim_preserves_work_in_progress_health(self) -> None:
         self.write_events([self.event()])

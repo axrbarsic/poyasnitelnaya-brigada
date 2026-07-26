@@ -43,6 +43,17 @@ an X reply.
     public turns and exact Alex children from any stored conversation. A deeper
     `commenter-history` query can search all retained years without adding the
     full archive to every Sol prompt.
+16. `x_archive_import.py` stages Alex's historical public posts and replies
+    from an official X archive. It validates the archive account against the
+    configured numeric X user ID, ignores direct-message members, and rejects
+    append-only conflicts. Archive replies are exposed separately from exact
+    incoming interaction history because the archive does not contain a
+    complete copy of other users' turns.
+17. `candidate_corpus.py` stores externally collected public posts in a
+    quarantined index keyed by stable X user ID. It exposes at most three
+    compact search hints per event. Unverified hints have
+    `usable_as_evidence=false`; only an append-only live X or official API
+    verification can promote the exact observed record.
 
 Each event resolution can preserve stance, confidence, media meaning, and
 multiple evidence notes. This prevents a media-only reply from disappearing
@@ -89,6 +100,19 @@ The author-memory layer is evidence memory, not a psychological profile. Sol
 may cite an exact prior public statement to identify a contradiction, changed
 standard, or repeated claim. It may not infer hidden motives, sensitive
 attributes, or optimize political persuasion around personal vulnerabilities.
+
+The archive layer stores only filtered public-post fields. It never extracts an
+archive to disk, never reads a direct-message member, and never stores the raw
+archive payload. Stable `in_reply_to_user_id` values can link an old Alex reply
+to a present commenter. Such a record proves only what Alex wrote and when. It
+does not reconstruct or invent the missing incoming post.
+
+The candidate layer is deliberately separate from exact conversation and
+archive history. Its immutable source record preserves provenance and source
+verification state. A later verification stores the exact observed public text
+in a second table, without rewriting the candidate. Until that verification
+exists, the record may guide a live search but may not support a quotation,
+contradiction claim, or factual conclusion.
 
 ## Failure containment
 

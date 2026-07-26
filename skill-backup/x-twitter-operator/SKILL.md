@@ -131,6 +131,10 @@ not a psychological profile.
 - Stored age alone does not make a relevant public statement unusable.
 - Cite or paraphrase the exact prior turn naturally. Do not invent motives,
   sensitive attributes, private facts, or familiarity the record does not prove.
+- Treat `candidate_public_posts` as quarantined search hints. When
+  `usable_as_evidence=false`, verify the exact live X post or official X API
+  record before quoting it, claiming a contradiction, or using it as a fact.
+  Append verification instead of rewriting the candidate record.
 - Do not use memory to dogpile, threaten, stalk, or optimize personalized
   political manipulation. The purpose is factual continuity and accountability.
 

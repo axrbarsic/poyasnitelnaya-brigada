@@ -56,6 +56,7 @@ python3 xmention_watcher.py --config config.json browser-handoff-sync \
   --ledger-file /absolute/path/to/run-ledger.jsonl
 python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \
   --limit 50
+python3 candidate_corpus.py --config config.json history EVENT_ID --limit 20
 python3 xmention_watcher.py --config config.json watchdog
 ```
 
@@ -230,6 +231,23 @@ Before relying on incremental monitoring:
    direct reply has an `event_resolutions` row. Completion checks both facts.
 
 The incremental one-minute watcher is authoritative only after this gate.
+
+## Archive and candidate memory
+
+Use `x_archive_import.py` only for Alex's official X archive. Dry-run first,
+verify that the archive numeric account ID matches `config.json`, confirm
+`direct_messages_imported=0`, then apply. Never commit the ZIP, extracted
+archive, report, or runtime SQLite database.
+
+Use `candidate_corpus.py` only for external public-post corpora. Every import
+is quarantined as `unverified_candidate` and matched by stable subject X user
+ID. It may guide a live search but cannot support a quote or factual claim.
+After opening the exact live X post or reading the official X API record, use
+the `verify` subcommand to append the exact observed text. Never rewrite the
+candidate record to make it match.
+
+The autopilot receives no more than three compact candidate hints for one
+event. A hint is usable as evidence only when `usable_as_evidence=true`.
 
 Without standing authority, do not wake a model merely because polling
 occurred. Use the durable queue and local notification as the boundary between

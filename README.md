@@ -53,6 +53,19 @@ cutoff. Prior statements may support a source-linked contradiction or expose a
 changed standard, but must not become speculative profiling, sensitive-trait
 inference, or persistent personal targeting.
 
+An official X archive can extend this memory with Alex's older public posts and
+replies. The archive importer verifies the numeric account ID, defaults to a
+read-only dry-run, imports only public post records, ignores direct-message
+files, and rejects conflicting rewrites. X archives do not provide a complete
+copy of every other user's reply, so the API watcher and exact Browser history
+remain authoritative for incoming turns.
+
+An external public-post corpus can be loaded into a separate quarantined
+candidate index. Its records are search hints, not evidence. The autopilot
+receives at most three compact hints for the current stable X user ID, with
+`usable_as_evidence=false`. A hint becomes usable only after its exact live X
+post or official X API record is append-only verified.
+
 ## Current checkpoint
 
 Polling and watchdog LaunchAgents are installed for `@axrbarsic`. Both run
@@ -77,6 +90,96 @@ in each automation handoff. Deeper history remains available on demand:
 python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \
   --limit 50
 ```
+
+## Import an official X archive
+
+Do not commit the ZIP, extracted archive, runtime database, or import report to
+Git. They can contain private account data. Keep them in a local protected
+location.
+
+Run the dry-run first:
+
+```bash
+python3 x_archive_import.py \
+  --config config.json \
+  --archive /absolute/path/to/x-archive.zip
+```
+
+The plan must show the configured numeric account ID, the expected username,
+the public post count, and `direct_messages_imported: 0`. It also lists private
+archive members that were deliberately ignored.
+
+Apply the same validated archive:
+
+```bash
+python3 x_archive_import.py \
+  --config config.json \
+  --archive /absolute/path/to/x-archive.zip \
+  --apply \
+  --report /absolute/private/path/x-archive-import-report.json
+```
+
+The import is idempotent. Repeating the same archive returns
+`already_imported`. A later archive may add new posts, but a changed immutable
+record for an existing status ID fails closed. Imported historical replies by
+Alex become a separate `archive_alex_replies` section in commenter memory,
+matched through the stable counterparty X user ID. The absent incoming text is
+never invented.
+
+## Import an external candidate corpus
+
+Use this only for public X data collected outside the official archive and the
+live watcher. Every JSONL record must include a numeric status ID, the expected
+account handle, an X status URL, and its source verification state.
+
+Run a dry-run first:
+
+```bash
+python3 candidate_corpus.py \
+  --config config.json \
+  import \
+  --input /absolute/path/to/public-posts.jsonl \
+  --subject-user-id 123456789 \
+  --handle example_user
+```
+
+Apply the validated corpus:
+
+```bash
+python3 candidate_corpus.py \
+  --config config.json \
+  import \
+  --input /absolute/path/to/public-posts.jsonl \
+  --subject-user-id 123456789 \
+  --handle example_user \
+  --apply
+```
+
+Review candidate memory for an existing incoming event:
+
+```bash
+python3 candidate_corpus.py \
+  --config config.json \
+  history EVENT_ID \
+  --limit 20
+```
+
+An unverified candidate must never be quoted or treated as proof. After opening
+the exact live post or reading it through the official X API, save the exact
+text to a local file and append a verification:
+
+```bash
+python3 candidate_corpus.py \
+  --config config.json \
+  verify STATUS_ID \
+  --url https://x.com/example_user/status/STATUS_ID \
+  --exact-text-file /absolute/private/path/exact-text.txt \
+  --observed-at 2026-07-25T20:00:00Z \
+  --method live_x_dom
+```
+
+Verification stores the exact observed text separately and never rewrites the
+candidate record. A conflicting second verification fails closed.
 
 Provide the bearer token only through one of these environment variables:
 

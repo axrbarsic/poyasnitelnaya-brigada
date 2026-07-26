@@ -61,6 +61,11 @@
 - [x] Initialize a clean Git repository with runtime state ignored.
 - [x] Verify that config, tokens, SQLite, queues, health, alerts, and logs are
   excluded.
+- [x] Run every external candidate import in dry-run mode before `--apply`.
+- [x] Confirm candidate records use the expected stable X user ID and remain
+  `usable_as_evidence=false` until live X or official API verification.
+- [x] Keep candidate corpora and exact-text verification scratch files out of
+  Git when their redistribution status is unknown.
 - [x] Create a private GitHub repository.
 - [x] Push source, tests, templates, and documentation.
 - [x] Add the watcher contract to the X skill only after the live gate is green.

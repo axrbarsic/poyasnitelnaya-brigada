@@ -12,6 +12,9 @@ inside that same scheduled run on Sol High.
 Each non-empty claim includes up to `commenter_memory_limit` source-linked prior
 interactions for the same stable X user ID. Sol may query deeper retained
 history with `commenter-history` only when it is useful to the current reply.
+The same memory may include up to three quarantined external candidate hints.
+They remain unusable as evidence until the exact public post is verified live
+or through the official X API.
 
 Codex CLI is intentionally excluded from Browser work. The official Codex
 manual states that the built-in Browser is unavailable in Codex CLI and the
