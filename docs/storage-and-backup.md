@@ -57,9 +57,22 @@ immutable in a separate protected archive vault, for example:
 
 `/Users/alexlane/Archives/x-mention-watcher/<request-date>/source.zip`
 
-Store dry-run and apply reports beside the ZIP. Do not extract the archive for
-normal import. The importer reads only the public account and tweet members and
-ignores direct-message members.
+Store `intake-plan.json` and `intake-receipt.json` in `reports/` beside the ZIP.
+Do not extract the archive for normal import. `archive_intake.py` first runs a
+dry-run, records the ZIP SHA-256, and refuses apply after any source change. It
+creates a consistent memory snapshot before the append-only import, requires
+the full archive audit, and creates another snapshot after import. The importer
+reads only public account and tweet members and ignores direct-message members.
+
+```bash
+python3 archive_intake.py \
+  --config config.json \
+  --archive /Users/alexlane/Archives/x-mention-watcher/YYYY-MM-DD/source.zip
+python3 archive_intake.py \
+  --config config.json \
+  --archive /Users/alexlane/Archives/x-mention-watcher/YYYY-MM-DD/source.zip \
+  --apply
+```
 
 ## Online backup
 

@@ -177,27 +177,36 @@ python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \
 Git. В них могут находиться приватные данные аккаунта. Храните их только в
 защищённом локальном месте.
 
-Сначала выполните dry-run:
+Для штатного приёма используйте двухфазный оркестратор. Он требует исходный
+ZIP вне каталога проекта, проверяет владельца и публичные members, вычисляет
+SHA-256 и записывает план рядом с архивом:
 
 ```bash
-python3 x_archive_import.py \
+python3 archive_intake.py \
   --config config.json \
-  --archive /absolute/path/to/x-archive.zip
+  --archive /Users/alexlane/Archives/x-mention-watcher/YYYY-MM-DD/source.zip
 ```
 
 План должен показать ожидаемый числовой ID аккаунта, имя пользователя, число
 публичных постов и `direct_messages_imported: 0`. Отдельно перечисляются
 приватные файлы архива, которые намеренно не читались и не импортировались.
 
-После проверки примените тот же архив:
+После проверки примените тот же неизменившийся ZIP:
 
 ```bash
-python3 x_archive_import.py \
+python3 archive_intake.py \
   --config config.json \
-  --archive /absolute/path/to/x-archive.zip \
-  --apply \
-  --report /absolute/private/path/x-archive-import-report.json
+  --archive /Users/alexlane/Archives/x-mention-watcher/YYYY-MM-DD/source.zip \
+  --apply
 ```
+
+Apply отказывается работать без совпадающего dry-run плана. До изменения базы
+создаётся согласованный snapshot, затем выполняются append-only импорт, полный
+`memory-audit --require-archive` и второй snapshot. Внешний
+`reports/intake-receipt.json` связывает SHA-256 ZIP, результат импорта и оба
+snapshot. Низкоуровневый `x_archive_import.py` остаётся библиотекой и
+диагностическим CLI, но обычный production-путь проходит через
+`archive_intake.py`.
 
 Импорт идемпотентен: повтор того же архива возвращает `already_imported`.
 Следующий архив может добавить новые посты, но изменение неизменяемых полей

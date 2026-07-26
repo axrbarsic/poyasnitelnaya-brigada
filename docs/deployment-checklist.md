@@ -70,6 +70,8 @@
 - [x] Push source, tests, templates, and documentation.
 - [x] Add the watcher contract to the X skill only after the live gate is green.
 - [x] Generate transactionally consistent, manifested SQLite snapshots.
+- [x] Require a matching SHA-256 dry-run plan before official archive apply.
+- [x] Snapshot and audit memory before and after official archive intake.
 - [x] Import legacy Browser evidence into one manifested canonical tree.
 - [x] Implement a fail-closed restic source plan that excludes live SQLite.
 - [x] Cover secret-free command execution and a real local restore smoke test.

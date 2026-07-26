@@ -57,9 +57,22 @@ resolutions в человекочитаемом виде, вычисляет SHA
 
 `/Users/alexlane/Archives/x-mention-watcher/<request-date>/source.zip`
 
-Рядом лежат dry-run и apply reports. Для обычного импорта ZIP не
-распаковывается. Импортёр читает только публичные account и tweet members и
-игнорирует direct-message members.
+Рядом в `reports/` лежат `intake-plan.json` и `intake-receipt.json`. Для
+обычного импорта ZIP не распаковывается. `archive_intake.py` сначала выполняет
+dry-run, фиксирует SHA-256 ZIP и запрещает apply при любом изменении источника.
+Перед append-only импортом создаётся согласованный snapshot памяти. После
+импорта обязательны полный archive audit и второй snapshot. Импортёр читает
+только публичные account и tweet members и игнорирует direct-message members.
+
+```bash
+python3 archive_intake.py \
+  --config config.json \
+  --archive /Users/alexlane/Archives/x-mention-watcher/YYYY-MM-DD/source.zip
+python3 archive_intake.py \
+  --config config.json \
+  --archive /Users/alexlane/Archives/x-mention-watcher/YYYY-MM-DD/source.zip \
+  --apply
+```
 
 ## Онлайн backup
 

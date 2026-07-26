@@ -125,27 +125,35 @@ Do not commit the ZIP, extracted archive, runtime database, or import report to
 Git. They can contain private account data. Keep them in a local protected
 location.
 
-Run the dry-run first:
+Use the two-phase orchestrator for normal intake. It requires the original ZIP
+outside the project, validates the owner and public members, hashes the source,
+and writes a plan beside the archive:
 
 ```bash
-python3 x_archive_import.py \
+python3 archive_intake.py \
   --config config.json \
-  --archive /absolute/path/to/x-archive.zip
+  --archive /Users/alexlane/Archives/x-mention-watcher/YYYY-MM-DD/source.zip
 ```
 
 The plan must show the configured numeric account ID, the expected username,
 the public post count, and `direct_messages_imported: 0`. It also lists private
 archive members that were deliberately ignored.
 
-Apply the same validated archive:
+Apply the same unchanged ZIP after reviewing the plan:
 
 ```bash
-python3 x_archive_import.py \
+python3 archive_intake.py \
   --config config.json \
-  --archive /absolute/path/to/x-archive.zip \
-  --apply \
-  --report /absolute/private/path/x-archive-import-report.json
+  --archive /Users/alexlane/Archives/x-mention-watcher/YYYY-MM-DD/source.zip \
+  --apply
 ```
+
+Apply refuses to run without a matching dry-run plan. It creates a consistent
+snapshot before mutation, performs the append-only import, requires the full
+archive memory audit, and creates a second snapshot. The external
+`reports/intake-receipt.json` binds the ZIP SHA-256, import result, and both
+snapshots. `x_archive_import.py` remains the low-level library and diagnostic
+CLI, while `archive_intake.py` is the normal production path.
 
 The import is idempotent. Repeating the same archive returns
 `already_imported`. A later archive may add new posts, but a changed immutable
