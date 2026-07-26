@@ -35,6 +35,9 @@ drafts, posts, deletes, likes, follows, or changes X account state.
   participant and an older local chain may be missing its Alex root turn.
 - Outside mandatory mode, store unrelated mentions and untracked nested replies
   as `ignored`.
+- A post authored by the configured `user_id` is an exact Alex turn, never an
+  inbound event. Import its exact text and chain metadata with `actor=alex`,
+  set `delivery_state=self_authored`, and never queue or resolve it.
 - Never use static topic names, post IDs, authors, or special article lists as
   an eligibility rule.
 - Deduplicate by immutable X event ID.
@@ -49,6 +52,7 @@ cd /Users/alexlane/Developer/x-mention-watcher
 python3 xmention_watcher.py --config config.json preflight
 python3 xmention_watcher.py --config config.json poll
 python3 xmention_watcher.py --config config.json status
+python3 xmention_watcher.py --config config.json self-authored-reconcile
 python3 xmention_watcher.py --config config.json initial-audit-next \
   --conversations 1
 python3 xmention_watcher.py --config config.json initial-audit-expire \
@@ -66,6 +70,11 @@ python3 xmention_watcher.py --config config.json watchdog
 
 `status` is compact by default. Do not use `status --full` for routine backlog
 work because it can flood model context. Use `initial-audit-next` instead.
+
+`self-authored-reconcile` idempotently changes legacy unresolved rows authored
+by the configured `user_id` to `delivery_state=self_authored`. It creates no
+`event_resolutions` row, performs no X mutation, and preserves the exact
+imported Alex turn for later conversation continuity.
 
 Never use `ack` for a direct reply. The watcher rejects that path. Use
 `resolve EVENT_ID --disposition published|skip|blocked` so every removal has a

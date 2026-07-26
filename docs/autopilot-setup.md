@@ -108,6 +108,13 @@ A reply posted manually by Alex is an `alex` turn. If somebody answers it, the
 Browser owner restores the exact live branch, stores any previously unseen
 manual reply, and uses the complete history before drafting the continuation.
 
+An event authored by the configured `user_id` is Alex's own turn, never inbound
+work. The watcher imports its exact text and chain metadata as an `alex` turn,
+sets `delivery_state=self_authored`, and neither queues nor resolves it. Repair
+legacy unresolved own rows idempotently with
+`python3 xmention_watcher.py --config config.json self-authored-reconcile`.
+This command creates no `event_resolutions` row and performs no X mutation.
+
 ## Install LaunchAgents
 
 Render five plist files:
