@@ -14,6 +14,12 @@ def complete_components() -> dict[str, object]:
         "archive_ready": True,
         "final_complete": True,
     }
+    commenter_memory = {
+        "complete": True,
+        "identity_key": "x_user_id",
+        "events_checked": 10,
+        "lookup_failure_count": 0,
+    }
     watcher_health = {"healthy": True, "status": "healthy"}
     backup_plan = {
         "complete": True,
@@ -41,6 +47,7 @@ def complete_components() -> dict[str, object]:
     return {
         "layout": layout,
         "memory": memory,
+        "commenter_memory": commenter_memory,
         "watcher_health": watcher_health,
         "backup_plan": backup_plan,
         "snapshot": snapshot,
@@ -123,6 +130,20 @@ class ReadinessAuditTests(unittest.TestCase):
 
         self.assertIn("response_queue_pending", result["blockers"])
         self.assertNotIn("current_memory_invalid", result["blockers"])
+
+    def test_commenter_memory_failure_blocks_completion(self) -> None:
+        components = complete_components()
+        components["commenter_memory"] = {
+            "complete": False,
+            "errors": ["stable_author_lookup_failed"],
+        }
+
+        result = readiness_audit.aggregate_readiness(**components)
+
+        self.assertIn(
+            "commenter_memory_lookup_invalid",
+            result["blockers"],
+        )
 
     def test_latest_snapshot_must_match_current_memory(self) -> None:
         memory = {"current_memory_ok": True, "archive_ready": False}

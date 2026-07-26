@@ -14,6 +14,8 @@ python3 readiness_audit.py
 
 - единый канонический layout и соответствие установленного skill;
 - SQLite integrity, foreign keys, идентичности, историю и resolutions;
+- полный поиск commenter memory для каждого события по стабильному
+  `x_user_id`, индекс `author_id` и межветочные связи;
 - импорт полного официального архива правильного X user ID;
 - здоровье watcher;
 - совпадение последнего snapshot с текущим состоянием памяти;
@@ -28,6 +30,11 @@ python3 readiness_audit.py
 `remote_backup_not_configured`, `remote_backup_receipt_missing` и
 `restore_smoke_receipt_missing`. Во время обработки свежего ответа временно
 появляется `response_queue_pending`.
+
+Раздел `components.commenter_memory` показывает число полностью проверенных
+событий, число авторов с историей в нескольких ветках, смены ника и любые
+ошибки lookup. Нулевой `lookup_failure_count` доказывает, что сохранённое
+событие не переключается на ненадёжное сравнение по текущему нику.
 
 Успешный `restore-smoke` теперь сохраняет отдельную долговечную квитанцию
 `var/backup-state/last-successful-restore-smoke.json`. Она не теряется, когда

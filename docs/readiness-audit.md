@@ -15,6 +15,8 @@ the live database. It verifies all of these components together:
 
 - the canonical layout and the installed skill copy;
 - SQLite integrity, foreign keys, identities, history, and resolutions;
+- a complete commenter-memory lookup for every event by stable `x_user_id`,
+  the `author_id` index, and cross-thread links;
 - a complete official archive import for the configured numeric X user ID;
 - watcher health;
 - equality between the latest durable snapshot and current memory state;
@@ -29,6 +31,11 @@ Before B2 is configured, `remote_backup_not_configured`,
 `remote_backup_receipt_missing`, and `restore_smoke_receipt_missing` are
 expected. `response_queue_pending` can appear temporarily while a new reply is
 being processed.
+
+`components.commenter_memory` reports the number of fully checked events,
+authors with history in multiple conversations, handle changes, and any lookup
+failures. A zero `lookup_failure_count` proves that a stored event does not
+fall back to an unreliable current-handle match.
 
 A successful restore smoke test now writes the durable receipt
 `var/backup-state/last-successful-restore-smoke.json`. It is not lost when a

@@ -37,6 +37,106 @@ def read_only_memory_audit(config: watcher.Config) -> dict[str, Any]:
         connection.close()
 
 
+def audit_commenter_memory(config: watcher.Config) -> dict[str, Any]:
+    if not config.database.is_file():
+        raise ValueError("watcher_database_missing")
+    connection = sqlite3.connect(
+        f"{config.database.resolve().as_uri()}?mode=ro",
+        uri=True,
+    )
+    connection.row_factory = sqlite3.Row
+    try:
+        connection.execute("PRAGMA query_only=ON")
+        connection.execute("PRAGMA temp_store=MEMORY")
+        connection.execute("PRAGMA foreign_keys=ON")
+        connection.execute("PRAGMA busy_timeout=5000")
+        index_columns = [
+            str(row["name"])
+            for row in connection.execute(
+                "PRAGMA index_info(events_author_idx)"
+            ).fetchall()
+        ]
+        event_rows = connection.execute(
+            """
+            SELECT event_id, author_id
+            FROM events
+            ORDER BY CAST(event_id AS INTEGER)
+            """
+        ).fetchall()
+        cross_conversation_authors = int(
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM (
+                    SELECT author_id
+                    FROM events
+                    WHERE COALESCE(author_id, '') <> ''
+                    GROUP BY author_id
+                    HAVING COUNT(DISTINCT conversation_id) > 1
+                )
+                """
+            ).fetchone()[0]
+        )
+        renamed_authors = int(
+            connection.execute(
+                """
+                SELECT COUNT(*)
+                FROM (
+                    SELECT author_id
+                    FROM events
+                    WHERE COALESCE(author_id, '') <> ''
+                    GROUP BY author_id
+                    HAVING COUNT(DISTINCT lower(username)) > 1
+                )
+                """
+            ).fetchone()[0]
+        )
+        missing_author_ids = sum(
+            1 for row in event_rows if not str(row["author_id"] or "").strip()
+        )
+        lookup_failures: list[str] = []
+        for row in event_rows:
+            event_id = str(row["event_id"])
+            expected_author_id = str(row["author_id"] or "")
+            if not expected_author_id:
+                continue
+            try:
+                result = watcher.commenter_history_for_event(
+                    connection,
+                    event_id,
+                    limit=1,
+                )
+            except (KeyError, ValueError, sqlite3.Error):
+                lookup_failures.append(event_id)
+                continue
+            if (
+                result.get("identity_kind") != "x_user_id"
+                or result.get("author_id") != expected_author_id
+            ):
+                lookup_failures.append(event_id)
+        errors: list[str] = []
+        if index_columns != ["author_id", "created_at", "event_id"]:
+            errors.append("stable_author_index_invalid")
+        if missing_author_ids:
+            errors.append("events_missing_stable_author_id")
+        if lookup_failures:
+            errors.append("stable_author_lookup_failed")
+        return {
+            "complete": not errors,
+            "identity_key": "x_user_id",
+            "index_columns": index_columns,
+            "events_checked": len(event_rows),
+            "missing_author_ids": missing_author_ids,
+            "lookup_failures": lookup_failures[:20],
+            "lookup_failure_count": len(lookup_failures),
+            "cross_conversation_author_count": cross_conversation_authors,
+            "renamed_author_count": renamed_authors,
+            "errors": errors,
+        }
+    finally:
+        connection.close()
+
+
 def audit_latest_snapshot(
     plan: dict[str, Any],
     memory: dict[str, Any],
@@ -150,6 +250,7 @@ def aggregate_readiness(
     *,
     layout: dict[str, Any],
     memory: dict[str, Any],
+    commenter_memory: dict[str, Any],
     watcher_health: dict[str, Any],
     backup_plan: dict[str, Any],
     snapshot: dict[str, Any],
@@ -174,6 +275,8 @@ def aggregate_readiness(
             blockers.append("response_queue_pending")
         else:
             blockers.append("current_memory_invalid")
+    if not commenter_memory.get("complete"):
+        blockers.append("commenter_memory_lookup_invalid")
     if not memory.get("archive_ready"):
         blockers.append("official_x_archive_pending")
     if not watcher_health.get("healthy"):
@@ -204,6 +307,7 @@ def aggregate_readiness(
         "components": {
             "canonical_layout": layout,
             "current_memory": memory,
+            "commenter_memory": commenter_memory,
             "watcher": watcher_health,
             "local_backup_plan": {
                 "complete": bool(backup_plan.get("complete")),
@@ -240,6 +344,7 @@ def run_readiness_audit(
     )
     config = watcher.load_config(config_path)
     memory = read_only_memory_audit(config)
+    commenter_memory = audit_commenter_memory(config)
     watcher_health = watcher.evaluate_health(config)
     settings = restic_backup.load_settings(
         backup_settings_path,
@@ -297,6 +402,7 @@ def run_readiness_audit(
     return aggregate_readiness(
         layout=layout,
         memory=memory,
+        commenter_memory=commenter_memory,
         watcher_health=watcher_health,
         backup_plan=backup_plan,
         snapshot=snapshot,
