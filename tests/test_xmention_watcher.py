@@ -3348,7 +3348,7 @@ class WatcherTests(unittest.TestCase):
             self.config.source_path,
             output,
         )
-        self.assertEqual(len(rendered), 3)
+        self.assertEqual(len(rendered), 5)
         for path in rendered:
             payload = plistlib.loads(path.read_bytes())
             arguments = payload["ProgramArguments"]
@@ -3361,6 +3361,8 @@ class WatcherTests(unittest.TestCase):
                 expected_interval = self.config.poll_interval_seconds
             elif path.name.endswith(".watchdog.plist"):
                 expected_interval = self.config.watchdog_interval_seconds
+            elif path.name.endswith(".codex-update.plist"):
+                expected_interval = 21600
             else:
                 expected_interval = 60
             self.assertEqual(payload["StartInterval"], expected_interval)

@@ -83,7 +83,7 @@ On Alex's 8 GB iMac, let the resource guard choose efficiency, balanced, or
 performance automatically. The profile controls whether Browser work may
 start, never the quality of Sol High reasoning or fact checking:
 
-- idle scheduled runs own zero Browser tabs;
+- idle dispatcher checks own zero Browser tabs and use no model;
 - short work owns one X tab;
 - open ChatGPT only after the Pro route is proven;
 - Pro work owns one X tab, one ChatGPT tab, and one generation;
@@ -92,22 +92,35 @@ start, never the quality of Sol High reasoning or fact checking:
 - no helper session for waiting, polling, or mechanical age filtering;
 - close old backlog with one
   `initial-audit-expire --hours H --as-of <UTC>` run, not Browser tabs.
-- close every task-owned Browser tab before the scheduled run exits;
-- run the mechanical claim before loading this skill on an empty service run;
-- let Luna Low run only the read-only `autopilot_bridge gate`; when
-  `dispatch=true`, it must discover `send_message_to_thread` through
-  `tool_search` and invoke the direct Codex app tool to wake the pinned Sol
-  High owner;
-- never invoke `send_message_to_thread` from `functions.exec`, JavaScript,
-  `tools.*`, or another nested wrapper because that call can remain pending
-  without waking the owner;
-- never run `list_threads` or archive tasks inside the scheduled model run;
+- close every task-owned Browser tab before the owner turn exits;
+- run `autopilot_bridge gate` in the model-free dispatcher before starting
+  Desktop or any model;
+- on `dispatch=true`, launch Codex Desktop only when absent. One existing
+  in-app Luna Low heartbeat must atomically reserve the handoff, invoke
+  `send_message_to_thread` once, and wake the pinned Sol High owner;
+- let the reservation suppress adjacent heartbeat ticks before the owner claim
+  becomes visible;
+- never use the external app-server relay in production. It has no Codex
+  Desktop Browser session and remains only a disabled diagnostic fallback;
+- after the queue empties, close only the exact Desktop PID started by the
+  supervisor. Never close a Desktop instance opened by Alex;
+- require the dispatcher to verify that every original event ID left the
+  durable wake queue before reporting success;
+- never run `list_threads` or archive tasks inside the relay or owner turn;
 - let the model-free `session_janitor.py` LaunchAgent archive exact completed
   service tasks through the local Codex app-server;
 - never self-archive the current active run, because this can block normal
   completion;
 - never let a newly arrived event start a second owner while any global owner
   lease is active.
+- treat a locked display as safe while macOS remains awake. Active voice or
+  system sleep defers Browser work without dropping the durable queue.
+
+Deployment gate: do not install the event dispatcher or retire the paused
+fallback automation until one live in-app handoff and one supervisor launch
+cycle succeed. On 2026-07-26, repeated live in-app handoffs published and
+durably resolved real events. The paused fallback automation must remain until
+the installed LaunchAgent proves the complete cycle.
 
 ## Work classification
 
@@ -274,8 +287,8 @@ Poll the Pro queue from the Browser owner session while it continues independent
 
 ## Token-free mention monitoring
 
-For recurring checks of new replies, use the deterministic local watcher for
-token-free detection and a Codex Desktop scheduled task for Browser work. The
+For recurring checks of new replies, use the deterministic local watcher and a
+model-free LaunchAgent dispatcher. The
 watcher polls the official X API without invoking a model, stores a durable
 cursor, and queues:
 
@@ -316,15 +329,16 @@ without supplying target IDs.
   Sol High and the Browser owner retain classification and publication.
 - A queued Pro follow-up must return to the exact recorded historical
   «Пояснительная бригада» conversation.
-- Run the token-free poll and watchdog every minute on the 8 GB iMac. Run one
-  Luna Low Codex Desktop automation every five minutes. It runs only the
-  read-only gate. An empty, leased, voice-paused, or resource-deferred run
-  stops before Browser work and never wakes Sol.
-- When `dispatch=true`, Luna must expose `send_message_to_thread` through
-  `tool_search`, then invoke it as a direct tool call with the pinned owner,
-  `gpt-5.6-sol`, and `high`. Never call it inside `functions.exec` or another
-  nested wrapper. The pinned Sol owner atomically claims the batch and executes
-  the returned wake prompt. The built-in Browser is unavailable in Codex CLI.
+- Run poll, watchdog, janitor, and the Python event dispatcher every minute on
+  the 8 GB iMac. Empty, leased, voice-paused, and resource-deferred checks stop
+  without a model, Browser, or new Codex task.
+- When `dispatch=true`, the supervisor launches Desktop only if needed. The
+  existing in-app Luna heartbeat reserves the handoff and calls the direct
+  Codex app tool with the pinned owner, `gpt-5.6-sol`, and `high`. The pinned
+  Sol owner atomically claims the batch and executes the wake prompt.
+- In normal unattended idle, supervisor-owned Desktop is closed and Luna does
+  not run. If Alex intentionally keeps Desktop open, the heartbeat still
+  performs its small scheduled gate, but it never wakes Sol for an empty queue.
 - Keep zero Browser tabs while idle, one X tab for short work, and add one
   ChatGPT tab only for a proven Pro route.
 - Close all task-owned tabs and finish normally. The model-free session

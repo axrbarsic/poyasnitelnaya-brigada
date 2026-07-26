@@ -35,21 +35,43 @@
 
 ## Gate 3: production
 
-- [x] Render the two machine-specific LaunchAgent plists.
-- [x] Inspect their absolute paths and load them explicitly with `launchctl`.
-- [x] Confirm poll and watchdog complete with exit code 0.
+- [x] Render the five machine-specific LaunchAgent plists.
+- [x] Inspect their absolute paths. Keep the dispatcher plist unloaded until
+  its live relay gate succeeds.
+- [x] Confirm the loaded poll, watchdog, and janitor complete with exit code 0.
 - [x] Confirm the retired CLI launcher exits nonzero before claiming an event.
 - [x] Create and pin the Sol High Codex Desktop Browser owner.
-- [x] Create the Luna Low dispatcher automation.
-- [ ] Confirm a ready Luna gate wakes the pinned owner through the direct Codex
-  app tool, never a nested `functions.exec` call.
+- [x] Pause the five-minute Luna Low dispatcher automation.
+- [x] Prove that direct app-server Browser ownership fails closed because the
+  external runtime has no Codex Desktop Browser session.
+- [x] Prove that the exact archived relay thread can be unarchived, resumed,
+  completed on Luna Low, and archived again without creating another task.
+- [x] Prove that the current external app-server runtime exposes neither
+  `tool_search` nor the desktop-only `codex_app.send_message_to_thread` tool.
+- [x] Latch this capability failure to the exact Codex binary so a queued
+  LaunchAgent cannot spend another Luna turn every minute.
+- [x] Confirm the ready-only in-app Luna relay wakes the pinned owner through
+  the direct Codex app tool.
+- [x] Confirm an atomic reservation suppresses a second handoff before the
+  owner claim appears.
+- [x] Confirm one isolated empty dispatcher cycle spends no model turn,
+  creates no task, and starts no helper bundle.
+- [x] Confirm every transient relay process exits after a terminal relay
+  outcome, including a failed handoff.
+- [ ] Delete the old automation through the official Codex automation API.
 - [x] Confirm real new replies create exact queue items.
-- [ ] Acknowledge the event only after the existing X workflow records its
+- [x] Acknowledge the event only after the existing X workflow records its
   disposition.
 - [x] Keep all publishing inside the claimed Sol High Browser run.
 - [x] Confirm four naturally rediscovered events produce one dispatcher claim.
-- [x] Confirm a second scheduled run inside the lease does not start a
+- [x] Confirm a second dispatcher run inside the lease does not start a
   duplicate Sol turn.
+- [x] Confirm efficiency, balanced, and performance modes are selected in live
+  resource samples without changing Sol High quality.
+- [x] Confirm unit coverage makes active voice and the post-voice hold defer
+  Browser work while the durable queue remains available.
+- [x] Confirm the dispatcher process lock stops a second manual or launchd
+  instance before gate or model startup.
 - [x] Confirm a failed pre-resolution worker releases the exact claim.
 - [x] Confirm the Browser worker durably resolves every event and the
   dispatcher prunes the claim.
@@ -58,6 +80,11 @@
 - [x] Confirm mandatory response mode rejects content-based skips.
 - [x] Confirm a clean API canary rediscovers prior content skips and publishes
   exactly one reply to each without receiving target IDs.
+- [x] Update Codex CLI from the official digest-bearing release asset, run
+  `codex doctor`, notify Alex, and append local plus GitHub history.
+- [x] Install and load the event dispatcher and Codex CLI updater LaunchAgents.
+- [x] Prove the loaded dispatcher remains model-free and process-neutral across
+  repeated empty cycles.
 
 ## Gate 4: backup
 

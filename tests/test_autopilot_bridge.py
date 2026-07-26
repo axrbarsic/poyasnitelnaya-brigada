@@ -105,6 +105,49 @@ class AutopilotBridgeTests(unittest.TestCase):
             claimed["event_ids"],
         )
 
+    def test_relay_handoff_reservation_blocks_duplicate_wake(self) -> None:
+        self.write_events([self.event()])
+
+        first = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+        second = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        self.assertTrue(first["dispatch"])
+        self.assertEqual(first["status"], "handoff_reserved_ready")
+        self.assertFalse(second["dispatch"])
+        self.assertEqual(second["status"], "handoff_reserved")
+        self.assertEqual(
+            second["reservation_token"],
+            first["reservation_token"],
+        )
+
+    def test_owner_claim_clears_relay_handoff_reservation(self) -> None:
+        self.write_events([self.event()])
+        reservation = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        claimed = autopilot_bridge.claim(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        state = json.loads(
+            (self.root / "var/relay-handoff.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertTrue(reservation["dispatch"])
+        self.assertTrue(claimed["dispatch"])
+        self.assertEqual(state["status"], "claimed")
+        self.assertEqual(state["claim_token"], claimed["claim_token"])
+
     def test_claim_returns_exact_desktop_handoff(self) -> None:
         self.write_events([self.event()])
 

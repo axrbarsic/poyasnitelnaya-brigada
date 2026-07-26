@@ -34,6 +34,9 @@ enabled = false
 [plugins."viktor-knowledge-bank@personal"]
 enabled = false
 
+[plugins."openai-developers@openai-curated-remote"]
+enabled = false
+
 [plugins."browser@openai-bundled"]
 enabled = true
 

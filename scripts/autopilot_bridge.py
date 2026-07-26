@@ -7,7 +7,9 @@ import argparse
 import json
 import sqlite3
 import sys
+import uuid
 from contextlib import closing
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -38,6 +40,100 @@ def health_path(config_path: Path) -> Path:
         config_path,
         str(config.get("autopilot_health_file", "var/autopilot-health.json")),
     )
+
+
+def handoff_reservation_path(config_path: Path) -> Path:
+    config = autopilot_dispatch.read_json(config_path)
+    return resolve_path(
+        config_path,
+        str(
+            config.get(
+                "relay_handoff_reservation_file",
+                "var/relay-handoff.json",
+            )
+        ),
+    )
+
+
+def reserve_handoff(
+    config_path: Path,
+    *,
+    lease_seconds: int,
+) -> dict[str, Any]:
+    """Atomically reserve one relay handoff without claiming X events."""
+
+    ready = gate(config_path, lease_seconds=lease_seconds)
+    if not ready.get("dispatch"):
+        return ready
+    config = autopilot_dispatch.read_json(config_path)
+    reservation_seconds = int(
+        config.get("relay_handoff_reservation_seconds", 180)
+    )
+    if reservation_seconds <= 0:
+        raise ValueError("relay handoff reservation seconds must be positive")
+    path = handoff_reservation_path(config_path)
+    now = autopilot_dispatch.utc_now()
+    with autopilot_dispatch.locked_state(path):
+        previous = (
+            autopilot_dispatch.read_json(path) if path.exists() else {}
+        )
+        expires_at = autopilot_dispatch.parse_time(
+            str(previous.get("expires_at", ""))
+        )
+        if (
+            previous.get("status") == "reserved"
+            and expires_at is not None
+            and expires_at > now
+        ):
+            return {
+                "status": "handoff_reserved",
+                "dispatch": False,
+                "event_ids": list(ready.get("event_ids", [])),
+                "pending_count": int(ready.get("pending_count", 0)),
+                "reservation_token": previous.get("reservation_token"),
+                "expires_at": previous.get("expires_at"),
+            }
+        token = str(uuid.uuid4())
+        expires_at = now + timedelta(seconds=reservation_seconds)
+        payload = {
+            "version": 1,
+            "status": "reserved",
+            "reservation_token": token,
+            "event_ids": list(ready.get("event_ids", [])),
+            "reserved_at": autopilot_dispatch.isoformat(now),
+            "expires_at": autopilot_dispatch.isoformat(expires_at),
+        }
+        autopilot_dispatch.atomic_write_json(path, payload)
+    return {
+        **ready,
+        "status": "handoff_reserved_ready",
+        "reservation_token": token,
+        "expires_at": autopilot_dispatch.isoformat(expires_at),
+    }
+
+
+def clear_handoff_reservation(
+    config_path: Path,
+    *,
+    claim_token: str,
+    event_ids: list[str],
+) -> None:
+    path = handoff_reservation_path(config_path)
+    with autopilot_dispatch.locked_state(path):
+        previous = (
+            autopilot_dispatch.read_json(path) if path.exists() else {}
+        )
+        autopilot_dispatch.atomic_write_json(
+            path,
+            {
+                "version": 1,
+                "status": "claimed",
+                "reservation_token": previous.get("reservation_token"),
+                "claim_token": claim_token,
+                "event_ids": event_ids,
+                "cleared_at": autopilot_dispatch.isoformat(),
+            },
+        )
 
 
 def write_health(
@@ -169,6 +265,11 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         connection.close()
     event_ids = [str(event["id"]) for event in events]
     claim_token = str(result["claim_token"])
+    clear_handoff_reservation(
+        config_path,
+        claim_token=claim_token,
+        event_ids=event_ids,
+    )
     prompt = autopilot_contract.build_prompt(
         events,
         config_path=config_path,
@@ -410,6 +511,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--lease-seconds", type=int, default=1800)
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("gate")
+    subparsers.add_parser("reserve-handoff")
     subparsers.add_parser("claim")
     started = subparsers.add_parser("started")
     started.add_argument("--claim-token", required=True)
@@ -429,6 +531,11 @@ def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     if arguments.command == "gate":
         result = gate(
+            arguments.config,
+            lease_seconds=arguments.lease_seconds,
+        )
+    elif arguments.command == "reserve-handoff":
+        result = reserve_handoff(
             arguments.config,
             lease_seconds=arguments.lease_seconds,
         )

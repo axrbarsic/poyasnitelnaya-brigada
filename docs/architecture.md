@@ -18,26 +18,32 @@ an X reply.
 5. SQLite deduplicates immutable event IDs and advances `since_id`.
 6. `wake-request.json` exposes only queued event metadata and canonical URLs.
 7. A macOS notification reports a new queue item without invoking a model.
-8. Under explicit standing authority, a five-minute Luna Low Codex Desktop
-   automation runs the read-only `autopilot_bridge gate`. It exits for an empty,
-   leased, voice-paused, or resource-deferred queue.
-9. A ready gate sends one follow-up to a pinned Sol High Browser-owner task.
-   That task executes the atomic claim and remains the only publication owner.
-10. A separate one-minute watchdog checks poll freshness and failure count.
-11. Sol High opens the complete live X subtree, classifies text and media in
+8. Under explicit standing authority, a one-minute LaunchAgent runs the
+   read-only `autopilot_bridge gate` in Python. Empty, leased, voice-paused, and
+   resource-deferred queues use no model and create no Codex task.
+9. A ready gate checks Codex Desktop. If Desktop is absent, the supervisor
+   launches it in the canonical repository and records the exact PID it owns.
+10. One existing in-app Luna Low heartbeat atomically reserves the handoff and
+    sends one `send_message_to_thread` call to the pinned Sol High
+    Browser-owner. Adjacent heartbeat ticks cannot hand off the same queue.
+11. The pinned task executes the atomic claim inside Codex Desktop and remains
+    the only authenticated Browser publication owner. After the queue is empty,
+    the supervisor may close only the exact Desktop PID that it launched.
+12. A separate one-minute watchdog checks poll freshness and failure count.
+13. Sol High opens the complete live X subtree, classifies text and media in
     context, and resolves an event only after publication, exact proof of an
     existing direct Alex child reply, or a terminal blocker.
-12. `initial-audit-next` performs only free mechanical grouping and exact-text
+14. `initial-audit-next` performs only free mechanical grouping and exact-text
     extraction. It never decides stance, relevance, or whether to publish.
-13. `initial-audit-expire --hours H --as-of UTC` fixes Alex's requested
+15. `initial-audit-expire --hours H --as-of UTC` fixes Alex's requested
     per-run lookback cutoff without Browser or model use. Dry-run and apply
     reuse the same timestamp. In one transaction it imports exact stored API
     history and records an age-policy skip only for unresolved events strictly
     older than that cutoff.
-14. New API events preserve expanded attachment metadata and alt text. Missing
+16. New API events preserve expanded attachment metadata and alt text. Missing
     media metadata still requires live Browser inspection and is never treated
     as proof that no media exists.
-15. `browser-handoff-sync` imports exact Browser history and applies only
+17. `browser-handoff-sync` imports exact Browser history and applies only
     already confirmed Sol dispositions. It cannot draft, classify, or publish,
     and it fails closed on missing history or mismatched chain metadata. A
     publication must include both the inspected user turn and the exact
@@ -47,18 +53,18 @@ an X reply.
     Every handoff proves exactly one authorization route: a direct reply to
     Alex, a reply in a conversation with a stored Alex turn, or an explicit
     `@axrbarsic` mention returned by the authenticated mentions endpoint.
-16. `autopilot_bridge` enriches each claimed event with compact
+18. `autopilot_bridge` enriches each claimed event with compact
     `commenter_memory` keyed by stable X user ID. It contains source-linked
     public turns and exact Alex children from any stored conversation. A deeper
     `commenter-history` query can search all retained years without adding the
     full archive to every Sol prompt.
-17. `x_archive_import.py` stages Alex's historical public posts and replies
+19. `x_archive_import.py` stages Alex's historical public posts and replies
     from an official X archive. It validates the archive account against the
     configured numeric X user ID, ignores direct-message members, and rejects
     append-only conflicts. Archive replies are exposed separately from exact
     incoming interaction history because the archive does not contain a
     complete copy of other users' turns.
-18. `candidate_corpus.py` stores externally collected public posts in a
+20. `candidate_corpus.py` stores externally collected public posts in a
     quarantined index keyed by stable X user ID. It exposes at most three
     compact search hints per event. Unverified hints have
     `usable_as_evidence=false`; only an append-only live X or official API
@@ -97,8 +103,8 @@ injects the known target ID into the queue or automation prompt.
 3. Deploy the change.
 4. Run target-agnostic `mandatory-response-requeue` with one fixed lookback and
    `as-of`, first dry-run and then apply.
-5. Let the five-minute Luna dispatcher rediscover the event and wake the pinned
-   Sol owner.
+5. Let the model-free dispatcher rediscover the event, launch Desktop when
+   needed, and let the existing in-app Luna relay wake the pinned Sol owner.
 6. Verify one live direct Alex child, exact history, durable resolution, empty
    queue and no active lease.
 
@@ -160,13 +166,19 @@ contradiction claim, or factual conclusion.
 - Resolved events disappear from the wake file and are pruned from dispatcher
   state. An unresolved event becomes eligible again after the lease expires,
   so a crashed Browser-owner turn cannot strand the queue forever.
-- The built-in Browser is not available in Codex CLI. The scheduled Desktop
-  automation therefore performs Browser work inside its own Sol High run and
-  never delegates through a CLI resume or a cross-thread app call.
+- The built-in Browser is unavailable in an external app-server runtime.
+  Production therefore uses the existing in-app relay and pinned Codex Desktop
+  owner. The legacy app-server path remains only as a disabled diagnostic
+  fallback.
+- The dispatcher never launches Desktop for an empty or deferred queue. It
+  records the exact PID it starts and never closes a Desktop instance opened
+  by Alex.
+- A short handoff reservation closes the race between adjacent heartbeat
+  ticks before the Browser owner can acquire its global claim.
 - An IAB timeout is classified per execution turn. One fresh turn in the same
   Browser-owner task may run the official bootstrap once; publication resumes
   only after an authenticated read-only preflight succeeds.
-- `work_in_progress` survives overlapping empty scheduled runs. `completed`
+- `work_in_progress` survives overlapping empty dispatcher checks. `completed`
   requires every claimed ID to leave the wake queue. A postflight warning never
   overwrites a durable resolution with failure.
 - Generic acknowledgement rejects eligible replies. Only a durable `resolve`
@@ -198,7 +210,10 @@ contradiction claim, or factual conclusion.
 
 ## Token model
 
-Polling, deduplication, queueing, health checks, lease checks, and notifications
-use no model calls. A five-minute Luna Low scheduled run spends a small amount
-of context on the read-only gate. Sol High receives a turn only when the gate
-proves that a ready event exists.
+Polling, deduplication, queueing, health checks, lease checks, notifications,
+CLI update checks, and every terminal idle gate use no model calls. In normal
+unattended idle, supervisor-owned Desktop is closed, so the in-app heartbeat
+does not run either. A ready queue spends one short Luna Low turn on the
+cross-thread relay. Sol High receives a turn only for real queued events. If
+Alex intentionally keeps Desktop open, the in-app heartbeat still performs its
+small scheduled Luna gate while the terminal dispatcher remains model-free.

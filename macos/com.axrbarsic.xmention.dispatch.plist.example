@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.axrbarsic.xmention.dispatch</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/python3</string>
+        <string>REPLACE_PROJECT_DIR/scripts/app_server_dispatch.py</string>
+        <string>--config</string>
+        <string>REPLACE_CONFIG_PATH</string>
+        <string>--lease-seconds</string>
+        <string>1800</string>
+    </array>
+    <key>WorkingDirectory</key>
+    <string>REPLACE_PROJECT_DIR</string>
+    <key>StartInterval</key>
+    <integer>REPLACE_DISPATCH_INTERVAL</integer>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>ProcessType</key>
+    <string>Background</string>
+    <key>LowPriorityIO</key>
+    <true/>
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+    <key>StandardOutPath</key>
+    <string>/dev/null</string>
+    <key>StandardErrorPath</key>
+    <string>/dev/null</string>
+</dict>
+</plist>

@@ -15,6 +15,8 @@ TEMPLATES = (
     "com.axrbarsic.xmention.poll.plist",
     "com.axrbarsic.xmention.watchdog.plist",
     "com.axrbarsic.xmention.janitor.plist",
+    "com.axrbarsic.xmention.dispatch.plist",
+    "com.axrbarsic.xmention.codex-update.plist",
 )
 
 
@@ -31,10 +33,18 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
     janitor_minimum_age = int(
         config_payload.get("session_janitor_minimum_age_seconds", 60)
     )
+    dispatch_interval = int(
+        config_payload.get("app_server_dispatch_interval_seconds", 60)
+    )
+    codex_update_interval = int(
+        config_payload.get("codex_cli_update_interval_seconds", 21600)
+    )
     if (
         poll_interval <= 0
         or watchdog_interval <= 0
         or janitor_interval <= 0
+        or dispatch_interval <= 0
+        or codex_update_interval <= 0
         or janitor_minimum_age < 60
     ):
         raise ValueError(
@@ -70,6 +80,14 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
         text = text.replace(
             "REPLACE_JANITOR_MINIMUM_AGE",
             str(janitor_minimum_age),
+        )
+        text = text.replace(
+            "REPLACE_DISPATCH_INTERVAL",
+            str(dispatch_interval),
+        )
+        text = text.replace(
+            "REPLACE_CODEX_UPDATE_INTERVAL",
+            str(codex_update_interval),
         )
         if "REPLACE_" in text:
             raise RuntimeError(f"Unresolved placeholder in {template.name}")

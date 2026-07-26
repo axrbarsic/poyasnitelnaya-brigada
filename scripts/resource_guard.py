@@ -615,13 +615,47 @@ def helper_envelope_is_healthy(
         >= int(config.get("memory_guard_helper_recovery_free_percent", 25))
         and sample.codex_rss_mb
         <= float(
-            config.get("memory_guard_helper_recovery_codex_rss_mb", 1800)
+            config.get("memory_guard_helper_recovery_codex_rss_mb", 2000)
         )
         and (
             sample.node_repl_rss_mb + sample.mcp_process_rss_mb
             <= float(
                 config.get(
                     "memory_guard_helper_recovery_total_rss_mb",
+                    512,
+                )
+            )
+        )
+    )
+
+
+def high_free_dispatch_envelope_is_healthy(
+    sample: ResourceSample,
+    config: dict[str, Any],
+) -> bool:
+    return (
+        sample.free_percent is not None
+        and sample.free_percent
+        >= int(config.get("memory_guard_high_free_recovery_percent", 50))
+        and sample.codex_rss_mb
+        <= float(
+            config.get(
+                "memory_guard_high_free_recovery_codex_rss_mb",
+                2700,
+            )
+        )
+        and sample.renderer_count
+        <= int(
+            config.get(
+                "memory_guard_high_free_recovery_renderer_count",
+                5,
+            )
+        )
+        and (
+            sample.node_repl_rss_mb + sample.mcp_process_rss_mb
+            <= float(
+                config.get(
+                    "memory_guard_high_free_recovery_helper_rss_mb",
                     512,
                 )
             )
@@ -639,6 +673,10 @@ def assess(
     limits_config = profile_limits(config, mode) if mode else config
     historical_swap = swap_is_historical(sample, config)
     helpers_recovered = helper_envelope_is_healthy(sample, config)
+    high_free_recovered = high_free_dispatch_envelope_is_healthy(
+        sample,
+        config,
+    )
     limits = (
         ("codex_rss_mb", sample.codex_rss_mb, float),
         ("renderer_count", sample.renderer_count, int),
@@ -649,8 +687,10 @@ def assess(
         maximum = converter(limits_config[f"memory_guard_max_{name}"])
         if (
             name in {"node_repl_count", "mcp_process_count"}
-            and helpers_recovered
+            and (helpers_recovered or high_free_recovered)
         ):
+            continue
+        if name == "codex_rss_mb" and high_free_recovered:
             continue
         if value > maximum:
             reasons.append(f"{name}={value} exceeds {maximum}")
@@ -663,7 +703,11 @@ def assess(
         maximum_swap = float(
             limits_config.get("memory_guard_max_swap_used_mb", float("inf"))
         )
-        if sample.swap_used_mb > maximum_swap and not historical_swap:
+        if (
+            sample.swap_used_mb > maximum_swap
+            and not historical_swap
+            and not high_free_recovered
+        ):
             reasons.append(
                 f"swap_used_mb={sample.swap_used_mb} exceeds {maximum_swap}"
             )

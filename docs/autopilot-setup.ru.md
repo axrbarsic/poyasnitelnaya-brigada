@@ -4,89 +4,116 @@
 
 ## Назначение
 
-Watcher обнаруживает ответы X без токенов модели. Локальная automation Luna Low
-каждые пять минут выполняет только read-only gate. При пустой, занятой или
-отложенной очереди запуск завершается до Sol и Browser. Готовая очередь будит
-одну закрепленную сессию Sol High, которая атомарно выполняет claim и
-обрабатывает события.
+Система разделяет бесплатную механику и содержательную работу:
 
-Каждый непустой claim получает до `commenter_memory_limit` точных публичных
-взаимодействий с тем же стабильным X user ID. Более глубокая сохраненная история
-доступна Sol через `commenter-history`, только когда она полезна текущему ответу.
-Та же память может содержать до трех карантинных подсказок из внешнего корпуса.
-Их запрещено использовать как доказательство до проверки точного публичного
-поста в живом X или через официальный X API.
+1. X watcher раз в минуту получает упоминания через официальный X API,
+   дедуплицирует их и обновляет SQLite с очередью.
+2. Watchdog контролирует свежесть poll и ошибки API.
+3. Python dispatcher раз в минуту выполняет model-free `gate`.
+4. Пустая, занятая или отложенная очередь завершается без модели, Browser и
+   новой задачи Codex.
+5. Готовая очередь запускает Codex Desktop в каноническом workspace, если
+   приложение закрыто. При неудаче очередь сохраняется, запуск повторяется, а
+   Alex получает локальное уведомление.
+6. Одна существующая in-app heartbeat-сессия на Luna Low выполняет
+   `reserve-handoff` и только затем один `send_message_to_thread`.
+7. Закрепленная сессия Sol High атомарно делает `claim`, восстанавливает живую
+   ветку, публикует и сохраняет точную историю.
+8. После завершения supervisor может закрыть только тот Desktop, который
+   запустил сам. Пользовательский Desktop он не закрывает.
 
-Codex CLI намеренно исключен из Browser-работы. Официальное руководство Codex
-указывает, что встроенный Browser недоступен в Codex CLI и IDE extension.
-`scripts/autopilot_resume.py` является fail-closed защитой старой установки.
-Смотрите официальную документацию
-[Built-in browser](https://learn.chatgpt.com/docs/browser?surface=app) и
-[Scheduled tasks](https://learn.chatgpt.com/docs/automations.md).
+Внешний app-server не выполняет relay или Browser-работу: его runtime не имеет
+встроенной Browser-сессии Codex Desktop и desktop-only cross-thread tools.
+Browser всегда принадлежит постоянной owner-сессии внутри приложения.
+
+> Текущее состояние deployment на 2026-07-26: постоянный Sol High owner прошел
+> read-only Browser preflight при заблокированном экране и обработал три
+> события. Затем новый in-app relay самостоятельно передал следующее
+> органическое событие, которое было опубликовано, импортировано и durably
+> resolved. Практический тест обнаружил гонку двух соседних heartbeat; она
+> закрыта атомарным `reserve-handoff` с TTL. Старая automation `x` остается
+> paused до финальной проверки нового LaunchAgent.
+>
+> В том же live checkpoint изолированный пустой цикл прошёл через настоящий
+> entry point dispatcher и вернул `idle`. Task IDs, relay и owner turns,
+> количество app-server, node helper, renderer и dispatcher до и после не
+> изменились.
+
+Официальные основания архитектуры:
+
+- [Codex app-server](https://learn.chatgpt.com/docs/app-server)
+- [Scheduled tasks](https://learn.chatgpt.com/docs/automations)
+- [Project config files](https://learn.chatgpt.com/docs/config-file/config-advanced#project-config-files-codexconfigtoml)
+- [Built-in Browser](https://learn.chatgpt.com/docs/browser?surface=app)
 
 ## Компоненты
 
 | Компонент | Частота | Модель | Ответственность |
 | --- | --- | --- | --- |
-| X watcher LaunchAgent | 1 минута | нет | Получение, дедупликация, SQLite, очередь |
-| Watchdog LaunchAgent | 1 минута | нет | Контроль polling и ошибок API |
-| Session janitor LaunchAgent | 1 минута | нет | Архив задач и recovery осиротевшего claim |
-| Automation dispatcher | 5 минут | Luna Low | Read-only gate и пробуждение владельца только для готовой очереди |
-| Закрепленный Browser owner | по событию | Sol High | Claim, Browser, решение, публикация, проверка |
-| Кастомный GPT | только Pro | настроенный Pro | Длинный ответ в точной исторической conversation |
+| X watcher LaunchAgent | 1 минута | нет | API, дедупликация, SQLite, очередь |
+| Watchdog LaunchAgent | 1 минута | нет | Контроль poll и API |
+| Session janitor LaunchAgent | 1 минута | нет | Архив служебных задач, recovery claim |
+| Event dispatcher LaunchAgent | 1 минута | нет при idle | Gate, запуск и managed shutdown Desktop |
+| In-app relay heartbeat | пока Desktop открыт | Luna Low | Reservation и одно сообщение owner |
+| Закрепленный Browser owner | по событию | Sol High | Claim, Browser, фактчек, публикация |
+| Кастомный GPT | только Pro | настроенный Pro | Длинный ответ в исторической conversation |
+| Codex CLI updater | 6 часов | нет без update | Version check, SHA-256, doctor, журнал |
 
-Минутный poll не использует токены. Пустой scheduled run использует только
-короткий контекст Luna Low. Sol High получает работу лишь при `dispatch=true`.
-Claim выполняется постоянным владельцем до чтения skills и references.
-Архивация не входит в prompt automation и не расходует модель. Ее выполняет
-локальный app-server janitor.
+Пустой terminal monitoring не расходует model tokens и не создает задач.
+Штатный unattended режим держит Desktop закрытым. При событии supervisor
+поднимает его, Luna получает короткий relay-turn, а после завершения managed
+Desktop закрывается. Если Desktop открыт самим Alex, supervisor его не закрывает
+и минутный heartbeat остается минимальной ценой in-app транспорта.
 
 ## Конфигурация
 
-Добавьте локальные значения в игнорируемый `config.json`:
+Проект должен быть trusted, иначе локальный `.codex/config.toml` игнорируется.
+Добавьте в `~/.codex/config.toml`:
+
+```toml
+[projects."/absolute/path/to/x-mention-watcher"]
+trust_level = "trusted"
+```
+
+Создайте `config.json` из примера и задайте:
 
 ```json
 {
-  "autopilot_state_file": "var/autopilot-dispatch.json",
-  "autopilot_health_file": "var/autopilot-health.json",
   "browser_owner_cwd": ".",
+  "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
+  "desktop_relay_mode": "in_app_heartbeat",
+  "desktop_auto_quit_after_work": true,
+  "desktop_auto_quit_grace_seconds": 180,
+  "relay_handoff_reservation_seconds": 180,
+  "app_server_dispatch_interval_seconds": 60,
+  "app_server_dispatch_state_file": "var/app-server-dispatch.json",
+  "app_server_dispatch_lock_file": "var/app-server-dispatch.lock",
+  "codex_cli_update_channel": "preview",
+  "codex_cli_update_interval_seconds": 21600,
+  "resource_mode": "auto",
   "memory_guard_enabled": true,
   "voice_priority_enabled": true,
   "voice_priority_hold_seconds": 300,
-  "memory_guard_state_file": "var/resource-health.json",
-  "resource_mode": "auto",
-  "resource_mode_idle_seconds": 900,
-  "resource_mode_performance_min_free_percent": 35,
-  "memory_guard_swap_recovery_free_percent": 25,
-  "memory_guard_swap_recovery_codex_rss_mb": 2000,
-  "memory_guard_helper_recovery_free_percent": 25,
-  "memory_guard_helper_recovery_codex_rss_mb": 1800,
-  "memory_guard_helper_recovery_total_rss_mb": 512,
   "session_janitor_interval_seconds": 60,
   "session_janitor_minimum_age_seconds": 60,
-  "session_janitor_orphan_owner_seconds": 300,
-  "session_janitor_reap_helpers": true,
-  "session_janitor_helper_grace_seconds": 120,
   "commenter_memory_limit": 12,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }
 ```
 
-Точка означает каталог рядом с `config.json`, то есть канонический корень
-этого проекта. Не создавайте отдельный Browser owner workspace.
+`browser_owner_thread_id` принадлежит одной закрепленной owner-сессии на Sol
+High. `x-relay` является heartbeat одной существующей Luna Low сессии, а не
+standalone automation. `reserve-handoff` не claim события, но атомарно блокирует
+повторную отправку wake на 180 секунд. Успешный owner claim очищает reservation.
 
-Вложенные ответы отслеживаются автоматически, как только в точной истории
-диалога появляется ход `alex`. Список тематических ID корневых постов не нужен.
-Вложенный комментарий всё равно требует живой классификации контекста перед
-ответом автора.
+Ручной ответ Alex считается ходом `alex`. Если на него отвечают, Browser owner
+поднимает точную живую ветку, сохраняет ранее не импортированный ручной ответ и
+использует его вместе со всей историей до подготовки продолжения.
 
-Храните runtime state в игнорируемом `var/`. Не коммитьте `config.json`,
-токены, cookies, SQLite, очередь или локальную историю.
+## Установка LaunchAgent
 
-## Установка сервисов без токенов
-
-Сгенерируйте три LaunchAgent:
+Сгенерируйте пять plist:
 
 ```bash
 python3 scripts/render_launchd.py \
@@ -94,101 +121,64 @@ python3 scripts/render_launchd.py \
   --output-dir /absolute/path/to/staging
 ```
 
-Установите и загрузите:
+Установите:
 
 - `com.axrbarsic.xmention.poll.plist`
 - `com.axrbarsic.xmention.watchdog.plist`
 - `com.axrbarsic.xmention.janitor.plist`
+- `com.axrbarsic.xmention.dispatch.plist`
+- `com.axrbarsic.xmention.codex-update.plist`
 
-Не устанавливайте устаревший `com.axrbarsic.xmention.autopilot.plist`.
+Не создавайте пятиминутную Codex automation для X. Каждый standalone
+scheduled run создает отдельную задачу и может оставлять helper-процессы в
+долгоживущем Codex Desktop runtime. Старую automation нужно сначала поставить
+на паузу, проверить новый dispatcher, затем удалить через официальный
+`automation_update`.
 
-## Создание Browser owner и automation
+## Машина состояний
 
-Создайте одну обычную задачу, закрепите ее и сохраните точный thread ID:
+1. LaunchAgent вызывает `scripts/app_server_dispatch.py`.
+2. Python выполняет model-free `gate`.
+3. `idle`, `work_in_progress` и `deferred_resources` записываются в state и
+   завершаются без app-server.
+4. При `ready` supervisor проверяет main process Codex Desktop и запускает
+   `codex app CANONICAL_ROOT`, если процесс отсутствует.
+5. In-app heartbeat выполняет атомарный `reserve-handoff`.
+6. Победивший relay делает один `send_message_to_thread` в точный Browser owner
+   с override Sol High. Соседний heartbeat получает `handoff_reserved`.
+7. Browser owner выполняет `claim`, затем `started`.
+8. Owner загружает `x-twitter-operator`, открывает минимум вкладок, выполняет
+   double dedupe и publication transaction.
+9. После exact history и durable resolution owner выполняет `completed`.
+10. Если Desktop был запущен supervisor, пустая очередь и owner=null запускают
+    grace timer, после которого завершается только сохраненный managed PID.
 
-- модель: `gpt-5.6-sol`
-- reasoning effort: `high`
-- роль: единственный Browser owner
+## Контракты памяти и качества
 
-Добавьте этот ID в `session_janitor_protected_thread_ids`.
-
-Затем создайте одну локальную запланированную задачу:
-
-- модель: `gpt-5.6-luna`
-- reasoning effort: `low`
-- частота: каждые пять минут
-- уведомления: только при неудачных запусках
-
-Её постоянный prompt должен реализовывать эту машину состояний:
-
-1. Выполнить `autopilot_bridge.py ... gate`.
-2. При `dispatch=false` тихо завершиться без Browser, skills и `list_threads`.
-3. При `dispatch=true` подключить `send_message_to_thread` через `tool_search`.
-4. Вызвать этот Codex app tool напрямую, не из `functions.exec`, JavaScript
-   или `tools.*`. Отправить follow-up в закрепленную задачу с явным override
-   `gpt-5.6-sol`, effort `high`.
-5. Browser owner выполняет `claim`, затем `started`, исполняет prompt из claim,
-   сохраняет exact history и durable resolution.
-6. После удаления заявленных событий из очереди owner выполняет `completed`.
-7. При ошибке до durable resolution owner выполняет `failed`.
-8. Owner закрывает только свои Browser-вкладки и остается закрепленным.
-9. Dispatcher никогда не создает inbox-item и не обрабатывает X самостоятельно.
-10. Не запускать X API postflight poll внутри automation. Polling и доступ к
-   Keychain принадлежат LaunchAgent.
-
-Готовый переносимый текст находится в
-[`automation-prompts/luna-dispatcher.ru.md`](automation-prompts/luna-dispatcher.ru.md).
-В нем заменяются только путь проекта и ID закрепленной сессии.
-
-Сохраняйте следующие инварианты prompt:
-
-- один claim token на один pending batch;
-- idle: ноль Browser-вкладок;
-- short: одна X-вкладка;
-- Pro: одна X, одна ChatGPT и одна активная generation;
-- все принадлежащие run вкладки закрываются перед завершением;
-- каждый короткий ответ пишет и проверяет Sol High;
-- никаких тематических исключений;
-- postflight warning не откатывает durable resolution.
-
-## Поведение при сбоях
-
-- Ошибка API не двигает cursor X.
-- Очередь и dispatcher state используют file locks и atomic writes.
-- Глобальная аренда одного владельца подавляет overlapping scheduled runs,
-  включая новый event, который появился во время уже активного claim.
-- Повторный запуск сохраняет `work_in_progress` и не заменяет активный claim.
-- Новый процесс Codex с другим runtime ID немедленно может reclaim очередь
-  после перезапуска приложения.
-- Janitor освобождает claim после обрыва stream только если связанная задача
-  устарела. Статус `notLoaded` сам по себе не считается доказательством смерти.
-- Janitor завершает только helper bundle, точно сопоставленный с уже
-  завершенной X-задачей. Текущий владелец и неоднозначные процессы остаются
-  нетронутыми.
-- Resource guard до Browser откладывает работу при критической памяти, но не
-  удаляет event и не двигает очередь.
-- Ошибка до durable resolution освобождает точный claim.
-- `completed` принимается только после исчезновения заявленных ID из wake
-  queue.
-- `reconcile-completed` дополнительно проверяет каждый event в SQLite перед
-  исправлением postflight health state.
-- `blocked_pending_iab` не является успехом и не resolve событие.
-- Старый CLI launcher завершается с ошибкой до claim и расхода модели.
+- Idle: ноль model tokens, ноль Browser-вкладок, ноль новых задач.
+- Short: одна X-вкладка.
+- Pro: одна X-вкладка, одна ChatGPT-вкладка, одна активная generation.
+- Только Sol High принимает публикационные решения и пишет short.
+- Luna не анализирует X и не формулирует ответы.
+- Ресурсный guard ставит Browser на паузу, но не удаляет очередь.
+- Активный голосовой разговор включает экономный режим и удерживает паузу.
+- Блокировка дисплея не является ошибкой. При awake Mac owner выполняет один
+  read-only Browser preflight и продолжает, если `iab` доступен.
+- `reserve-handoff` и глобальный owner lease предотвращают перекрывающиеся
+  relay и Browser-owner запуски.
+- Janitor не должен убивать текущий Browser owner или неоднозначный процесс.
 
 ## Живой canary
 
-Используйте один или несколько реальных unresolved replies:
+1. Поставьте старую X automation на паузу.
+2. Запустите один реальный unresolved event без передачи его ID модели.
+3. Подтвердите естественное обнаружение watcher.
+4. Подтвердите один relay-turn и один Sol High owner-turn.
+5. Проверьте verified X URL, exact history и durable resolution.
+6. Проверьте, что event исчез из очереди.
+7. Выполните пустой цикл dispatcher и убедитесь, что число задач и helper
+   процессов не выросло.
+8. Только после этого удалите старую automation и оставьте LaunchAgent.
 
-1. Поставьте Desktop automation на паузу и выгрузите poll/watchdog.
-2. Сохраните backup SQLite и runtime JSON.
-3. Удалите только canary events и открутите `since_id` до непосредственно
-   предыдущего наблюдаемого ID.
-4. Подтвердите, что очередь, dispatch state, история и resolutions больше не
-   знают эти события.
-5. Загрузите poll/watchdog и активируйте Desktop automation, не передавая ей
-   event ID.
-6. Требуйте естественное повторное обнаружение через API, один атомарный claim,
-   одну verified publication на событие, exact history и durable resolution.
-7. Подтвердите пустую очередь и пустой dispatch state.
-
-Нельзя имитировать успех прямой вставкой resolution.
+Успех нельзя имитировать прямой вставкой resolution. Любая проверка после
+перезапуска должна начинаться с живого состояния очереди и точной ветки X.

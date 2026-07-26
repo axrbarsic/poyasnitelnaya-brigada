@@ -269,45 +269,58 @@ Enable this mode only after Alex explicitly grants continuing publication
 authority for queued eligible replies.
 
 1. Keep the Python watcher read-only and token-free.
-2. Run the poll and watchdog LaunchAgents every minute. Run the model-free
-   session janitor LaunchAgent every five minutes.
-3. Run one Codex Desktop scheduled automation every five minutes with
-   `gpt-5.6-sol` and High reasoning.
-4. Let the current scheduled run atomically claim the queue with
+2. Run poll, watchdog, session janitor, and event dispatcher LaunchAgents every
+   minute.
+3. Let the event dispatcher run `autopilot_bridge gate` without a model.
+4. Only for `dispatch=true`, launch Codex Desktop when it is absent. One
+   existing in-app Luna Low heartbeat atomically reserves the handoff and sends
+   one direct `send_message_to_thread` call to the pinned Sol High owner.
+5. Let the pinned owner atomically claim the queue with
    `scripts/autopilot_bridge.py claim`.
-5. Run the mechanical claim before loading X skills and references. If the
+6. Run the mechanical claim before loading X skills and references. If the
    queue is empty, another global owner is active, or memory is deferred, use
    no Browser, no `list_threads`, and no task archival. Finish normally before
    opening Browser. Never self-archive the current active run.
-6. For eligible IDs, atomically record one global 30-minute owner lease before
+7. For eligible IDs, atomically record one global 30-minute owner lease before
    Browser work. A newly arriving event must wait for this owner.
-7. Include only eligible event IDs, canonical URLs, local state paths, and the
-   standing workflow contract. The scheduled run must read exact history from
+8. Include only eligible event IDs, canonical URLs, local state paths, and the
+   standing workflow contract. The owner must read exact history from
    SQLite, the ledger, and recorded ChatGPT conversation URLs.
-8. Mark the claim `started`, execute the returned prompt in the same Sol run,
+9. Mark the claim `started`, execute the returned prompt in the same Sol turn,
    and remove the lease only if work fails before durable resolution.
-9. Use one X tab for short work. Open one ChatGPT tab only for a proven Pro
+10. Use one X tab for short work. Open one ChatGPT tab only for a proven Pro
    route. Never run more than one active Pro conversation on Alex's 8 GB iMac.
-10. Never let the watcher or bridge publish. Sol High must perform live
-    context inspection, fact checking, duplicate prevention, routing, composer
-    validation, publication, URL verification, history storage, and durable
-    resolution.
-11. Treat the lease as crash recovery, not permission to post twice. Every Sol
+11. Never let the watcher, dispatcher, or relay publish. Sol High must perform
+    live context inspection, fact checking, duplicate prevention, routing,
+    composer validation, publication, URL verification, history storage, and
+    durable resolution.
+12. Treat the lease as crash recovery, not permission to post twice. Every Sol
     turn still runs live X and ledger duplicate checks before composer fill.
-12. Never route Browser work through Codex CLI or a cross-thread app message.
-    The built-in Browser is unavailable in Codex CLI.
-13. After durable history and resolution remove every claimed ID from the wake
+13. Never perform Browser work in Codex CLI or the external app-server
+    fallback. The in-app relay's cross-thread message is only a wakeup. Browser
+    belongs to the pinned Codex Desktop owner.
+14. After durable history and resolution remove every claimed ID from the wake
     queue, mark `completed`. If a later API poll cannot read Keychain, mark
     `completed_with_warning`; do not release or republish resolved events.
-14. Keep the automation itself free of a final X poll. The one-minute
+15. Keep the owner turn free of a final X poll. The one-minute
     LaunchAgent owns token-free polling.
-15. Close all task-owned Browser tabs and finish normally for every terminal
+16. Close all task-owned Browser tabs and finish normally for every terminal
     outcome. The model-free janitor archives old exact service tasks through
     the local Codex app-server.
-16. After a Codex restart, a changed runtime ID may immediately reclaim an old
+17. After a Codex restart, a changed runtime ID may immediately reclaim an old
     owner. After a stream disconnect in the same runtime, the janitor releases
     the claim only when its related task is inactive and stale. A fresh
     `notLoaded` status is not sufficient.
+18. When the queue becomes empty, close only the exact Desktop PID launched by
+    the supervisor after its configured grace period. Never close a
+    user-started Desktop instance.
+19. A locked display is not a Browser blocker while macOS is awake. Active
+    voice or system sleep defers Browser work and leaves every event durable.
+
+Do not retire the paused fallback automation until the installed dispatcher
+LaunchAgent proves one complete live cycle. On 2026-07-26, the in-app relay
+already completed repeated live handoffs and the reservation suppressed the
+observed adjacent-heartbeat race.
 
 ## Mandatory response reconciliation
 
@@ -324,13 +337,14 @@ Use the same `--as-of` for dry-run and apply. The command receives no event ID.
 It selects recent eligible `skip` resolutions and previously ignored mention
 replies with no exact direct Alex child, records the prior state in
 `response_policy_requeues`, and returns them to the ordinary wake queue. The
-scheduled Sol run then discovers them through the same queue contract as any
-new event. Existing publications and proven already-answered events remain
+model-free dispatcher then launches Desktop when needed, and the existing
+in-app relay wakes the pinned owner through the same queue contract as any new
+event. Existing publications and proven already-answered events remain
 untouched.
 
 When diagnosing a reported miss, do not manually queue its known ID. Fix the
 universal eligibility rule, run the target-agnostic reconciliation, and let the
-ordinary scheduled Sol run discover and process it. See
+ordinary dispatcher and pinned Sol owner discover and process it. See
 [reliability-debugging.md](reliability-debugging.md).
 
 ## Conversation history commands

@@ -17,6 +17,14 @@ memory, Sol High reasoning, and verified Browser publication.
        width="430">
 </p>
 
+> Deployment status on 2026-07-26: the terminal-first path passed a live
+> canary. The persistent in-app Sol High Browser owner processed three events,
+> then the Luna Low event relay independently detected and handed off the next
+> organic event. All four replies were published, verified, and durably
+> resolved. The external app-server is no longer used as the relay. The old
+> `x` automation remains paused until the installed LaunchAgent gets its final
+> verification.
+
 ## License and attribution
 
 The project is published under the permissive [MIT License](LICENSE). You may
@@ -36,18 +44,25 @@ content decisions:
 
 - Python and the official X API detect, deduplicate, persist, and queue replies.
 - A token-free Python dispatcher leases only eligible events.
-- A Luna Low Codex Desktop automation runs only a read-only gate every five
-  minutes. Empty, busy, and resource-deferred queues exit without Sol or
-  Browser.
-- Only a ready queue wakes one pinned Browser-owner task on Sol High. That task
-  claims atomically and remains the only publication owner.
+- A minute LaunchAgent runs the read-only gate in plain Python. Empty, busy,
+  and resource-deferred queues use no model, open no Browser, and create no
+  Codex task.
+- Only a ready queue checks Codex Desktop. The terminal supervisor starts the
+  canonical workspace when Desktop is closed. Launch failure keeps every event
+  pending and raises a throttled local alert.
+- One existing in-app Luna Low heartbeat atomically reserves the handoff and
+  sends one message to the persistent Sol High owner. A TTL reservation blocks
+  adjacent heartbeat runs from sending the same wake twice.
 - A model-free LaunchAgent archives completed service runs and recovers stale
   owner claims without creating another Codex task.
-- The same janitor gracefully terminates only helper processes exactly matched
-  to a completed scheduled run, never the current Browser owner.
+- The supervisor may stop only a Desktop process that it launched itself, and
+  only after the queue is empty, the owner lease is gone, and a grace period
+  expires. It never closes a user-opened Desktop.
 - The Sol High owner opens the real X thread in the authenticated Codex
   Browser, checks context and sources, prevents duplicates, and publishes one
   response per eligible event.
+- The dispatcher accepts success only after every dispatched event ID leaves
+  the durable queue. A released unresolved claim is a failure.
 - A reply posted manually by Alex is still an `alex` turn. When someone
   continues that branch, the owner restores the manual parent and full live
   context, persists them, and only then prepares the next reply.
@@ -91,11 +106,11 @@ It does not:
 - store API tokens in files;
 - make content-based skip decisions.
 
-When Alex explicitly grants standing autopilot authority, a Luna Low scheduled
-automation checks the durable queue and wakes the pinned Sol High Browser owner
-only for real work. The retired CLI launcher is not used because the built-in
-Browser is unavailable in Codex CLI. Sol High remains the only publication
-brain.
+When Alex explicitly grants standing autopilot authority, a model-free
+LaunchAgent checks the durable queue. Only a ready queue starts Desktop when
+needed. One existing in-app Luna Low heartbeat sends a reserved wake to the
+persistent Sol High Browser owner through the Codex app thread API. Sol High
+remains the only publication brain.
 
 With `mandatory_response_mode=true`, every eligible available event inside the
 requested lookback receives exactly one reply. Support, sarcasm, jokes, insults,
@@ -130,9 +145,9 @@ post or official X API record is append-only verified.
 
 ## Current checkpoint
 
-Polling and watchdog LaunchAgents are installed for `@axrbarsic`. Both run
-every minute, and a Codex Desktop scheduled automation checks the compact queue
-every five minutes. A complete initial
+Polling, watchdog, janitor, and event dispatcher LaunchAgents run every minute
+for `@axrbarsic`. The dispatcher checks the compact queue without a model and
+starts Luna only for ready work. A complete initial
 review remains a separate gate and must finish before an empty incremental
 queue is treated as proof of completeness.
 
@@ -353,8 +368,8 @@ python3 scripts/autopilot_bridge.py \
   claim
 ```
 
-If `dispatch` is true, the current Sol High scheduled run executes that prompt
-itself and marks the claim as started:
+If `dispatch` is true, the ready-only Luna relay sends the prompt to the pinned
+Sol High owner. The owner claims and marks the work as started:
 
 ```bash
 python3 scripts/autopilot_bridge.py \
@@ -384,10 +399,11 @@ python3 scripts/autopilot_bridge.py \
   --error "Browser work failed"
 ```
 
-An empty queue exits without opening Browser. A non-empty claim contains only
-eligible event metadata and the standing contract. The scheduled Browser owner
-reads exact conversation history from SQLite, the append-only ledger, and
-recorded custom GPT URLs. The watcher and bridge never post directly.
+An empty queue exits without a model or Browser. A non-empty claim contains
+only eligible event metadata and the standing contract. The pinned Browser
+owner reads exact conversation history from SQLite, the append-only ledger, and
+recorded custom GPT URLs. The watcher, dispatcher, and relay never post
+directly.
 
 `scripts/autopilot_resume.py` is a fail-closed retirement guard. It always
 exits nonzero and never claims an event or starts Codex. This prevents an old
@@ -510,9 +526,9 @@ python3 xmention_watcher.py --config config.json mandatory-response-requeue \
 ```
 
 This command is also the clean-experiment entry point after an eligibility fix.
-Run dry-run and apply with one identical `as-of`, then let the ordinary
-scheduled Sol automation discover the event. Do not manually inject its known
-ID. The reusable diagnostic contract is stored in
+Run dry-run and apply with one identical `as-of`, then let the model-free
+dispatcher launch the relay and the pinned Sol owner. Do not manually inject
+the known ID. The reusable diagnostic contract is stored in
 [`reliability-debugging.md`](skill-backup/x-twitter-operator/references/reliability-debugging.md).
 
 Never rewrite an old ledger record when scope changes or a contract dependency
@@ -646,15 +662,13 @@ and applies the correction atomically, so append-only history remains intact.
 
 ## Background service
 
-The `macos/` directory contains LaunchAgent templates whose intervals come from
-`config.json`. The deployment uses a one-minute poll, watchdog, and model-free
-session janitor. Codex Desktop owns a five-minute Luna Low dispatcher that
-wakes one pinned Sol High Browser owner only for a ready queue. The janitor
-archives old service tasks and recovers
-orphaned claims without creating a Codex task or spending model tokens. It
-also reaps only exact completed-run helper bundles after a grace period, which
-prevents five-minute `node_repl` and MCP accumulation without broad process
-killing.
+The `macos/` directory contains five LaunchAgent templates whose intervals come
+from `config.json`: poll, watchdog, session janitor, event dispatcher, and
+Codex CLI updater. The idle terminal path is entirely model-free. A ready queue
+starts Codex Desktop when needed, then the existing in-app Luna relay wakes the
+pinned Sol High Browser owner. The janitor archives historical service tasks
+and recovers orphaned claims without creating a Codex task or spending model
+tokens.
 
 Do not install the LaunchAgents on another machine until a live shadow run with
 the official X API has matched a manual Browser scan.
@@ -667,7 +681,7 @@ python3 scripts/render_launchd.py \
   --output-dir /absolute/path/to/staging
 ```
 
-Rendering validates all three plists. Loading them with `launchctl` is a
+Rendering validates all five plists. Loading them with `launchctl` is a
 separate, explicit production step.
 
 ## Tests

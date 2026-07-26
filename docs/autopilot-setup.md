@@ -4,87 +4,113 @@
 
 ## Purpose
 
-The watcher detects X replies without model tokens. A Luna Low Codex Desktop
-automation runs only a read-only gate every five minutes. Empty, busy, and
-deferred queues exit before Sol and Browser. A ready queue wakes one pinned Sol
-High task, which claims atomically and processes the events.
+The system separates token-free mechanics from content decisions:
 
-Each non-empty claim includes up to `commenter_memory_limit` source-linked prior
-interactions for the same stable X user ID. Sol may query deeper retained
-history with `commenter-history` only when it is useful to the current reply.
-The same memory may include up to three quarantined external candidate hints.
-They remain unusable as evidence until the exact public post is verified live
-or through the official X API.
+1. The X watcher polls the official mentions endpoint every minute, deduplicates
+   events, and updates SQLite plus the durable queue.
+2. The watchdog checks polling freshness and API failures.
+3. A Python dispatcher runs the model-free `gate` every minute.
+4. Empty, busy, or resource-deferred queues exit without a model, Browser, or
+   a new Codex task.
+5. A ready queue starts Codex Desktop in the canonical workspace when the app
+   is closed. Failure keeps the queue intact, retries later, and alerts Alex.
+6. One existing in-app Luna Low heartbeat runs `reserve-handoff`, then makes
+   exactly one `send_message_to_thread` call.
+7. The pinned Sol High task claims atomically, restores the live thread,
+   publishes, and stores exact history.
+8. The supervisor may later stop only a Desktop process it launched itself.
 
-Codex CLI is intentionally excluded from Browser work. The official Codex
-manual states that the built-in Browser is unavailable in Codex CLI and the
-IDE extension. `scripts/autopilot_resume.py` is a fail-closed retirement guard.
-See the official [Built-in browser](https://learn.chatgpt.com/docs/browser?surface=app)
-and [Scheduled tasks](https://learn.chatgpt.com/docs/automations.md)
-documentation.
+The external app-server performs neither relay nor Browser work. It has no
+Codex Desktop built-in Browser session or desktop-only cross-thread tools. The
+authenticated Browser always belongs to the persistent in-app owner.
+
+> Current deployment status, 2026-07-26: the persistent Sol High owner passed
+> a read-only Browser preflight with the display locked and processed three
+> events. The new in-app relay then handed off the next organic event without
+> manual prompting; it was published, imported, and durably resolved. The
+> live test exposed a race between adjacent heartbeat runs. Atomic
+> `reserve-handoff` with a TTL now closes that race. The old `x` automation
+> remains paused until the new LaunchAgent completes final verification.
+>
+> The same live checkpoint also ran an isolated empty cycle through the real
+> dispatcher entry point. It returned `idle`; task IDs, relay and owner turns,
+> app-server count, node helper count, renderer count, and dispatcher count
+> were unchanged before and after.
+
+Official architecture references:
+
+- [Codex app-server](https://learn.chatgpt.com/docs/app-server)
+- [Scheduled tasks](https://learn.chatgpt.com/docs/automations)
+- [Project config files](https://learn.chatgpt.com/docs/config-file/config-advanced#project-config-files-codexconfigtoml)
+- [Built-in Browser](https://learn.chatgpt.com/docs/browser?surface=app)
 
 ## Components
 
 | Component | Frequency | Model | Responsibility |
 | --- | --- | --- | --- |
-| X watcher LaunchAgent | 1 minute | none | Fetch, deduplicate, persist, queue |
-| Watchdog LaunchAgent | 1 minute | none | Detect stale polling or API failures |
-| Session janitor LaunchAgent | 1 minute | none | Archive tasks and recover an orphaned claim |
-| Automation dispatcher | 5 minutes | Luna Low | Read-only gate and wake the owner only for a ready queue |
-| Pinned Browser owner | per event | Sol High | Claim, inspect Browser, decide, publish, verify |
-| Custom GPT | Pro only | configured Pro | Long answer in the exact historical conversation |
+| X watcher LaunchAgent | 1 minute | none | API, dedupe, SQLite, queue |
+| Watchdog LaunchAgent | 1 minute | none | Poll and API health |
+| Session janitor LaunchAgent | 1 minute | none | Archive service tasks, recover claims |
+| Event dispatcher LaunchAgent | 1 minute | none while idle | Gate, Desktop launch, managed shutdown |
+| In-app relay heartbeat | while Desktop is open | Luna Low | Reservation and one owner message |
+| Pinned Browser owner | per event | Sol High | Claim, Browser, sources, publication |
+| Custom GPT | Pro only | configured Pro | Long answer in historical conversation |
+| Codex CLI updater | 6 hours | none without update | Version, SHA-256, doctor, history |
 
-The minute poll is token-free. An empty scheduled run uses only a short Luna Low
-context. Sol High receives work only when `dispatch` is true. The pinned owner
-claims before loading skills and references. Archiving is not part of the
-automation prompt and consumes no model. The local app-server janitor performs
-it independently.
+Idle terminal monitoring spends zero model tokens and creates no task. The
+normal unattended state keeps Desktop closed. A real event starts it and uses
+one short Luna relay turn. A supervisor-managed Desktop closes after the queue
+and owner lease clear. A Desktop opened by Alex is never closed automatically.
 
-## Configure
+## Configuration
 
-Add local values to ignored `config.json`:
+The project must be trusted or Codex ignores its local `.codex/config.toml`.
+Add this to `~/.codex/config.toml`:
+
+```toml
+[projects."/absolute/path/to/x-mention-watcher"]
+trust_level = "trusted"
+```
+
+Create ignored `config.json` from the example and set:
 
 ```json
 {
-  "autopilot_state_file": "var/autopilot-dispatch.json",
-  "autopilot_health_file": "var/autopilot-health.json",
   "browser_owner_cwd": ".",
+  "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
+  "desktop_relay_mode": "in_app_heartbeat",
+  "desktop_auto_quit_after_work": true,
+  "desktop_auto_quit_grace_seconds": 180,
+  "relay_handoff_reservation_seconds": 180,
+  "app_server_dispatch_interval_seconds": 60,
+  "app_server_dispatch_state_file": "var/app-server-dispatch.json",
+  "app_server_dispatch_lock_file": "var/app-server-dispatch.lock",
+  "codex_cli_update_channel": "preview",
+  "codex_cli_update_interval_seconds": 21600,
+  "resource_mode": "auto",
   "memory_guard_enabled": true,
   "voice_priority_enabled": true,
   "voice_priority_hold_seconds": 300,
-  "memory_guard_state_file": "var/resource-health.json",
-  "resource_mode": "auto",
-  "resource_mode_idle_seconds": 900,
-  "resource_mode_performance_min_free_percent": 35,
-  "memory_guard_swap_recovery_free_percent": 25,
-  "memory_guard_swap_recovery_codex_rss_mb": 2000,
-  "memory_guard_helper_recovery_free_percent": 25,
-  "memory_guard_helper_recovery_codex_rss_mb": 1800,
-  "memory_guard_helper_recovery_total_rss_mb": 512,
   "session_janitor_interval_seconds": 60,
   "session_janitor_minimum_age_seconds": 60,
-  "session_janitor_orphan_owner_seconds": 300,
-  "session_janitor_reap_helpers": true,
-  "session_janitor_helper_grace_seconds": 120,
   "commenter_memory_limit": 12,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }
 ```
 
-The dot resolves to the directory beside `config.json`, which is the canonical
-project root. Do not create a separate Browser owner workspace.
+`browser_owner_thread_id` identifies one pinned Sol High owner. `x-relay` is a
+heartbeat attached to one existing Luna Low thread, not a standalone
+automation. `reserve-handoff` does not claim X events, but prevents duplicate
+wake delivery for 180 seconds. A successful owner claim clears the reservation.
 
-Nested replies are tracked automatically once exact conversation history
-contains an `alex` turn. No topic-specific root ID list is required. A nested
-reply still requires live context classification before an author reply.
+A reply posted manually by Alex is an `alex` turn. If somebody answers it, the
+Browser owner restores the exact live branch, stores any previously unseen
+manual reply, and uses the complete history before drafting the continuation.
 
-Keep runtime state under ignored `var/`. Never commit `config.json`, tokens,
-cookies, SQLite, queue state, or local history.
+## Install LaunchAgents
 
-## Install token-free services
-
-Render all three LaunchAgents:
+Render five plist files:
 
 ```bash
 python3 scripts/render_launchd.py \
@@ -92,103 +118,64 @@ python3 scripts/render_launchd.py \
   --output-dir /absolute/path/to/staging
 ```
 
-Install and load:
+Install:
 
 - `com.axrbarsic.xmention.poll.plist`
 - `com.axrbarsic.xmention.watchdog.plist`
 - `com.axrbarsic.xmention.janitor.plist`
+- `com.axrbarsic.xmention.dispatch.plist`
+- `com.axrbarsic.xmention.codex-update.plist`
 
-Do not install the retired `com.axrbarsic.xmention.autopilot.plist`.
+Do not create a five-minute Codex automation for X. Every standalone scheduled
+run creates a separate task and may leave helper processes attached to the
+long-lived Codex Desktop runtime. Pause the old automation, prove the new
+dispatcher, then delete it through the official `automation_update` API.
 
-## Create the Browser owner and automation
+## State machine
 
-Create one ordinary task, pin it, and retain its exact thread ID:
+1. LaunchAgent invokes `scripts/app_server_dispatch.py`.
+2. Python runs `gate`.
+3. `idle`, `work_in_progress`, and `deferred_resources` are recorded and exit
+   without app-server.
+4. On `ready`, the supervisor starts `codex app CANONICAL_ROOT` if Desktop is
+   absent.
+5. The in-app heartbeat atomically runs `reserve-handoff`.
+6. The winning relay sends one message to the exact Browser owner with a Sol
+   High override. An adjacent heartbeat receives `handoff_reserved`.
+7. The Browser owner runs `claim`, then `started`.
+8. The owner loads `x-twitter-operator`, opens the minimum tabs, performs double
+   dedupe, and executes the publication transaction.
+9. After exact history and durable resolution, the owner runs `completed`.
+10. If Desktop was supervisor-launched, an empty queue and cleared owner lease
+    start a grace timer before that exact managed PID is stopped.
 
-- model: `gpt-5.6-sol`
-- reasoning effort: `high`
-- role: the only Browser owner
+## Memory and quality contracts
 
-Add that ID to `session_janitor_protected_thread_ids`.
-
-Then create one local scheduled task with:
-
-- model: `gpt-5.6-luna`
-- reasoning effort: `low`
-- cadence: every five minutes
-- failed-run notifications only
-
-Its durable prompt must implement this state machine:
-
-1. Run `autopilot_bridge.py ... gate`.
-2. On `dispatch=false`, exit quietly without Browser, skills, or `list_threads`.
-3. On `dispatch=true`, expose `send_message_to_thread` through `tool_search`.
-4. Call that Codex app tool directly, never from `functions.exec`, JavaScript,
-   or `tools.*`. Send one follow-up to the pinned task with explicit
-   `gpt-5.6-sol` and high-effort overrides.
-5. The Browser owner runs `claim`, then `started`, and executes the returned
-   prompt.
-6. After exact history and durable resolution remove every claimed event from
-   `wake-request.json`, then run `completed`.
-7. On an error before durable resolution, run `failed`.
-8. The owner closes only its task-owned Browser tabs and remains pinned.
-9. The dispatcher never creates an inbox item or handles X content itself.
-10. Do not run the X API postflight poll inside the owner. The LaunchAgent
-   owns polling and Keychain access.
-
-The copy-ready production template is stored in
-[`automation-prompts/luna-dispatcher.ru.md`](automation-prompts/luna-dispatcher.ru.md),
-with an [English installation note](automation-prompts/luna-dispatcher.en.md).
-Only the project path and pinned task ID are replaced.
-
-Preserve these prompt invariants:
-
-- one claim token for one pending batch;
-- idle: zero Browser tabs;
-- short: one X tab;
-- Pro: one X tab, one ChatGPT tab, and one active generation;
-- every run-owned tab closes before the run exits;
-- Sol High writes and validates every short reply;
-- no topic-specific exceptions;
-- a postflight warning never rolls back a durable resolution.
-
-## Failure behavior
-
-- API failure does not advance the X cursor.
-- Queue and dispatcher state use file locks and atomic writes.
-- One global owner lease suppresses overlapping scheduled runs, including a
-  new event that appears while an earlier claim is still active.
-- A second run preserves `work_in_progress`; it cannot replace the active
-  claim.
-- A new Codex runtime ID may reclaim immediately after the app restarts.
-- The janitor releases a stream-disconnected claim only when its related task
-  becomes stale. `notLoaded` alone is not proof of death.
-- The janitor terminates only a helper bundle exactly correlated with a
-  completed X task. The current owner and ambiguous processes remain
-  untouched.
-- The resource guard defers Browser work under critical memory pressure without
-  resolving an event or moving the queue.
-- Failure before durable resolution releases the exact claim.
-- `completed` is accepted only after the claimed IDs leave the wake queue.
-- `reconcile-completed` additionally verifies every event in SQLite before it
-  can correct a postflight health state.
-- `blocked_pending_iab` is not success and must not resolve an event.
-- The retired CLI launcher exits nonzero before claiming or spending a model
-  run.
+- Idle: zero model tokens, zero Browser tabs, zero new tasks.
+- Short: one X tab.
+- Pro: one X tab, one ChatGPT tab, one active generation.
+- Only Sol High makes publication decisions and writes short replies.
+- Luna never analyzes X content or drafts responses.
+- The resource guard pauses Browser work without deleting queued events.
+- An active voice conversation selects the efficiency profile and holds a
+  post-voice pause.
+- Display lock is not an error. On an awake Mac, the owner performs one
+  read-only Browser preflight and continues when `iab` is available.
+- The handoff reservation and global owner lease prevent overlapping relay and
+  Browser-owner runs.
+- The janitor never terminates the current Browser owner or an ambiguous
+  process.
 
 ## Live canary
 
-Use one or more real unresolved replies:
+1. Pause the old X automation.
+2. Use one real unresolved event without giving its ID to the model.
+3. Require natural watcher discovery.
+4. Confirm one relay turn and one Sol High owner turn.
+5. Verify the X URL, exact history, and durable resolution.
+6. Confirm the event leaves the queue.
+7. Run one idle dispatcher cycle and verify no task or helper count increase.
+8. Only then delete the old automation and keep the LaunchAgent.
 
-1. Pause the Desktop automation and unload poll/watchdog.
-2. Save an SQLite backup and copies of runtime JSON.
-3. Remove only the canary events and rewind `since_id` to the immediately
-   preceding observed ID.
-4. Confirm queue, dispatch state, history, and resolutions no longer know the
-   events.
-5. Load poll/watchdog and activate the Desktop automation without giving it
-   event IDs.
-6. Require natural API rediscovery, one atomic claim, one verified publication
-   per event, exact history, and durable resolution.
-7. Confirm queue and dispatch state are empty.
-
-Never simulate success by directly inserting a resolution.
+Never simulate success by inserting a resolution directly. A post-restart
+check must begin from the live durable queue and exact X thread.

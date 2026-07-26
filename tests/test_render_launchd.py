@@ -22,6 +22,7 @@ class RenderLaunchdTests(unittest.TestCase):
                         "watchdog_interval_seconds": 60,
                         "session_janitor_interval_seconds": 300,
                         "session_janitor_minimum_age_seconds": 60,
+                        "app_server_dispatch_interval_seconds": 45,
                         "wake_file": "var/wake-request.json",
                     }
                 ),
@@ -39,6 +40,18 @@ class RenderLaunchdTests(unittest.TestCase):
             arguments = payload["ProgramArguments"]
             age_index = arguments.index("--minimum-age-seconds") + 1
             self.assertEqual(arguments[age_index], "60")
+            dispatch_path = next(
+                path
+                for path in rendered
+                if path.name == "com.axrbarsic.xmention.dispatch.plist"
+            )
+            dispatch_payload = plistlib.loads(
+                dispatch_path.read_bytes()
+            )
+            self.assertEqual(
+                dispatch_payload["StartInterval"],
+                45,
+            )
 
     def test_janitor_minimum_age_rejects_unsafe_value(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

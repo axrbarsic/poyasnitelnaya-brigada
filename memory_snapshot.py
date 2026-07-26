@@ -30,6 +30,16 @@ def _snapshot_connection(path: Path) -> sqlite3.Connection:
     return connection
 
 
+def _readonly_snapshot_connection(path: Path) -> sqlite3.Connection:
+    connection = sqlite3.connect(
+        f"{path.as_uri()}?mode=ro&immutable=1",
+        uri=True,
+    )
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA foreign_keys = ON")
+    return connection
+
+
 def create_memory_snapshot(
     config: watcher.Config,
     connection: sqlite3.Connection,
@@ -64,7 +74,7 @@ def create_memory_snapshot(
         finally:
             destination.close()
 
-        snapshot = _snapshot_connection(database_path)
+        snapshot = _readonly_snapshot_connection(database_path)
         try:
             integrity = [
                 str(row[0])

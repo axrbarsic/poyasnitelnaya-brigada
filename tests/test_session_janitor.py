@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import fcntl
+import io
+import json
+import sys
 import unittest
+from contextlib import redirect_stdout
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -11,6 +16,53 @@ from scripts import session_janitor
 
 
 class SessionJanitorTests(unittest.TestCase):
+    def test_main_refuses_overlapping_run_before_app_server(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            lock_path = root / "janitor.lock"
+            config_path = root / "config.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "session_janitor_lock_file": str(lock_path),
+                        "session_janitor_orphan_owner_seconds": 300,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            output = io.StringIO()
+            with lock_path.open("a+", encoding="utf-8") as held_lock:
+                fcntl.flock(
+                    held_lock.fileno(),
+                    fcntl.LOCK_EX | fcntl.LOCK_NB,
+                )
+                with (
+                    mock.patch.object(
+                        sys,
+                        "argv",
+                        [
+                            "session_janitor.py",
+                            "--config",
+                            str(config_path),
+                        ],
+                    ),
+                    redirect_stdout(output),
+                    mock.patch.object(
+                        session_janitor,
+                        "run_janitor",
+                        side_effect=AssertionError(
+                            "overlap must stop before app-server"
+                        ),
+                    ),
+                ):
+                    result = session_janitor.main()
+
+            self.assertEqual(result, 0)
+            self.assertEqual(
+                json.loads(output.getvalue())["status"],
+                "already_running",
+            )
+
     def test_owner_age_is_measured_from_claim(self) -> None:
         age = session_janitor.owner_age_seconds(
             {"claimed_at": "2026-07-26T09:00:00Z"},
