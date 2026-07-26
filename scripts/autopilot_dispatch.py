@@ -151,13 +151,17 @@ def load_wake_events(path: Path) -> list[dict[str, Any]]:
 
 def load_state(path: Path) -> dict[str, Any]:
     if not path.exists():
-        return {"version": STATE_VERSION, "events": {}}
+        return {"version": STATE_VERSION, "events": {}, "owner": None}
     payload = read_json(path)
     if payload.get("version") != STATE_VERSION:
         raise ValueError("Unsupported autopilot dispatcher state version")
     events = payload.get("events")
     if not isinstance(events, dict):
         raise ValueError("autopilot dispatcher events must be an object")
+    owner = payload.get("owner")
+    if owner is not None and not isinstance(owner, dict):
+        raise ValueError("autopilot dispatcher owner must be an object or null")
+    payload.setdefault("owner", None)
     return payload
 
 
@@ -206,6 +210,7 @@ def claim(
     *,
     lease_seconds: int,
     now: datetime | None = None,
+    runtime_id: str | None = None,
 ) -> dict[str, Any]:
     if lease_seconds <= 0:
         raise ValueError("lease_seconds must be positive")
@@ -215,6 +220,75 @@ def claim(
         events = load_wake_events(wake_file)
         state = load_state(state_file)
         state_events = state["events"]
+        owner = state.get("owner")
+        if isinstance(owner, dict):
+            owner_runtime_id = owner.get("runtime_id")
+            runtime_changed = (
+                isinstance(owner_runtime_id, str)
+                and bool(owner_runtime_id)
+                and isinstance(runtime_id, str)
+                and bool(runtime_id)
+                and owner_runtime_id != runtime_id
+            )
+            owner_started_at = parse_time(owner.get("claimed_at"))
+            if owner_started_at is not None and not runtime_changed:
+                owner_age = (current_time - owner_started_at).total_seconds()
+                if owner_age < lease_seconds:
+                    active_ids = [
+                        str(value) for value in owner.get("event_ids", [])
+                    ]
+                    state["updated_at"] = isoformat(current_time)
+                    atomic_write_json(state_file, state)
+                    return {
+                        "dispatch": False,
+                        "owner_busy": True,
+                        "active_claim_token": owner.get("claim_token"),
+                        "active_event_ids": active_ids,
+                        "pending_count": len(events),
+                        "leased_count": len(active_ids),
+                        "lease_seconds": lease_seconds,
+                    }
+            if runtime_changed:
+                owner_token = owner.get("claim_token")
+                for event_id in owner.get("event_ids", []):
+                    record = state_events.get(str(event_id))
+                    if (
+                        isinstance(record, dict)
+                        and record.get("claim_token") == owner_token
+                    ):
+                        record.pop("claim_token", None)
+                        record.pop("last_dispatched_at", None)
+            state["owner"] = None
+
+        legacy_active: list[tuple[str, dict[str, Any]]] = []
+        for event_id, record in state_events.items():
+            if not isinstance(record, dict):
+                continue
+            dispatched_at = parse_time(record.get("last_dispatched_at"))
+            if dispatched_at is None:
+                continue
+            age_seconds = (current_time - dispatched_at).total_seconds()
+            if age_seconds < lease_seconds and record.get("claim_token"):
+                legacy_active.append((event_id, record))
+        if legacy_active:
+            tokens = sorted(
+                {str(record["claim_token"]) for _, record in legacy_active}
+            )
+            active_ids = sorted(
+                (event_id for event_id, _ in legacy_active),
+                key=int,
+            )
+            return {
+                "dispatch": False,
+                "owner_busy": True,
+                "active_claim_token": tokens[0] if len(tokens) == 1 else None,
+                "active_claim_tokens": tokens,
+                "active_event_ids": active_ids,
+                "pending_count": len(events),
+                "leased_count": len(active_ids),
+                "lease_seconds": lease_seconds,
+            }
+
         pending_ids = {event["id"] for event in events}
         state["events"] = {
             event_id: value
@@ -223,35 +297,20 @@ def claim(
         }
         state_events = state["events"]
 
-        eligible: list[dict[str, Any]] = []
-        leased_count = 0
-        for event in events:
-            record = state_events.get(event["id"])
-            dispatched_at = (
-                parse_time(record.get("last_dispatched_at"))
-                if isinstance(record, dict)
-                else None
-            )
-            if dispatched_at is not None:
-                age_seconds = (current_time - dispatched_at).total_seconds()
-                if age_seconds < lease_seconds:
-                    leased_count += 1
-                    continue
-            eligible.append(event)
-
-        if not eligible:
+        if not events:
             state["updated_at"] = isoformat(current_time)
             atomic_write_json(state_file, state)
             return {
                 "dispatch": False,
-                "pending_count": len(events),
-                "leased_count": leased_count,
+                "owner_busy": False,
+                "pending_count": 0,
+                "leased_count": 0,
                 "lease_seconds": lease_seconds,
             }
 
         claim_token = str(uuid.uuid4())
         claimed_at = isoformat(current_time)
-        for event in eligible:
+        for event in events:
             previous = state_events.get(event["id"])
             dispatch_count = (
                 int(previous.get("dispatch_count", 0))
@@ -263,6 +322,12 @@ def claim(
                 "dispatch_count": dispatch_count + 1,
                 "last_dispatched_at": claimed_at,
             }
+        state["owner"] = {
+            "claim_token": claim_token,
+            "claimed_at": claimed_at,
+            "event_ids": [event["id"] for event in events],
+            "runtime_id": runtime_id,
+        }
         state["updated_at"] = claimed_at
         atomic_write_json(state_file, state)
         return {
@@ -271,7 +336,7 @@ def claim(
             "claimed_at": claimed_at,
             "lease_seconds": lease_seconds,
             "pending_count": len(events),
-            "events": [compact_event(event) for event in eligible],
+            "events": [compact_event(event) for event in events],
         }
 
 
@@ -287,6 +352,9 @@ def release(state_file: Path, claim_token: str) -> dict[str, Any]:
                 record.pop("claim_token", None)
                 record.pop("last_dispatched_at", None)
                 released.append(event_id)
+        owner = state.get("owner")
+        if isinstance(owner, dict) and owner.get("claim_token") == claim_token:
+            state["owner"] = None
         state["updated_at"] = isoformat()
         atomic_write_json(state_file, state)
         return {"released": sorted(released), "claim_token": claim_token}
@@ -306,6 +374,9 @@ def finish(state_file: Path, claim_token: str) -> dict[str, Any]:
         )
         for event_id in finished:
             del state["events"][event_id]
+        owner = state.get("owner")
+        if isinstance(owner, dict) and owner.get("claim_token") == claim_token:
+            state["owner"] = None
         state["updated_at"] = isoformat()
         atomic_write_json(state_file, state)
         return {"finished": finished, "claim_token": claim_token}
@@ -316,6 +387,21 @@ def status(wake_file: Path, state_file: Path, *, lease_seconds: int) -> dict[str
         events = load_wake_events(wake_file)
         state = load_state(state_file)
         current_time = utc_now()
+        owner = state.get("owner")
+        owner_busy = False
+        active_claim_token: str | None = None
+        active_event_ids: list[str] = []
+        if isinstance(owner, dict):
+            claimed_at = parse_time(owner.get("claimed_at"))
+            if (
+                claimed_at is not None
+                and (current_time - claimed_at).total_seconds() < lease_seconds
+            ):
+                owner_busy = True
+                active_claim_token = str(owner.get("claim_token"))
+                active_event_ids = [
+                    str(value) for value in owner.get("event_ids", [])
+                ]
         leased_ids: list[str] = []
         for event in events:
             record = state["events"].get(event["id"])
@@ -334,6 +420,9 @@ def status(wake_file: Path, state_file: Path, *, lease_seconds: int) -> dict[str
             "pending_ids": [event["id"] for event in events],
             "leased_count": len(leased_ids),
             "leased_ids": leased_ids,
+            "owner_busy": owner_busy,
+            "active_claim_token": active_claim_token,
+            "active_event_ids": active_event_ids,
             "lease_seconds": lease_seconds,
         }
 

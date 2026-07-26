@@ -29,12 +29,15 @@ documentation.
 | --- | --- | --- | --- |
 | X watcher LaunchAgent | 1 minute | none | Fetch, deduplicate, persist, queue |
 | Watchdog LaunchAgent | 1 minute | none | Detect stale polling or API failures |
+| Session janitor LaunchAgent | 5 minutes | none | Archive tasks and recover an orphaned claim |
 | Codex Desktop automation | 5 minutes | Sol High | Claim a non-empty queue, inspect Browser, decide, publish, verify |
 | Custom GPT | Pro only | configured Pro | Long answer in the exact historical conversation |
 
 The minute poll is token-free. The scheduled run still spends a small amount of
 Sol context on an empty queue, but it never opens Browser or performs content
-work unless `dispatch` is true.
+work unless `dispatch` is true. Claim runs before skills and references are
+loaded. Archiving is not part of the automation prompt and consumes no model.
+The local app-server janitor performs it independently.
 
 ## Configure
 
@@ -45,6 +48,14 @@ Add local values to ignored `config.json`:
   "autopilot_state_file": "var/autopilot-dispatch.json",
   "autopilot_health_file": "var/autopilot-health.json",
   "browser_owner_cwd": ".",
+  "memory_guard_enabled": true,
+  "memory_guard_state_file": "var/resource-health.json",
+  "resource_mode": "auto",
+  "resource_mode_idle_seconds": 900,
+  "session_janitor_interval_seconds": 300,
+  "session_janitor_orphan_owner_seconds": 300,
+  "session_janitor_reap_helpers": true,
+  "session_janitor_helper_grace_seconds": 120,
   "commenter_memory_limit": 12,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
@@ -63,7 +74,7 @@ cookies, SQLite, queue state, or local history.
 
 ## Install token-free services
 
-Render only poll and watchdog LaunchAgents:
+Render all three LaunchAgents:
 
 ```bash
 python3 scripts/render_launchd.py \
@@ -75,6 +86,7 @@ Install and load:
 
 - `com.axrbarsic.xmention.poll.plist`
 - `com.axrbarsic.xmention.watchdog.plist`
+- `com.axrbarsic.xmention.janitor.plist`
 
 Do not install the retired `com.axrbarsic.xmention.autopilot.plist`.
 
@@ -89,23 +101,31 @@ Create one local scheduled task with:
 
 Its durable prompt must implement this state machine:
 
-1. Run `autopilot_bridge.py ... claim`.
-2. If `dispatch` is false, exit without Browser, file changes, messages, or an
-   inbox item.
-3. If `dispatch` is true, run `started --claim-token ...`.
-4. Execute the returned prompt inside the current run as the only Browser
+1. Before reading automation memory, skills, or references, run
+   `autopilot_bridge.py ... claim`.
+2. If status is `memory_deferred` or `dispatch` is false, leave the queue
+   unchanged and do not open Browser.
+3. Finish the empty run normally without `list_threads`, Browser, or
+   self-archiving.
+4. If `dispatch` is true, run `started --claim-token ...`.
+5. Execute the returned prompt inside the current run as the only Browser
    owner.
-5. After exact history and durable resolution remove every claimed event from
+6. After exact history and durable resolution remove every claimed event from
    `wake-request.json`, run `completed --claim-token ...`.
-6. On an error before durable resolution, run
+7. On an error before durable resolution, run
    `failed --claim-token ... --error ...`.
-7. Do not run the X API postflight poll inside the automation. The LaunchAgent
+8. Close every run-owned Browser tab and finish with a normal final response.
+   Never archive the current task from inside itself.
+9. Do not run the X API postflight poll inside the automation. The LaunchAgent
    owns polling and Keychain access.
 
 Preserve these prompt invariants:
 
 - one claim token for one pending batch;
-- one X tab, one ChatGPT tab, and one active Pro generation maximum;
+- idle: zero Browser tabs;
+- short: one X tab;
+- Pro: one X tab, one ChatGPT tab, and one active generation;
+- every run-owned tab closes before the run exits;
 - Sol High writes and validates every short reply;
 - no topic-specific exceptions;
 - a postflight warning never rolls back a durable resolution.
@@ -114,9 +134,18 @@ Preserve these prompt invariants:
 
 - API failure does not advance the X cursor.
 - Queue and dispatcher state use file locks and atomic writes.
-- A 30-minute lease suppresses overlapping scheduled runs.
+- One global owner lease suppresses overlapping scheduled runs, including a
+  new event that appears while an earlier claim is still active.
 - A second run preserves `work_in_progress`; it cannot replace the active
   claim.
+- A new Codex runtime ID may reclaim immediately after the app restarts.
+- The janitor releases a stream-disconnected claim only when its related task
+  becomes stale. `notLoaded` alone is not proof of death.
+- The janitor terminates only a helper bundle exactly correlated with a
+  completed X task. The current owner and ambiguous processes remain
+  untouched.
+- The resource guard defers Browser work under critical memory pressure without
+  resolving an event or moving the queue.
 - Failure before durable resolution releases the exact claim.
 - `completed` is accepted only after the claimed IDs leave the wake queue.
 - `reconcile-completed` additionally verifies every event in SQLite before it

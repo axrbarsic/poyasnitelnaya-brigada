@@ -83,7 +83,67 @@ class AutopilotDispatchTests(unittest.TestCase):
             [self.event()["event_id"]],
         )
         self.assertFalse(second["dispatch"])
+        self.assertTrue(second["owner_busy"])
         self.assertEqual(second["leased_count"], 1)
+
+    def test_new_event_waits_for_active_global_owner(self) -> None:
+        first_event = self.event("2080998938828501439")
+        second_event = self.event("2080998938828501440")
+        self.write_events([first_event])
+        now = datetime(2026, 7, 25, 13, 0, tzinfo=timezone.utc)
+        first = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            now=now,
+        )
+        self.write_events([first_event, second_event])
+
+        overlapping = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            now=now + timedelta(minutes=5),
+        )
+
+        self.assertFalse(overlapping["dispatch"])
+        self.assertTrue(overlapping["owner_busy"])
+        self.assertEqual(
+            overlapping["active_claim_token"],
+            first["claim_token"],
+        )
+        self.assertEqual(
+            overlapping["active_event_ids"],
+            [first_event["event_id"]],
+        )
+
+    def test_new_event_is_claimed_after_owner_finishes(self) -> None:
+        first_event = self.event("2080998938828501439")
+        second_event = self.event("2080998938828501440")
+        self.write_events([first_event])
+        first = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+        )
+        self.write_events([second_event])
+        finished = autopilot_dispatch.finish(
+            self.state_file,
+            first["claim_token"],
+        )
+
+        second = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+        )
+
+        self.assertEqual(finished["finished"], [first_event["event_id"]])
+        self.assertTrue(second["dispatch"])
+        self.assertEqual(
+            [item["id"] for item in second["events"]],
+            [second_event["event_id"]],
+        )
 
     def test_release_allows_immediate_reclaim(self) -> None:
         self.write_events([self.event()])
@@ -120,6 +180,7 @@ class AutopilotDispatchTests(unittest.TestCase):
         self.assertEqual(finished["finished"], [self.event()["event_id"]])
         state = json.loads(self.state_file.read_text(encoding="utf-8"))
         self.assertEqual(state["events"], {})
+        self.assertIsNone(state["owner"])
 
     def test_expired_lease_is_reclaimed(self) -> None:
         self.write_events([self.event()])
@@ -138,9 +199,31 @@ class AutopilotDispatchTests(unittest.TestCase):
         )
         self.assertTrue(result["dispatch"])
 
-    def test_resolved_event_is_pruned(self) -> None:
+    def test_codex_restart_reclaims_owner_without_waiting_for_lease(self) -> None:
         self.write_events([self.event()])
-        autopilot_dispatch.claim(
+        now = datetime(2026, 7, 25, 13, 0, tzinfo=timezone.utc)
+        first = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            now=now,
+            runtime_id="codex:101",
+        )
+
+        recovered = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            now=now + timedelta(minutes=1),
+            runtime_id="codex:202",
+        )
+
+        self.assertTrue(recovered["dispatch"])
+        self.assertNotEqual(recovered["claim_token"], first["claim_token"])
+
+    def test_resolved_event_stays_owned_until_finish(self) -> None:
+        self.write_events([self.event()])
+        claimed = autopilot_dispatch.claim(
             self.wake_file,
             self.state_file,
             lease_seconds=1800,
@@ -153,7 +236,15 @@ class AutopilotDispatchTests(unittest.TestCase):
         )
         state = autopilot_dispatch.read_json(self.state_file)
         self.assertFalse(result["dispatch"])
+        self.assertTrue(result["owner_busy"])
+        self.assertIn(self.event()["event_id"], state["events"])
+        autopilot_dispatch.finish(
+            self.state_file,
+            claimed["claim_token"],
+        )
+        state = autopilot_dispatch.read_json(self.state_file)
         self.assertEqual(state["events"], {})
+        self.assertIsNone(state["owner"])
 
     def test_malformed_wake_fails_without_overwriting_state(self) -> None:
         self.write_events([self.event()])

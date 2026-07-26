@@ -12,10 +12,11 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from scripts import autopilot_contract, autopilot_dispatch
+    from scripts import autopilot_contract, autopilot_dispatch, resource_guard
 except ModuleNotFoundError:
     import autopilot_contract  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
+    import resource_guard  # type: ignore[no-redef]
 
 try:
     import xmention_watcher as watcher
@@ -100,20 +101,42 @@ def write_health(
 def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
     browser_owner_cwd = autopilot_contract.load_workspace(config_path)
     wake_file, state_file = autopilot_dispatch.load_paths(config_path)
+    guard = resource_guard.check(config_path)
+    if guard.get("defer"):
+        pending = autopilot_dispatch.load_wake_events(wake_file)
+        return {
+            "status": "memory_deferred",
+            "dispatch": False,
+            "pending_count": len(pending),
+            "event_ids": [str(event["id"]) for event in pending],
+            "resource_guard": guard,
+        }
     result = autopilot_dispatch.claim(
         wake_file,
         state_file,
         lease_seconds=lease_seconds,
+        runtime_id=resource_guard.codex_runtime_id(),
     )
     if not result["dispatch"]:
         pending = autopilot_dispatch.load_wake_events(wake_file)
+        if result.get("owner_busy"):
+            path = health_path(config_path)
+            previous = (
+                autopilot_dispatch.read_json(path) if path.exists() else {}
+            )
+            status = str(previous.get("status", "leased_waiting"))
+            return {
+                "status": status,
+                **result,
+                "resource_guard": guard,
+            }
         status = "leased_waiting" if pending else "idle"
         write_health(
             config_path,
             status=status,
             event_ids=[str(event["id"]) for event in pending],
         )
-        return {"status": status, **result}
+        return {"status": status, **result, "resource_guard": guard}
 
     events = list(result["events"])
     watcher_config = watcher.load_config(config_path)
@@ -163,6 +186,7 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         "claim_token": claim_token,
         "event_ids": event_ids,
         "prompt": prompt,
+        "resource_guard": guard,
     }
 
 

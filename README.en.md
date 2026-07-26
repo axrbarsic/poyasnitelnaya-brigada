@@ -36,8 +36,13 @@ content decisions:
 
 - Python and the official X API detect, deduplicate, persist, and queue replies.
 - A token-free Python dispatcher leases only eligible events.
-- A Codex Desktop automation exits early on an empty queue and atomically claims
-  a non-empty batch.
+- A Codex Desktop automation runs a mechanical claim before loading skills. An
+  empty run exits before Browser, while a non-empty claim becomes the Browser
+  owner.
+- A model-free LaunchAgent archives completed service runs and recovers stale
+  owner claims without creating another Codex task.
+- The same janitor gracefully terminates only helper processes exactly matched
+  to a completed scheduled run, never the current Browser owner.
 - The same Sol High run opens the real X thread in the authenticated Codex
   Browser, checks context and sources, prevents duplicates, and publishes one
   response per eligible event.
@@ -49,7 +54,9 @@ system to another X account and Codex task.
 
 The complete executable project uses one canonical directory. See
 [the project layout contract](docs/project-layout.md) and
-[the storage and backup contract](docs/storage-and-backup.md).
+[the storage and backup contract](docs/storage-and-backup.md). The
+[8 GB memory operations guide](docs/memory-operations.md) documents the global
+owner lease, resource guard, Browser lifecycle, and service-task archival.
 
 Import legacy Browser-owner evidence into the canonical ignored `var/evidence`
 tree without modifying the source:
@@ -634,9 +641,14 @@ and applies the correction atomically, so append-only history remains intact.
 ## Background service
 
 The `macos/` directory contains LaunchAgent templates whose intervals come from
-`config.json`. The checked-in deployment uses a one-minute poll and watchdog.
-Codex Desktop owns the five-minute Sol High automation that exits early on an
-empty queue and processes a non-empty claim in the same run.
+`config.json`. The deployment uses a one-minute poll and watchdog plus a
+five-minute model-free session janitor. Codex Desktop owns the five-minute Sol
+High automation that exits early on an empty queue and processes a non-empty
+claim in the same run. The janitor archives old service tasks and recovers
+orphaned claims without creating a Codex task or spending model tokens. It
+also reaps only exact completed-run helper bundles after a grace period, which
+prevents five-minute `node_repl` and MCP accumulation without broad process
+killing.
 
 Do not install the LaunchAgents on another machine until a live shadow run with
 the official X API has matched a manual Browser scan.
@@ -649,7 +661,7 @@ python3 scripts/render_launchd.py \
   --output-dir /absolute/path/to/staging
 ```
 
-Rendering validates both plists. Loading them with `launchctl` is a
+Rendering validates all three plists. Loading them with `launchctl` is a
 separate, explicit production step.
 
 ## Tests

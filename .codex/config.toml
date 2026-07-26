@@ -2,8 +2,40 @@ model = "gpt-5.6-sol"
 model_reasoning_effort = "high"
 
 [agents]
+enabled = false
+
+[plugins."documents@openai-primary-runtime"]
+enabled = false
+
+[plugins."pdf@openai-primary-runtime"]
+enabled = false
+
+[plugins."spreadsheets@openai-primary-runtime"]
+enabled = false
+
+[plugins."presentations@openai-primary-runtime"]
+enabled = false
+
+[plugins."template-creator@openai-primary-runtime"]
+enabled = false
+
+[plugins."sites@openai-bundled"]
+enabled = false
+
+[plugins."chrome@openai-bundled"]
+enabled = false
+
+[plugins."computer-use@openai-bundled"]
+enabled = false
+
+[plugins."visualize@openai-bundled"]
+enabled = false
+
+[plugins."viktor-knowledge-bank@personal"]
+enabled = false
+
+[plugins."browser@openai-bundled"]
 enabled = true
-max_concurrent_threads_per_session = 2
-max_depth = 1
-default_subagent_model = "gpt-5.6-luna"
-default_subagent_reasoning_effort = "low"
+
+[mcp_servers.openaiDeveloperDocs]
+enabled = false

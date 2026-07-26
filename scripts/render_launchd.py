@@ -14,6 +14,7 @@ TEMPLATE_DIR = PROJECT_ROOT / "macos"
 TEMPLATES = (
     "com.axrbarsic.xmention.poll.plist",
     "com.axrbarsic.xmention.watchdog.plist",
+    "com.axrbarsic.xmention.janitor.plist",
 )
 
 
@@ -24,7 +25,14 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
     watchdog_interval = int(
         config_payload.get("watchdog_interval_seconds", 60)
     )
-    if poll_interval <= 0 or watchdog_interval <= 0:
+    janitor_interval = int(
+        config_payload.get("session_janitor_interval_seconds", 300)
+    )
+    if (
+        poll_interval <= 0
+        or watchdog_interval <= 0
+        or janitor_interval <= 0
+    ):
         raise ValueError("LaunchAgent intervals must be positive")
     wake_value = str(config_payload.get("wake_file", "var/wake-request.json"))
     wake_candidate = Path(wake_value).expanduser()
@@ -47,6 +55,10 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
         text = text.replace(
             "REPLACE_WATCHDOG_INTERVAL",
             str(watchdog_interval),
+        )
+        text = text.replace(
+            "REPLACE_JANITOR_INTERVAL",
+            str(janitor_interval),
         )
         if "REPLACE_" in text:
             raise RuntimeError(f"Unresolved placeholder in {template.name}")
