@@ -36,16 +36,21 @@ content decisions:
 
 - Python and the official X API detect, deduplicate, persist, and queue replies.
 - A token-free Python dispatcher leases only eligible events.
-- A Codex Desktop automation runs a mechanical claim before loading skills. An
-  empty run exits before Browser, while a non-empty claim becomes the Browser
-  owner.
+- A Luna Low Codex Desktop automation runs only a read-only gate every five
+  minutes. Empty, busy, and resource-deferred queues exit without Sol or
+  Browser.
+- Only a ready queue wakes one pinned Browser-owner task on Sol High. That task
+  claims atomically and remains the only publication owner.
 - A model-free LaunchAgent archives completed service runs and recovers stale
   owner claims without creating another Codex task.
 - The same janitor gracefully terminates only helper processes exactly matched
   to a completed scheduled run, never the current Browser owner.
-- The same Sol High run opens the real X thread in the authenticated Codex
+- The Sol High owner opens the real X thread in the authenticated Codex
   Browser, checks context and sources, prevents duplicates, and publishes one
   response per eligible event.
+- A reply posted manually by Alex is still an `alex` turn. When someone
+  continues that branch, the owner restores the manual parent and full live
+  context, persists them, and only then prepares the next reply.
 - Long follow-ups can continue in the exact historical custom GPT conversation.
 - SQLite and append-only JSONL preserve conversation history and audit evidence.
 
@@ -86,10 +91,11 @@ It does not:
 - store API tokens in files;
 - make content-based skip decisions.
 
-When Alex explicitly grants standing autopilot authority, a Codex Desktop
-scheduled automation claims the durable queue and becomes the Browser owner for
-that run. The retired CLI launcher is not used because the built-in Browser is
-unavailable in Codex CLI. Sol High remains the only publication brain.
+When Alex explicitly grants standing autopilot authority, a Luna Low scheduled
+automation checks the durable queue and wakes the pinned Sol High Browser owner
+only for real work. The retired CLI launcher is not used because the built-in
+Browser is unavailable in Codex CLI. Sol High remains the only publication
+brain.
 
 With `mandatory_response_mode=true`, every eligible available event inside the
 requested lookback receives exactly one reply. Support, sarcasm, jokes, insults,
@@ -641,10 +647,10 @@ and applies the correction atomically, so append-only history remains intact.
 ## Background service
 
 The `macos/` directory contains LaunchAgent templates whose intervals come from
-`config.json`. The deployment uses a one-minute poll and watchdog plus a
-five-minute model-free session janitor. Codex Desktop owns the five-minute Sol
-High automation that exits early on an empty queue and processes a non-empty
-claim in the same run. The janitor archives old service tasks and recovers
+`config.json`. The deployment uses a one-minute poll, watchdog, and model-free
+session janitor. Codex Desktop owns a five-minute Luna Low dispatcher that
+wakes one pinned Sol High Browser owner only for a ready queue. The janitor
+archives old service tasks and recovers
 orphaned claims without creating a Codex task or spending model tokens. It
 also reaps only exact completed-run helper bundles after a grace period, which
 prevents five-minute `node_repl` and MCP accumulation without broad process

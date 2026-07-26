@@ -190,6 +190,50 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
     }
 
 
+def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
+    autopilot_contract.load_workspace(config_path)
+    wake_file, state_file = autopilot_dispatch.load_paths(config_path)
+    queue = autopilot_dispatch.status(
+        wake_file,
+        state_file,
+        lease_seconds=lease_seconds,
+    )
+    event_ids = [str(value) for value in queue["pending_ids"]]
+    if not event_ids:
+        return {
+            "status": "idle",
+            "dispatch": False,
+            "pending_count": 0,
+            "event_ids": [],
+        }
+    guard = resource_guard.check(config_path)
+    if guard.get("defer"):
+        return {
+            "status": "resource_deferred",
+            "dispatch": False,
+            "pending_count": len(event_ids),
+            "event_ids": event_ids,
+            "resource_guard": guard,
+        }
+    if queue["owner_busy"] or queue["leased_count"]:
+        return {
+            "status": "leased_waiting",
+            "dispatch": False,
+            "pending_count": len(event_ids),
+            "event_ids": event_ids,
+            "owner_busy": queue["owner_busy"],
+            "leased_count": queue["leased_count"],
+            "resource_guard": guard,
+        }
+    return {
+        "status": "ready",
+        "dispatch": True,
+        "pending_count": len(event_ids),
+        "event_ids": event_ids,
+        "resource_guard": guard,
+    }
+
+
 def mark_completed(
     config_path: Path,
     claim_token: str,
@@ -365,6 +409,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--lease-seconds", type=int, default=1800)
     subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers.add_parser("gate")
     subparsers.add_parser("claim")
     started = subparsers.add_parser("started")
     started.add_argument("--claim-token", required=True)
@@ -382,7 +427,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
-    if arguments.command == "claim":
+    if arguments.command == "gate":
+        result = gate(
+            arguments.config,
+            lease_seconds=arguments.lease_seconds,
+        )
+    elif arguments.command == "claim":
         result = claim(
             arguments.config,
             lease_seconds=arguments.lease_seconds,

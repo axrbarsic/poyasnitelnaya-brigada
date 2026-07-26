@@ -309,17 +309,6 @@ def run_janitor(
     config = autopilot_dispatch.read_json(config_path)
     state_path, owner = owner_snapshot(config_path)
     age_seconds = owner_age_seconds(owner)
-    if (
-        owner is not None
-        and age_seconds is not None
-        and age_seconds < orphan_owner_seconds
-    ):
-        return {
-            "status": "owner_busy",
-            "owner_age_seconds": round(age_seconds, 1),
-            "archived": [],
-            "candidates": [],
-        }
     cli_path = str(config.get("codex_cli_path", "codex"))
     process = subprocess.Popen(
         [cli_path, "app-server", "--stdio"],
@@ -476,6 +465,32 @@ def run_janitor(
                     "owner_thread_status": status_type(owning_thread),
                     "owner_thread_updated_at": owning_thread.get(
                         "updatedAt"
+                    ),
+                    "helper_candidates": helper_candidates,
+                    "helpers_terminated": helpers_terminated,
+                    "helper_survivors": helper_survivors,
+                    "helper_error": helper_error,
+                    "archived": archived,
+                    "candidates": candidates,
+                }
+            if age_seconds is None or age_seconds < orphan_owner_seconds:
+                return {
+                    "status": "owner_busy",
+                    "owner_age_seconds": (
+                        round(age_seconds, 1)
+                        if age_seconds is not None
+                        else None
+                    ),
+                    "active_thread_ids": [],
+                    "owner_thread_status": (
+                        status_type(owning_thread)
+                        if owning_thread is not None
+                        else None
+                    ),
+                    "owner_thread_updated_at": (
+                        owning_thread.get("updatedAt")
+                        if owning_thread is not None
+                        else None
                     ),
                     "helper_candidates": helper_candidates,
                     "helpers_terminated": helpers_terminated,

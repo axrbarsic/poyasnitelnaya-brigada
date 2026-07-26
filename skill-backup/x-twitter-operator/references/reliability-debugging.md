@@ -24,16 +24,25 @@ Check each layer in order:
 3. `events` contains the exact payload and correct `delivery_state`.
 4. Eligibility classified it as queued or ignored for an explicit reason.
 5. `wake-request.json` exposed every queued event.
-6. The scheduled Sol automation claimed the event exactly once.
-7. Browser preflight used `@axrbarsic` and opened the exact live thread.
-8. The response route, duplicate checks and fact check completed.
-9. X contains one verified direct Alex child.
-10. Exact user and Alex turns exist in `conversation_turns`.
-11. `event_resolutions` contains the verified reply URL.
-12. The event is absent from the wake queue and no lease remains active.
+6. The Luna gate returned `dispatch=true`.
+7. Luna called `send_message_to_thread` directly and the pinned Sol owner
+   received the follow-up.
+8. The pinned owner claimed the event exactly once.
+9. Browser preflight used `@axrbarsic` and opened the exact live thread.
+10. The response route, duplicate checks and fact check completed.
+11. X contains one verified direct Alex child.
+12. Exact user and Alex turns exist in `conversation_turns`.
+13. `event_resolutions` contains the verified reply URL.
+14. The event is absent from the wake queue and no lease remains active.
 
 Classify the first failing layer as the weak link. Do not infer that the API
 missed an event merely because the final queue is empty.
+
+If the gate is ready but the owner never wakes, inspect the Luna trace. A
+`send_message_to_thread` call made inside `functions.exec`, JavaScript,
+`tools.*`, or another nested wrapper can remain pending. Fix the universal
+dispatcher prompt: expose the tool through `tool_search`, call the direct Codex
+app tool, keep the queue unclaimed on failure, and let the next cycle retry.
 
 ## Proven failure signature
 
@@ -74,8 +83,8 @@ After fixing a weak link:
    the same hours and exact `as-of`.
 6. Do not pass the reported event ID to the requeue command, automation prompt
    or Browser owner.
-7. Let the ordinary one-minute watcher and five-minute Sol automation discover,
-   claim and process the event.
+7. Let the ordinary one-minute watcher and five-minute Luna gate discover the
+   event and wake the pinned Sol owner through the direct Codex app tool.
 8. Observe without manually claiming, drafting or publishing.
 9. Verify the live direct reply, exact history, durable resolution, empty queue
    and released lease.

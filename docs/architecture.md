@@ -18,24 +18,26 @@ an X reply.
 5. SQLite deduplicates immutable event IDs and advances `since_id`.
 6. `wake-request.json` exposes only queued event metadata and canonical URLs.
 7. A macOS notification reports a new queue item without invoking a model.
-8. Under explicit standing authority, a five-minute Sol High Codex Desktop
-   automation leases new queue IDs and becomes the only Browser owner for that
-   scheduled run.
-9. A separate one-minute watchdog checks poll freshness and failure count.
-10. Sol High opens the complete live X subtree, classifies text and media in
+8. Under explicit standing authority, a five-minute Luna Low Codex Desktop
+   automation runs the read-only `autopilot_bridge gate`. It exits for an empty,
+   leased, voice-paused, or resource-deferred queue.
+9. A ready gate sends one follow-up to a pinned Sol High Browser-owner task.
+   That task executes the atomic claim and remains the only publication owner.
+10. A separate one-minute watchdog checks poll freshness and failure count.
+11. Sol High opens the complete live X subtree, classifies text and media in
     context, and resolves an event only after publication, exact proof of an
     existing direct Alex child reply, or a terminal blocker.
-11. `initial-audit-next` performs only free mechanical grouping and exact-text
+12. `initial-audit-next` performs only free mechanical grouping and exact-text
     extraction. It never decides stance, relevance, or whether to publish.
-12. `initial-audit-expire --hours H --as-of UTC` fixes Alex's requested
+13. `initial-audit-expire --hours H --as-of UTC` fixes Alex's requested
     per-run lookback cutoff without Browser or model use. Dry-run and apply
     reuse the same timestamp. In one transaction it imports exact stored API
     history and records an age-policy skip only for unresolved events strictly
     older than that cutoff.
-13. New API events preserve expanded attachment metadata and alt text. Missing
+14. New API events preserve expanded attachment metadata and alt text. Missing
     media metadata still requires live Browser inspection and is never treated
     as proof that no media exists.
-14. `browser-handoff-sync` imports exact Browser history and applies only
+15. `browser-handoff-sync` imports exact Browser history and applies only
     already confirmed Sol dispositions. It cannot draft, classify, or publish,
     and it fails closed on missing history or mismatched chain metadata. A
     publication must include both the inspected user turn and the exact
@@ -45,18 +47,18 @@ an X reply.
     Every handoff proves exactly one authorization route: a direct reply to
     Alex, a reply in a conversation with a stored Alex turn, or an explicit
     `@axrbarsic` mention returned by the authenticated mentions endpoint.
-15. `autopilot_bridge` enriches each claimed event with compact
+16. `autopilot_bridge` enriches each claimed event with compact
     `commenter_memory` keyed by stable X user ID. It contains source-linked
     public turns and exact Alex children from any stored conversation. A deeper
     `commenter-history` query can search all retained years without adding the
     full archive to every Sol prompt.
-16. `x_archive_import.py` stages Alex's historical public posts and replies
+17. `x_archive_import.py` stages Alex's historical public posts and replies
     from an official X archive. It validates the archive account against the
     configured numeric X user ID, ignores direct-message members, and rejects
     append-only conflicts. Archive replies are exposed separately from exact
     incoming interaction history because the archive does not contain a
     complete copy of other users' turns.
-17. `candidate_corpus.py` stores externally collected public posts in a
+18. `candidate_corpus.py` stores externally collected public posts in a
     quarantined index keyed by stable X user ID. It exposes at most three
     compact search hints per event. Unverified hints have
     `usable_as_evidence=false`; only an append-only live X or official API
@@ -95,7 +97,8 @@ injects the known target ID into the queue or automation prompt.
 3. Deploy the change.
 4. Run target-agnostic `mandatory-response-requeue` with one fixed lookback and
    `as-of`, first dry-run and then apply.
-5. Let the ordinary five-minute Sol automation claim and process the result.
+5. Let the five-minute Luna dispatcher rediscover the event and wake the pinned
+   Sol owner.
 6. Verify one live direct Alex child, exact history, durable resolution, empty
    queue and no active lease.
 
@@ -112,6 +115,10 @@ The same SQLite database stores append-only conversation chains:
 
 - one chain row maps the root X status, short or Pro provenance, ledger
   reference, and exact ChatGPT conversation URL when applicable;
+- an Alex reply posted manually is still an `alex` turn. When a later mention
+  points to it, the Browser owner must restore that exact live parent and the
+  surrounding subtree before drafting, then persist the manual turn before the
+  new disposition;
 - one turn row stores exact public X text, parent status, actor, author, URL,
   timestamps, and provenance;
 - source rows map factual replies to the primary sources used to prepare them;
@@ -192,6 +199,6 @@ contradiction claim, or factual conclusion.
 ## Token model
 
 Polling, deduplication, queueing, health checks, lease checks, and notifications
-use no model calls. A five-minute Sol High scheduled run spends a small amount
-of context to check the claim, exits before Browser on an empty queue, and does
-content work only when the atomic claim contains an event.
+use no model calls. A five-minute Luna Low scheduled run spends a small amount
+of context on the read-only gate. Sol High receives a turn only when the gate
+proves that a ready event exists.

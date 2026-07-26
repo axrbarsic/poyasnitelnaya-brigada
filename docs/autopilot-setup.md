@@ -4,10 +4,10 @@
 
 ## Purpose
 
-The watcher detects X replies without model tokens. A local Codex Desktop
-automation checks the durable queue every five minutes. An empty queue exits
-before opening Browser. A non-empty queue is leased atomically and processed
-inside that same scheduled run on Sol High.
+The watcher detects X replies without model tokens. A Luna Low Codex Desktop
+automation runs only a read-only gate every five minutes. Empty, busy, and
+deferred queues exit before Sol and Browser. A ready queue wakes one pinned Sol
+High task, which claims atomically and processes the events.
 
 Each non-empty claim includes up to `commenter_memory_limit` source-linked prior
 interactions for the same stable X user ID. Sol may query deeper retained
@@ -29,15 +29,16 @@ documentation.
 | --- | --- | --- | --- |
 | X watcher LaunchAgent | 1 minute | none | Fetch, deduplicate, persist, queue |
 | Watchdog LaunchAgent | 1 minute | none | Detect stale polling or API failures |
-| Session janitor LaunchAgent | 5 minutes | none | Archive tasks and recover an orphaned claim |
-| Codex Desktop automation | 5 minutes | Sol High | Claim a non-empty queue, inspect Browser, decide, publish, verify |
+| Session janitor LaunchAgent | 1 minute | none | Archive tasks and recover an orphaned claim |
+| Automation dispatcher | 5 minutes | Luna Low | Read-only gate and wake the owner only for a ready queue |
+| Pinned Browser owner | per event | Sol High | Claim, inspect Browser, decide, publish, verify |
 | Custom GPT | Pro only | configured Pro | Long answer in the exact historical conversation |
 
-The minute poll is token-free. The scheduled run still spends a small amount of
-Sol context on an empty queue, but it never opens Browser or performs content
-work unless `dispatch` is true. Claim runs before skills and references are
-loaded. Archiving is not part of the automation prompt and consumes no model.
-The local app-server janitor performs it independently.
+The minute poll is token-free. An empty scheduled run uses only a short Luna Low
+context. Sol High receives work only when `dispatch` is true. The pinned owner
+claims before loading skills and references. Archiving is not part of the
+automation prompt and consumes no model. The local app-server janitor performs
+it independently.
 
 ## Configure
 
@@ -49,10 +50,19 @@ Add local values to ignored `config.json`:
   "autopilot_health_file": "var/autopilot-health.json",
   "browser_owner_cwd": ".",
   "memory_guard_enabled": true,
+  "voice_priority_enabled": true,
+  "voice_priority_hold_seconds": 300,
   "memory_guard_state_file": "var/resource-health.json",
   "resource_mode": "auto",
   "resource_mode_idle_seconds": 900,
-  "session_janitor_interval_seconds": 300,
+  "resource_mode_performance_min_free_percent": 35,
+  "memory_guard_swap_recovery_free_percent": 25,
+  "memory_guard_swap_recovery_codex_rss_mb": 2000,
+  "memory_guard_helper_recovery_free_percent": 25,
+  "memory_guard_helper_recovery_codex_rss_mb": 1800,
+  "memory_guard_helper_recovery_total_rss_mb": 512,
+  "session_janitor_interval_seconds": 60,
+  "session_janitor_minimum_age_seconds": 60,
   "session_janitor_orphan_owner_seconds": 300,
   "session_janitor_reap_helpers": true,
   "session_janitor_helper_grace_seconds": 120,
@@ -90,34 +100,45 @@ Install and load:
 
 Do not install the retired `com.axrbarsic.xmention.autopilot.plist`.
 
-## Create the Codex Desktop automation
+## Create the Browser owner and automation
 
-Create one local scheduled task with:
+Create one ordinary task, pin it, and retain its exact thread ID:
 
 - model: `gpt-5.6-sol`
 - reasoning effort: `high`
+- role: the only Browser owner
+
+Add that ID to `session_janitor_protected_thread_ids`.
+
+Then create one local scheduled task with:
+
+- model: `gpt-5.6-luna`
+- reasoning effort: `low`
 - cadence: every five minutes
 - failed-run notifications only
 
 Its durable prompt must implement this state machine:
 
-1. Before reading automation memory, skills, or references, run
-   `autopilot_bridge.py ... claim`.
-2. If status is `memory_deferred` or `dispatch` is false, leave the queue
-   unchanged and do not open Browser.
-3. Finish the empty run normally without `list_threads`, Browser, or
-   self-archiving.
-4. If `dispatch` is true, run `started --claim-token ...`.
-5. Execute the returned prompt inside the current run as the only Browser
-   owner.
+1. Run `autopilot_bridge.py ... gate`.
+2. On `dispatch=false`, exit quietly without Browser, skills, or `list_threads`.
+3. On `dispatch=true`, expose `send_message_to_thread` through `tool_search`.
+4. Call that Codex app tool directly, never from `functions.exec`, JavaScript,
+   or `tools.*`. Send one follow-up to the pinned task with explicit
+   `gpt-5.6-sol` and high-effort overrides.
+5. The Browser owner runs `claim`, then `started`, and executes the returned
+   prompt.
 6. After exact history and durable resolution remove every claimed event from
-   `wake-request.json`, run `completed --claim-token ...`.
-7. On an error before durable resolution, run
-   `failed --claim-token ... --error ...`.
-8. Close every run-owned Browser tab and finish with a normal final response.
-   Never archive the current task from inside itself.
-9. Do not run the X API postflight poll inside the automation. The LaunchAgent
+   `wake-request.json`, then run `completed`.
+7. On an error before durable resolution, run `failed`.
+8. The owner closes only its task-owned Browser tabs and remains pinned.
+9. The dispatcher never creates an inbox item or handles X content itself.
+10. Do not run the X API postflight poll inside the owner. The LaunchAgent
    owns polling and Keychain access.
+
+The copy-ready production template is stored in
+[`automation-prompts/luna-dispatcher.ru.md`](automation-prompts/luna-dispatcher.ru.md),
+with an [English installation note](automation-prompts/luna-dispatcher.en.md).
+Only the project path and pinned task ID are replaced.
 
 Preserve these prompt invariants:
 

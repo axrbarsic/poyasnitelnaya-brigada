@@ -39,7 +39,10 @@
 - [x] Inspect their absolute paths and load them explicitly with `launchctl`.
 - [x] Confirm poll and watchdog complete with exit code 0.
 - [x] Confirm the retired CLI launcher exits nonzero before claiming an event.
-- [x] Create the Sol High Codex Desktop worker automation.
+- [x] Create and pin the Sol High Codex Desktop Browser owner.
+- [x] Create the Luna Low dispatcher automation.
+- [ ] Confirm a ready Luna gate wakes the pinned owner through the direct Codex
+  app tool, never a nested `functions.exec` call.
 - [x] Confirm real new replies create exact queue items.
 - [ ] Acknowledge the event only after the existing X workflow records its
   disposition.
@@ -66,7 +69,7 @@
   `usable_as_evidence=false` until live X or official API verification.
 - [x] Keep candidate corpora and exact-text verification scratch files out of
   Git when their redistribution status is unknown.
-- [x] Create a private GitHub repository.
+- [x] Create a public GitHub repository under the MIT license.
 - [x] Push source, tests, templates, and documentation.
 - [x] Add the watcher contract to the X skill only after the live gate is green.
 - [x] Generate transactionally consistent, manifested SQLite snapshots.

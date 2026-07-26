@@ -25,14 +25,19 @@ Real run logs from July 26, 2026 proved the overlap:
 5. ChatGPT opens only after a Pro route is proven.
 6. Pro work uses at most one X tab, one ChatGPT tab, and one generation.
 7. Every task-owned tab closes on a terminal outcome.
-8. Every run claims before loading skills.
-9. The resource guard runs before Browser. `memory_deferred` preserves the
+8. Luna Low runs only a read-only gate. Sol High does not start for an empty,
+   busy, or deferred queue.
+9. Only a ready queue wakes one pinned Sol High task, which claims atomically
+   before loading skills.
+10. The resource guard runs before Browser. `resource_deferred` preserves the
    queue unchanged.
-10. A separate model-free LaunchAgent archives completed service tasks through
+11. An active realtime voice conversation always defers heavy Browser work.
+   The last microphone observation holds the pause for another five minutes.
+12. A separate model-free LaunchAgent archives completed service tasks through
     the local Codex app-server. It creates no task and consumes no tokens.
-11. The same LaunchAgent releases an orphaned claim only when its owning task
+13. The same LaunchAgent releases an orphaned claim only when its owning task
     is inactive and has not updated for at least five minutes.
-12. After a scheduled run completes, the janitor correlates the exact task
+14. After a scheduled run completes, the janitor correlates the exact task
     creation time with its `node_repl` and MCP helper bundle. After 120 seconds
     it sends `SIGTERM` only to helpers owned by that inactive task. The current
     owner, protected tasks, and processes without an exact time match are never
@@ -46,18 +51,51 @@ quality remain unchanged.
 
 | Mode | Condition | Codex RSS | Renderers | Free memory | Swap |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Efficiency | memory pressure | 2200 MiB | 5 | at least 20% | up to 896 MiB |
+| Efficiency | voice or memory pressure | 2200 MiB | 5 | at least 20% | up to 896 MiB |
 | Balanced | user is active | 2350 MiB | 6 | at least 14% | up to 1024 MiB |
-| Performance | idle 15 minutes on AC power | 2500 MiB | 7 | at least 12% | up to 1152 MiB |
+| Performance | idle 15 minutes on AC power, at least 35% free | 2500 MiB | 7 | at least 12% | up to 1152 MiB |
 
-Every mode also obeys hard caps: 2700 MiB RSS, 8 renderers, 10 `node_repl`,
-20 MCP helpers, at least 10% free memory, and no more than 1280 MiB swap.
-Crossing a cap defers the next Browser owner and leaves every event durable.
+Every mode also obeys hard caps: 2700 MiB RSS, 8 renderers, at least 10% free
+memory, and no more than 1280 MiB swap. Count caps of 10 `node_repl` and 20 MCP
+helpers stay strict when their aggregate RSS is high or current free memory is
+low. A large count with a small measured footprint is diagnostic, not a reason
+to starve a ready queue forever. Crossing a cap defers the next Browser owner
+and leaves every event durable.
 
-Helper counts are early signals, not standalone proof of a leak. Their limits
-stay above measured normal active state. If an individual system measurement
-is unavailable, the guard records the error in `var/resource-health.json` and
-never loses an event.
+macOS may retain allocated swap long after the active pressure has recovered.
+An old absolute swap value alone therefore cannot block the queue forever. If
+free memory is at least `memory_guard_swap_recovery_free_percent` and Codex RSS
+is no more than `memory_guard_swap_recovery_codex_rss_mb`, swap is treated as
+historical while RSS, renderer, and helper limits remain active. Swap becomes a
+blocking signal again under current memory pressure.
+
+Voice priority does not stop the minute watcher, watchdog, SQLite, or durable
+queue. It blocks only the heavy Browser owner. After the last detected Codex
+microphone input, the guard holds the pause for
+`voice_priority_hold_seconds`, which defaults to 300 seconds. A short silent
+gap between spoken turns therefore cannot resume Browser work.
+
+Helper counts are early signals, not standalone proof of a leak. When free
+memory is at least `memory_guard_helper_recovery_free_percent`, Codex RSS is no
+more than `memory_guard_helper_recovery_codex_rss_mb`, and measured aggregate
+helper RSS is no more than `memory_guard_helper_recovery_total_rss_mb`, excess
+`node_repl` or MCP counts do not block the queue by themselves. Their limits
+become strict again outside that recovery envelope. Performance mode also
+requires `resource_mode_performance_min_free_percent`, so idle time alone
+cannot select the most aggressive profile. The renderer cap is never relaxed.
+If an individual system measurement is unavailable, the guard records the
+error in `var/resource-health.json` and never loses an event.
+
+## Measured wake cost
+
+Three real empty or deferred Luna Low runs on July 26, 2026 used an average of
+49,064 processed tokens. At a five-minute cadence this is about 588,768
+processed tokens per hour. Two previous guard-only Sol High runs averaged about
+59,993 tokens, or about 719,916 per hour.
+
+The context-volume reduction is about 18%. Monetary savings are larger because
+Luna is cheaper than Sol, but these counts are not a provider invoice. The
+minute watcher, watchdog, and janitor remain entirely model-free.
 
 ## Why completed runs are archived
 
@@ -65,8 +103,10 @@ The official Codex documentation states that every standalone scheduled run
 starts a new chat. Self-archiving an active task can leave it in `active`. A
 model-based housekeeping automation also failed because it created more tasks.
 Instead, `scripts/session_janitor.py` runs as an ordinary LaunchAgent every
-five minutes. It archives exact matching tasks older than 15 minutes, protects
-the pinned task, and retains restorable history.
+minute. It archives exact matching completed tasks older than one minute,
+protects the active owner and pinned task, and retains restorable history. An
+active owner no longer stops housekeeping: the janitor still archives other
+completed tasks and reaps their helpers.
 
 The latest result overwrites `var/session-janitor-health.json`, so diagnostics
 do not grow without bound. The owning task is matched by creation time before

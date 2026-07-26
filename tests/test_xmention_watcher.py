@@ -3362,7 +3362,7 @@ class WatcherTests(unittest.TestCase):
             elif path.name.endswith(".watchdog.plist"):
                 expected_interval = self.config.watchdog_interval_seconds
             else:
-                expected_interval = 300
+                expected_interval = 60
             self.assertEqual(payload["StartInterval"], expected_interval)
         self.assertFalse(
             (output / "com.axrbarsic.xmention.autopilot.plist").exists()

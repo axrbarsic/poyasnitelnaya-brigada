@@ -94,6 +94,13 @@ start, never the quality of Sol High reasoning or fact checking:
   `initial-audit-expire --hours H --as-of <UTC>` run, not Browser tabs.
 - close every task-owned Browser tab before the scheduled run exits;
 - run the mechanical claim before loading this skill on an empty service run;
+- let Luna Low run only the read-only `autopilot_bridge gate`; when
+  `dispatch=true`, it must discover `send_message_to_thread` through
+  `tool_search` and invoke the direct Codex app tool to wake the pinned Sol
+  High owner;
+- never invoke `send_message_to_thread` from `functions.exec`, JavaScript,
+  `tools.*`, or another nested wrapper because that call can remain pending
+  without waking the owner;
 - never run `list_threads` or archive tasks inside the scheduled model run;
 - let the model-free `session_janitor.py` LaunchAgent archive exact completed
   service tasks through the local Codex app-server;
@@ -310,11 +317,14 @@ without supplying target IDs.
 - A queued Pro follow-up must return to the exact recorded historical
   «Пояснительная бригада» conversation.
 - Run the token-free poll and watchdog every minute on the 8 GB iMac. Run one
-  Sol High Codex Desktop automation every five minutes. An empty scheduled run
-  must stop immediately before Browser work.
-- The scheduled Sol run atomically claims a non-empty batch and executes the
-  returned wake prompt itself. Do not delegate it through Codex CLI or a
-  cross-thread app message. The built-in Browser is unavailable in Codex CLI.
+  Luna Low Codex Desktop automation every five minutes. It runs only the
+  read-only gate. An empty, leased, voice-paused, or resource-deferred run
+  stops before Browser work and never wakes Sol.
+- When `dispatch=true`, Luna must expose `send_message_to_thread` through
+  `tool_search`, then invoke it as a direct tool call with the pinned owner,
+  `gpt-5.6-sol`, and `high`. Never call it inside `functions.exec` or another
+  nested wrapper. The pinned Sol owner atomically claims the batch and executes
+  the returned wake prompt. The built-in Browser is unavailable in Codex CLI.
 - Keep zero Browser tabs while idle, one X tab for short work, and add one
   ChatGPT tab only for a proven Pro route.
 - Close all task-owned tabs and finish normally. The model-free session

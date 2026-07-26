@@ -6,7 +6,8 @@ from __future__ import annotations
 import ctypes
 import re
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +40,10 @@ class ResourceSample:
     user_idle_seconds: int | None = None
     on_ac_power: bool | None = None
     swap_used_mb: float | None = None
+    voice_active: bool = False
+    voice_input_pids: tuple[int, ...] = ()
+    node_repl_rss_mb: float = 0.0
+    mcp_process_rss_mb: float = 0.0
 
 
 def parse_processes(output: str) -> ResourceSample:
@@ -46,6 +51,8 @@ def parse_processes(output: str) -> ResourceSample:
     renderer_count = 0
     node_repl_count = 0
     mcp_process_count = 0
+    node_repl_rss_kib = 0
+    mcp_process_rss_kib = 0
     for raw_line in output.splitlines():
         match = re.match(r"^\s*(\d+)\s+(.+)$", raw_line)
         if match is None:
@@ -60,18 +67,22 @@ def parse_processes(output: str) -> ResourceSample:
             renderer_count += 1
         if "node_repl" in command:
             node_repl_count += 1
+            node_repl_rss_kib += rss_kib
         if "mcp" in command.lower() and (
             "python" in command.lower()
             or "node" in command.lower()
             or "uv" in command.lower()
         ):
             mcp_process_count += 1
+            mcp_process_rss_kib += rss_kib
     return ResourceSample(
         codex_rss_mb=round(codex_rss_kib / 1024, 1),
         renderer_count=renderer_count,
         node_repl_count=node_repl_count,
         mcp_process_count=mcp_process_count,
         free_percent=None,
+        node_repl_rss_mb=round(node_repl_rss_kib / 1024, 1),
+        mcp_process_rss_mb=round(mcp_process_rss_kib / 1024, 1),
     )
 
 
@@ -271,6 +282,166 @@ def collect_native_runtime_id() -> str | None:
     return "|".join(sorted(matches)) if matches else None
 
 
+class AudioObjectPropertyAddress(ctypes.Structure):
+    _fields_ = [
+        ("selector", ctypes.c_uint32),
+        ("scope", ctypes.c_uint32),
+        ("element", ctypes.c_uint32),
+    ]
+
+
+def fourcc(value: str) -> int:
+    if len(value) != 4:
+        raise ValueError("fourcc value must contain exactly four characters")
+    return int.from_bytes(value.encode("ascii"), byteorder="big")
+
+
+def active_audio_input_pids() -> tuple[int, ...]:
+    core_audio = ctypes.CDLL(
+        "/System/Library/Frameworks/CoreAudio.framework/CoreAudio"
+    )
+    core_audio.AudioObjectGetPropertyDataSize.argtypes = [
+        ctypes.c_uint32,
+        ctypes.POINTER(AudioObjectPropertyAddress),
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint32),
+    ]
+    core_audio.AudioObjectGetPropertyDataSize.restype = ctypes.c_int32
+    core_audio.AudioObjectGetPropertyData.argtypes = [
+        ctypes.c_uint32,
+        ctypes.POINTER(AudioObjectPropertyAddress),
+        ctypes.c_uint32,
+        ctypes.c_void_p,
+        ctypes.POINTER(ctypes.c_uint32),
+        ctypes.c_void_p,
+    ]
+    core_audio.AudioObjectGetPropertyData.restype = ctypes.c_int32
+    process_list = AudioObjectPropertyAddress(
+        fourcc("prs#"),
+        fourcc("glob"),
+        0,
+    )
+    byte_count = ctypes.c_uint32()
+    status = core_audio.AudioObjectGetPropertyDataSize(
+        1,
+        ctypes.byref(process_list),
+        0,
+        None,
+        ctypes.byref(byte_count),
+    )
+    if status != 0 or byte_count.value == 0:
+        return ()
+    object_count = byte_count.value // ctypes.sizeof(ctypes.c_uint32)
+    objects = (ctypes.c_uint32 * object_count)()
+    status = core_audio.AudioObjectGetPropertyData(
+        1,
+        ctypes.byref(process_list),
+        0,
+        None,
+        ctypes.byref(byte_count),
+        objects,
+    )
+    if status != 0:
+        return ()
+
+    active: list[int] = []
+    for object_id in objects:
+        running_address = AudioObjectPropertyAddress(
+            fourcc("piri"),
+            fourcc("glob"),
+            0,
+        )
+        running = ctypes.c_uint32()
+        running_size = ctypes.c_uint32(ctypes.sizeof(running))
+        if (
+            core_audio.AudioObjectGetPropertyData(
+                object_id,
+                ctypes.byref(running_address),
+                0,
+                None,
+                ctypes.byref(running_size),
+                ctypes.byref(running),
+            )
+            != 0
+            or running.value == 0
+        ):
+            continue
+        pid_address = AudioObjectPropertyAddress(
+            fourcc("ppid"),
+            fourcc("glob"),
+            0,
+        )
+        pid = ctypes.c_int32()
+        pid_size = ctypes.c_uint32(ctypes.sizeof(pid))
+        if (
+            core_audio.AudioObjectGetPropertyData(
+                object_id,
+                ctypes.byref(pid_address),
+                0,
+                None,
+                ctypes.byref(pid_size),
+                ctypes.byref(pid),
+            )
+            == 0
+            and pid.value > 0
+        ):
+            active.append(pid.value)
+    return tuple(sorted(set(active)))
+
+
+def native_process_command(pid: int) -> str:
+    libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
+    libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+    path_buffer = ctypes.create_string_buffer(4096)
+    if libproc.proc_pidpath(pid, path_buffer, len(path_buffer)) <= 0:
+        return ""
+    path = path_buffer.value.decode("utf-8", errors="replace")
+    return _native_command(libc, pid, path)
+
+
+def is_codex_audio_command(command: str) -> bool:
+    return (
+        "audio.mojom.AudioService" in command
+        and any(marker in command for marker in CODEX_MARKERS)
+    )
+
+
+def detect_realtime_voice() -> tuple[bool, tuple[int, ...]]:
+    try:
+        matching = tuple(
+            pid
+            for pid in active_audio_input_pids()
+            if is_codex_audio_command(native_process_command(pid))
+        )
+    except (OSError, ValueError):
+        matching = ()
+    return bool(matching), matching
+
+
+def apply_voice_hold(
+    sample: ResourceSample,
+    previous: dict[str, Any],
+    *,
+    now: datetime,
+    hold_seconds: int,
+) -> tuple[ResourceSample, str | None, bool]:
+    observed = sample.voice_active
+    if observed:
+        until = now + timedelta(seconds=hold_seconds)
+        return sample, autopilot_dispatch.isoformat(until), True
+    previous_until = autopilot_dispatch.parse_time(
+        previous.get("voice_priority_until")
+    )
+    if previous_until is not None and previous_until > now:
+        return (
+            replace(sample, voice_active=True),
+            autopilot_dispatch.isoformat(previous_until),
+            False,
+        )
+    return sample, None, False
+
+
 def codex_runtime_id() -> str | None:
     try:
         process_result = subprocess.run(
@@ -347,6 +518,7 @@ def collect() -> ResourceSample:
             on_ac_power = value
         else:
             swap_used_mb = value
+    voice_active, voice_input_pids = detect_realtime_voice()
     return ResourceSample(
         codex_rss_mb=sample.codex_rss_mb,
         renderer_count=sample.renderer_count,
@@ -356,6 +528,10 @@ def collect() -> ResourceSample:
         user_idle_seconds=idle_seconds,
         on_ac_power=on_ac_power,
         swap_used_mb=swap_used_mb,
+        voice_active=voice_active,
+        voice_input_pids=voice_input_pids,
+        node_repl_rss_mb=sample.node_repl_rss_mb,
+        mcp_process_rss_mb=sample.mcp_process_rss_mb,
     )
 
 
@@ -367,9 +543,12 @@ def select_mode(sample: ResourceSample, config: dict[str, Any]) -> str:
         return configured
     if configured != "auto":
         raise ValueError(f"Unsupported resource_mode: {configured}")
+    if sample.voice_active:
+        return "efficiency"
     pressure_free = int(config["resource_mode_pressure_free_percent"])
     pressure_rss = float(config["resource_mode_pressure_codex_rss_mb"])
     pressure_swap = float(config["resource_mode_pressure_swap_used_mb"])
+    historical_swap = swap_is_historical(sample, config)
     if (
         (
             sample.free_percent is not None
@@ -379,6 +558,7 @@ def select_mode(sample: ResourceSample, config: dict[str, Any]) -> str:
         or (
             sample.swap_used_mb is not None
             and sample.swap_used_mb > pressure_swap
+            and not historical_swap
         )
     ):
         return "efficiency"
@@ -387,6 +567,16 @@ def select_mode(sample: ResourceSample, config: dict[str, Any]) -> str:
         sample.user_idle_seconds is not None
         and sample.user_idle_seconds >= idle_threshold
         and sample.on_ac_power is True
+        and (
+            sample.free_percent is None
+            or sample.free_percent
+            >= int(
+                config.get(
+                    "resource_mode_performance_min_free_percent",
+                    35,
+                )
+            )
+        )
     ):
         return "performance"
     return "balanced"
@@ -402,6 +592,43 @@ def profile_limits(config: dict[str, Any], mode: str) -> dict[str, Any]:
     return limits
 
 
+def swap_is_historical(
+    sample: ResourceSample,
+    config: dict[str, Any],
+) -> bool:
+    return (
+        sample.free_percent is not None
+        and sample.free_percent
+        >= int(config.get("memory_guard_swap_recovery_free_percent", 25))
+        and sample.codex_rss_mb
+        <= float(config.get("memory_guard_swap_recovery_codex_rss_mb", 2000))
+    )
+
+
+def helper_envelope_is_healthy(
+    sample: ResourceSample,
+    config: dict[str, Any],
+) -> bool:
+    return (
+        sample.free_percent is not None
+        and sample.free_percent
+        >= int(config.get("memory_guard_helper_recovery_free_percent", 25))
+        and sample.codex_rss_mb
+        <= float(
+            config.get("memory_guard_helper_recovery_codex_rss_mb", 1800)
+        )
+        and (
+            sample.node_repl_rss_mb + sample.mcp_process_rss_mb
+            <= float(
+                config.get(
+                    "memory_guard_helper_recovery_total_rss_mb",
+                    512,
+                )
+            )
+        )
+    )
+
+
 def assess(
     sample: ResourceSample,
     config: dict[str, Any],
@@ -410,6 +637,8 @@ def assess(
 ) -> list[str]:
     reasons: list[str] = []
     limits_config = profile_limits(config, mode) if mode else config
+    historical_swap = swap_is_historical(sample, config)
+    helpers_recovered = helper_envelope_is_healthy(sample, config)
     limits = (
         ("codex_rss_mb", sample.codex_rss_mb, float),
         ("renderer_count", sample.renderer_count, int),
@@ -418,6 +647,11 @@ def assess(
     )
     for name, value, converter in limits:
         maximum = converter(limits_config[f"memory_guard_max_{name}"])
+        if (
+            name in {"node_repl_count", "mcp_process_count"}
+            and helpers_recovered
+        ):
+            continue
         if value > maximum:
             reasons.append(f"{name}={value} exceeds {maximum}")
     minimum_free = int(limits_config["memory_guard_min_free_percent"])
@@ -429,7 +663,7 @@ def assess(
         maximum_swap = float(
             limits_config.get("memory_guard_max_swap_used_mb", float("inf"))
         )
-        if sample.swap_used_mb > maximum_swap:
+        if sample.swap_used_mb > maximum_swap and not historical_swap:
             reasons.append(
                 f"swap_used_mb={sample.swap_used_mb} exceeds {maximum_swap}"
             )
@@ -444,14 +678,55 @@ def assess(
 
 def check(config_path: Path) -> dict[str, Any]:
     config = autopilot_dispatch.read_json(config_path)
-    if not bool(config.get("memory_guard_enabled", False)):
-        return {"enabled": False, "defer": False, "reasons": []}
+    memory_enabled = bool(config.get("memory_guard_enabled", False))
+    voice_priority_enabled = bool(
+        config.get("voice_priority_enabled", False)
+    )
+    if not memory_enabled and not voice_priority_enabled:
+        return {
+            "enabled": False,
+            "voice_priority_enabled": False,
+            "defer": False,
+            "reasons": [],
+        }
+    state_value = str(
+        config.get("memory_guard_state_file", "var/resource-health.json")
+    )
+    state_path = autopilot_dispatch.resolve_path(config_path, state_value)
+    previous: dict[str, Any] = {}
+    if state_path.exists():
+        try:
+            previous = autopilot_dispatch.read_json(state_path)
+        except (OSError, ValueError):
+            previous = {}
     try:
         sample = collect()
+        voice_priority_until: str | None = None
+        voice_observed = sample.voice_active
+        if voice_priority_enabled:
+            hold_seconds = int(
+                config.get("voice_priority_hold_seconds", 300)
+            )
+            if hold_seconds < 0:
+                raise ValueError(
+                    "voice_priority_hold_seconds must not be negative"
+                )
+            sample, voice_priority_until, voice_observed = apply_voice_hold(
+                sample,
+                previous,
+                now=datetime.now(timezone.utc),
+                hold_seconds=hold_seconds,
+            )
         mode = select_mode(sample, config)
-        reasons = assess(sample, config, mode=mode)
+        reasons = assess(sample, config, mode=mode) if memory_enabled else []
+        if voice_priority_enabled and sample.voice_active:
+            reasons.insert(
+                0,
+                "voice_active=true reserves resources for realtime conversation",
+            )
         result: dict[str, Any] = {
-            "enabled": True,
+            "enabled": memory_enabled,
+            "voice_priority_enabled": voice_priority_enabled,
             "available": True,
             "defer": bool(reasons),
             "reasons": reasons,
@@ -459,6 +734,9 @@ def check(config_path: Path) -> dict[str, Any]:
             "sample": asdict(sample),
             "checked_at": autopilot_dispatch.isoformat(),
         }
+        if voice_priority_enabled:
+            result["voice_observed"] = voice_observed
+            result["voice_priority_until"] = voice_priority_until
     except (OSError, subprocess.SubprocessError, ValueError, KeyError) as error:
         result = {
             "enabled": True,
@@ -468,9 +746,5 @@ def check(config_path: Path) -> dict[str, Any]:
             "error": str(error),
             "checked_at": autopilot_dispatch.isoformat(),
         }
-    state_value = str(
-        config.get("memory_guard_state_file", "var/resource-health.json")
-    )
-    state_path = autopilot_dispatch.resolve_path(config_path, state_value)
     autopilot_dispatch.atomic_write_json(state_path, result)
     return result

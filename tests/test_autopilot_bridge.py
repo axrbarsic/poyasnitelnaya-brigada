@@ -81,6 +81,30 @@ class AutopilotBridgeTests(unittest.TestCase):
         )
         self.assertEqual(health["status"], "idle")
 
+    def test_gate_is_read_only_and_ready_for_pending_event(self) -> None:
+        self.write_events([self.event()])
+
+        result = autopilot_bridge.gate(self.config, lease_seconds=1800)
+
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["status"], "ready")
+        self.assertFalse(
+            (self.root / "var" / "autopilot-dispatch.json").exists()
+        )
+
+    def test_gate_does_not_dispatch_while_owner_is_active(self) -> None:
+        self.write_events([self.event()])
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        result = autopilot_bridge.gate(self.config, lease_seconds=1800)
+
+        self.assertFalse(result["dispatch"])
+        self.assertEqual(result["status"], "leased_waiting")
+        self.assertEqual(
+            result["event_ids"],
+            claimed["event_ids"],
+        )
+
     def test_claim_returns_exact_desktop_handoff(self) -> None:
         self.write_events([self.event()])
 
@@ -205,6 +229,96 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertIn('"identity_kind":"x_user_id"', result["prompt"])
         self.assertIn("Prior exact public claim", result["prompt"])
         self.assertIn("Prior exact Alex reply", result["prompt"])
+
+    def test_manual_parent_is_stored_and_live_chain_is_required(self) -> None:
+        watcher_config = watcher.load_config(self.config)
+        connection = watcher.connect_database(watcher_config.database)
+        current = self.event()
+        manual_parent_id = "2081050000000000001"
+        prior_user_id = "2081050000000000000"
+        payload = {
+            "id": current["event_id"],
+            "author_id": "901",
+            "text": "Reply to Alex manual post",
+            "created_at": current["created_at"],
+            "conversation_id": current["conversation_id"],
+            "in_reply_to_user_id": "16337609",
+            "referenced_tweets": [
+                {"type": "replied_to", "id": manual_parent_id}
+            ],
+        }
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO events(
+                    event_id, author_id, username, created_at,
+                    conversation_id, in_reply_to_user_id, is_reply,
+                    payload_json, first_seen_at, delivery_state
+                ) VALUES(?, '901', 'Timyr316661', ?, ?, '16337609', 1,
+                         ?, ?, 'queued')
+                """,
+                (
+                    current["event_id"],
+                    current["created_at"],
+                    current["conversation_id"],
+                    json.dumps(payload, sort_keys=True),
+                    watcher.isoformat(),
+                ),
+            )
+        watcher.import_history_snapshot(
+            connection,
+            {
+                "chain_id": current["conversation_id"],
+                "root_status_id": current["conversation_id"],
+                "provenance": "short",
+                "turns": [
+                    {
+                        "status_id": prior_user_id,
+                        "actor": "user",
+                        "author": "@Timyr316661",
+                        "url": (
+                            "https://x.com/Timyr316661/status/"
+                            f"{prior_user_id}"
+                        ),
+                        "exact_text": "Earlier exact user turn",
+                    },
+                    {
+                        "status_id": manual_parent_id,
+                        "parent_status_id": prior_user_id,
+                        "actor": "alex",
+                        "author": "@axrbarsic",
+                        "url": (
+                            "https://x.com/axrbarsic/status/"
+                            f"{manual_parent_id}"
+                        ),
+                        "exact_text": "Exact reply Alex posted manually",
+                    },
+                ],
+            },
+        )
+        stored = connection.execute(
+            """
+            SELECT actor, exact_text
+            FROM conversation_turns
+            WHERE status_id = ?
+            """,
+            (manual_parent_id,),
+        ).fetchone()
+        self.assertEqual(stored["actor"], "alex")
+        self.assertEqual(
+            stored["exact_text"],
+            "Exact reply Alex posted manually",
+        )
+        connection.close()
+        self.write_events([current])
+
+        result = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        self.assertIn(
+            "восстанови полную ветку и историю",
+            result["prompt"],
+        )
+        self.assertIn(current["event_id"], result["prompt"])
 
     def test_claim_includes_official_archive_alex_reply_memory(self) -> None:
         watcher_config = watcher.load_config(self.config)
@@ -433,6 +547,44 @@ class AutopilotBridgeTests(unittest.TestCase):
             (self.root / "var" / "autopilot-dispatch.json").exists()
         )
         self.assertTrue(result["resource_guard"]["defer"])
+
+    def test_voice_priority_defers_without_claiming(self) -> None:
+        payload = json.loads(self.config.read_text(encoding="utf-8"))
+        payload.update(
+            {
+                "voice_priority_enabled": True,
+                "memory_guard_enabled": False,
+            }
+        )
+        self.config.write_text(json.dumps(payload), encoding="utf-8")
+        self.write_events([self.event()])
+        original_collect = resource_guard.collect
+        resource_guard.collect = lambda: resource_guard.ResourceSample(
+            codex_rss_mb=900,
+            renderer_count=2,
+            node_repl_count=1,
+            mcp_process_count=2,
+            free_percent=60,
+            voice_active=True,
+            voice_input_pids=(123,),
+        )
+        try:
+            result = autopilot_bridge.gate(
+                self.config,
+                lease_seconds=1800,
+            )
+        finally:
+            resource_guard.collect = original_collect
+
+        self.assertFalse(result["dispatch"])
+        self.assertEqual(result["status"], "resource_deferred")
+        self.assertIn(
+            "voice_active=true",
+            result["resource_guard"]["reasons"][0],
+        )
+        self.assertFalse(
+            (self.root / "var" / "autopilot-dispatch.json").exists()
+        )
 
     def test_completed_with_warning_is_success_after_queue_resolves(self) -> None:
         self.write_events([self.event()])

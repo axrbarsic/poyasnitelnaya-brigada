@@ -12,7 +12,7 @@
     <string>REPLACE_CONFIG_PATH</string>
     <string>--apply</string>
     <string>--minimum-age-seconds</string>
-    <string>900</string>
+    <string>REPLACE_JANITOR_MINIMUM_AGE</string>
   </array>
   <key>StartInterval</key>
   <integer>REPLACE_JANITOR_INTERVAL</integer>

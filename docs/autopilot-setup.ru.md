@@ -4,10 +4,11 @@
 
 ## Назначение
 
-Watcher обнаруживает ответы X без токенов модели. Локальная automation Codex
-Desktop каждые пять минут проверяет durable очередь. При пустой очереди запуск
-завершается до открытия Browser. Непустая очередь атомарно арендуется и
-обрабатывается в этом же scheduled run на Sol High.
+Watcher обнаруживает ответы X без токенов модели. Локальная automation Luna Low
+каждые пять минут выполняет только read-only gate. При пустой, занятой или
+отложенной очереди запуск завершается до Sol и Browser. Готовая очередь будит
+одну закрепленную сессию Sol High, которая атомарно выполняет claim и
+обрабатывает события.
 
 Каждый непустой claim получает до `commenter_memory_limit` точных публичных
 взаимодействий с тем же стабильным X user ID. Более глубокая сохраненная история
@@ -29,13 +30,14 @@ Codex CLI намеренно исключен из Browser-работы. Офи�
 | --- | --- | --- | --- |
 | X watcher LaunchAgent | 1 минута | нет | Получение, дедупликация, SQLite, очередь |
 | Watchdog LaunchAgent | 1 минута | нет | Контроль polling и ошибок API |
-| Session janitor LaunchAgent | 5 минут | нет | Архив задач и recovery осиротевшего claim |
-| Automation Codex Desktop | 5 минут | Sol High | Claim непустой очереди, Browser, решение, публикация, проверка |
+| Session janitor LaunchAgent | 1 минута | нет | Архив задач и recovery осиротевшего claim |
+| Automation dispatcher | 5 минут | Luna Low | Read-only gate и пробуждение владельца только для готовой очереди |
+| Закрепленный Browser owner | по событию | Sol High | Claim, Browser, решение, публикация, проверка |
 | Кастомный GPT | только Pro | настроенный Pro | Длинный ответ в точной исторической conversation |
 
-Минутный poll не использует токены. Пустой scheduled run расходует небольшой
-контекст Sol, но не открывает Browser и не выполняет содержательную работу,
-пока `dispatch` не равен `true`. Claim выполняется до чтения skills и references.
+Минутный poll не использует токены. Пустой scheduled run использует только
+короткий контекст Luna Low. Sol High получает работу лишь при `dispatch=true`.
+Claim выполняется постоянным владельцем до чтения skills и references.
 Архивация не входит в prompt automation и не расходует модель. Ее выполняет
 локальный app-server janitor.
 
@@ -49,10 +51,19 @@ Codex CLI намеренно исключен из Browser-работы. Офи�
   "autopilot_health_file": "var/autopilot-health.json",
   "browser_owner_cwd": ".",
   "memory_guard_enabled": true,
+  "voice_priority_enabled": true,
+  "voice_priority_hold_seconds": 300,
   "memory_guard_state_file": "var/resource-health.json",
   "resource_mode": "auto",
   "resource_mode_idle_seconds": 900,
-  "session_janitor_interval_seconds": 300,
+  "resource_mode_performance_min_free_percent": 35,
+  "memory_guard_swap_recovery_free_percent": 25,
+  "memory_guard_swap_recovery_codex_rss_mb": 2000,
+  "memory_guard_helper_recovery_free_percent": 25,
+  "memory_guard_helper_recovery_codex_rss_mb": 1800,
+  "memory_guard_helper_recovery_total_rss_mb": 512,
+  "session_janitor_interval_seconds": 60,
+  "session_janitor_minimum_age_seconds": 60,
   "session_janitor_orphan_owner_seconds": 300,
   "session_janitor_reap_helpers": true,
   "session_janitor_helper_grace_seconds": 120,
@@ -91,34 +102,43 @@ python3 scripts/render_launchd.py \
 
 Не устанавливайте устаревший `com.axrbarsic.xmention.autopilot.plist`.
 
-## Создание automation Codex Desktop
+## Создание Browser owner и automation
 
-Создайте одну локальную запланированную задачу:
+Создайте одну обычную задачу, закрепите ее и сохраните точный thread ID:
 
 - модель: `gpt-5.6-sol`
 - reasoning effort: `high`
+- роль: единственный Browser owner
+
+Добавьте этот ID в `session_janitor_protected_thread_ids`.
+
+Затем создайте одну локальную запланированную задачу:
+
+- модель: `gpt-5.6-luna`
+- reasoning effort: `low`
 - частота: каждые пять минут
 - уведомления: только при неудачных запусках
 
 Её постоянный prompt должен реализовывать эту машину состояний:
 
-1. До чтения automation memory, skills и references выполнить
-   `autopilot_bridge.py ... claim`.
-2. Если статус равен `memory_deferred` либо `dispatch` равен `false`, оставить
-   очередь без изменений и не открывать Browser.
-3. Нормально завершить пустой run без `list_threads`, Browser и самоархивации.
-4. Если `dispatch` равен `true`, выполнить `started --claim-token ...`.
-5. Исполнить возвращенный prompt в текущем запуске как единственный Browser
-   owner.
-6. После exact history и durable resolution всех заявленных событий убедиться,
-   что они исчезли из `wake-request.json`, затем выполнить
-   `completed --claim-token ...`.
-7. При ошибке до durable resolution выполнить
-   `failed --claim-token ... --error ...`.
-8. Закрыть все принадлежащие run Browser-вкладки и завершить задачу обычным
-   финальным ответом. Не архивировать текущую задачу изнутри нее.
-9. Не запускать X API postflight poll внутри automation. Polling и доступ к
+1. Выполнить `autopilot_bridge.py ... gate`.
+2. При `dispatch=false` тихо завершиться без Browser, skills и `list_threads`.
+3. При `dispatch=true` подключить `send_message_to_thread` через `tool_search`.
+4. Вызвать этот Codex app tool напрямую, не из `functions.exec`, JavaScript
+   или `tools.*`. Отправить follow-up в закрепленную задачу с явным override
+   `gpt-5.6-sol`, effort `high`.
+5. Browser owner выполняет `claim`, затем `started`, исполняет prompt из claim,
+   сохраняет exact history и durable resolution.
+6. После удаления заявленных событий из очереди owner выполняет `completed`.
+7. При ошибке до durable resolution owner выполняет `failed`.
+8. Owner закрывает только свои Browser-вкладки и остается закрепленным.
+9. Dispatcher никогда не создает inbox-item и не обрабатывает X самостоятельно.
+10. Не запускать X API postflight poll внутри automation. Polling и доступ к
    Keychain принадлежат LaunchAgent.
+
+Готовый переносимый текст находится в
+[`automation-prompts/luna-dispatcher.ru.md`](automation-prompts/luna-dispatcher.ru.md).
+В нем заменяются только путь проекта и ID закрепленной сессии.
 
 Сохраняйте следующие инварианты prompt:
 

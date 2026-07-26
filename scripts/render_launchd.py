@@ -26,14 +26,21 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
         config_payload.get("watchdog_interval_seconds", 60)
     )
     janitor_interval = int(
-        config_payload.get("session_janitor_interval_seconds", 300)
+        config_payload.get("session_janitor_interval_seconds", 60)
+    )
+    janitor_minimum_age = int(
+        config_payload.get("session_janitor_minimum_age_seconds", 60)
     )
     if (
         poll_interval <= 0
         or watchdog_interval <= 0
         or janitor_interval <= 0
+        or janitor_minimum_age < 60
     ):
-        raise ValueError("LaunchAgent intervals must be positive")
+        raise ValueError(
+            "LaunchAgent intervals must be positive and janitor age "
+            "must be at least 60 seconds"
+        )
     wake_value = str(config_payload.get("wake_file", "var/wake-request.json"))
     wake_candidate = Path(wake_value).expanduser()
     wake_path = (
@@ -59,6 +66,10 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
         text = text.replace(
             "REPLACE_JANITOR_INTERVAL",
             str(janitor_interval),
+        )
+        text = text.replace(
+            "REPLACE_JANITOR_MINIMUM_AGE",
+            str(janitor_minimum_age),
         )
         if "REPLACE_" in text:
             raise RuntimeError(f"Unresolved placeholder in {template.name}")
