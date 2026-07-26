@@ -124,6 +124,20 @@ Desktop на Sol High по
 - Весь исполняемый проект хранится в одном каноническом каталоге. Его точная
   карта и границы внешних deployment points описаны в
   [docs/project-layout.ru.md](docs/project-layout.ru.md).
+- Старые Browser-owner evidence переносятся в канонический `var/evidence`
+  через fail-closed importer с SHA-256 manifest, без изменения исходника:
+
+```bash
+python3 evidence_import.py \
+  --source /absolute/path/to/legacy-work \
+  --label legacy-browser-owner-YYYY-MM-DD
+python3 evidence_import.py \
+  --audit var/evidence/browser-owner/legacy-browser-owner-YYYY-MM-DD
+```
+
+CLI всегда пишет только в канонический `var/evidence/browser-owner`;
+произвольного output path у него нет.
+
 - Единый локальный layout и независимый зашифрованный online backup описаны в
   [docs/storage-and-backup.ru.md](docs/storage-and-backup.ru.md).
 - На оскорбление публикуется спокойный умный ответ без встречного оскорбления.

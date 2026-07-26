@@ -19,6 +19,7 @@ REQUIRED_PATHS = (
     "config.example.json",
     "docs/project-layout.md",
     "docs/project-layout.ru.md",
+    "evidence_import.py",
     "macos/com.axrbarsic.xmention.poll.plist.example",
     "macos/com.axrbarsic.xmention.watchdog.plist.example",
     "memory_snapshot.py",

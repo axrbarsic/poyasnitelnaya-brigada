@@ -28,6 +28,20 @@ canonical directory and does not require a second project under
 `Documents/Codex`. New screenshots, ledgers, payloads, and other evidence must
 be stored below `var/evidence/browser-owner/<session-id>/`.
 
+Import legacy evidence without modifying its source:
+
+```bash
+python3 evidence_import.py \
+  --source /absolute/path/to/legacy-work \
+  --label legacy-browser-owner-YYYY-MM-DD
+python3 evidence_import.py \
+  --audit var/evidence/browser-owner/legacy-browser-owner-YYYY-MM-DD
+```
+
+The importer rejects symlinks and likely credentials, verifies every copied
+file by SHA-256, and atomically publishes a manifest. Its CLI always writes to
+the canonical `var/evidence/browser-owner` tree.
+
 ## Required external deployment points
 
 Only required deployment points remain outside the directory:

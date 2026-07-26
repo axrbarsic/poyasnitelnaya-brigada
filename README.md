@@ -27,6 +27,22 @@ The complete executable project uses one canonical directory. See
 [the project layout contract](docs/project-layout.md) and
 [the storage and backup contract](docs/storage-and-backup.md).
 
+Import legacy Browser-owner evidence into the canonical ignored `var/evidence`
+tree without modifying the source:
+
+```bash
+python3 evidence_import.py \
+  --source /absolute/path/to/legacy-work \
+  --label legacy-browser-owner-YYYY-MM-DD
+python3 evidence_import.py \
+  --audit var/evidence/browser-owner/legacy-browser-owner-YYYY-MM-DD
+```
+
+The importer rejects symlinks and likely credential material, copies through a
+temporary directory, verifies SHA-256 for every file, and atomically publishes
+one manifested evidence tree. Its CLI always writes to the canonical
+`var/evidence/browser-owner` tree and exposes no arbitrary output path.
+
 The watcher uses the official X API user mentions endpoint with `since_id`. It
 stores immutable event IDs in SQLite, writes a durable pending queue, and
 maintains a health file. A separate watchdog detects stale polling and repeated

@@ -28,6 +28,20 @@ x-mention-watcher/
 Новые screenshots, ledgers, payloads и другие evidence должны сохраняться под
 `var/evidence/browser-owner/<session-id>/`.
 
+Старые evidence переносятся без изменения источника:
+
+```bash
+python3 evidence_import.py \
+  --source /absolute/path/to/legacy-work \
+  --label legacy-browser-owner-YYYY-MM-DD
+python3 evidence_import.py \
+  --audit var/evidence/browser-owner/legacy-browser-owner-YYYY-MM-DD
+```
+
+Импортёр запрещает symlinks и вероятные credentials, проверяет SHA-256 каждого
+файла и атомарно публикует manifest. CLI всегда пишет только в канонический
+`var/evidence/browser-owner`.
+
 ## Что находится вне каталога
 
 Снаружи остаются только обязательные deployment points:
