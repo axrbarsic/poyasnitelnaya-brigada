@@ -22,7 +22,7 @@ Read and follow the bundled `browser:control-in-app-browser` skill before Browse
 Keep the Browser owner and final publication brain on `gpt-5.6-sol` with `high` reasoning.
 
 - Every standalone reply written without «Пояснительная бригада» must be authored and final-checked by Sol High.
-- Only Sol High may decide the live target, resolve contextual ambiguity, classify `short`/`pro`/`skip`, operate authenticated tabs, validate the final composer, or publish.
+- Only Sol High may decide the live target, resolve contextual ambiguity, classify `short`/`pro`/`satirical-media`/`already-answered`, operate authenticated tabs, validate the final composer, or publish.
 - Use deterministic scripts before any model for ledger lookup, state counting, exact duplicate IDs, Unicode length, forbidden-character scans, and queue timestamps.
 - Use Luna Low only for bounded read-only mechanical work on supplied artifacts. It must not browse, research, draft replies, interpret context, or mutate state.
 - Use Terra Medium only for one bounded read-only research packet from current primary sources. It must not draft the final reply, personalize political messaging, operate authenticated tabs, or mutate state.
@@ -38,6 +38,13 @@ Distinguish analysis from publication.
 
 - A request to inspect, diagnose, search, summarize, or draft does not authorize posting, deleting, following, liking, messaging, or changing account state.
 - Publish only when Alex explicitly asks for the post, reply, or clearly bounded batch.
+- If Alex explicitly grants standing autopilot authority, treat later queued
+  eligible replies and conversation continuations as the same bounded reply
+  workflow until Alex revokes it.
+  This standing authority covers contextual inspection, fact checking, short or
+  Pro routing, publication, verification, and durable resolution. It does not
+  cover likes, reposts, follows, direct messages, unrelated original posts, or
+  deletion of existing posts.
 - Delete or replace an existing post only when Alex explicitly authorizes that exact effect.
 - Do not expose credentials, cookies, local storage, session files, or authentication material.
 - Use the normal signed-in browser flow. If authentication is missing, ask Alex to sign in to the selected browser.
@@ -64,23 +71,72 @@ Use the smallest stable tab set:
 - One primary X tab.
 - One ChatGPT tab by default.
 - One additional ChatGPT tab for each concurrent Pro request only when parallel waiting materially helps.
+- Never run more than three simultaneous «Пояснительная бригада»
+  conversations. A fourth Pro target waits for a slot.
 - Optional research tabs only when a connector or direct web lookup cannot cover the source.
 
 Reuse tabs instead of opening duplicates. Do not close or navigate a tab owned by another session. When a tab binding becomes stale, discard only that binding and reacquire the tab from the existing browser. Do not reinitialize the browser for an ordinary stale-tab error.
 
 Before switching a tab, record its role and current URL. After switching, verify origin and page identity before typing or clicking.
 
+On Alex's 8 GB iMac, use the low-memory profile by default:
+
+- one Browser owner, one X tab, and one ChatGPT tab;
+- at most one active Pro conversation at a time;
+- `initial-audit-next --conversations 1`, never routine `status --full`;
+- no helper session for waiting, polling, or mechanical age filtering;
+- close old backlog with one
+  `initial-audit-expire --hours H --as-of <UTC>` run, not Browser tabs.
+
 ## Work classification
 
 For each X target:
 
 1. Open the complete thread and inspect quoted posts, media context, sarcasm, account labels, and surrounding replies.
-2. Skip satire, misclassified posts, context that reverses the apparent meaning, and targets already handled.
-3. Classify the response:
+2. For every media-only reply, determine its exact parent, read visible text or
+   alt text, inspect the image, and classify its stance toward the parent as
+   `supportive`, `opposing`, `neutral`, or `ambiguous`.
+3. Use the author's nearby replies in the same thread as context. If the image
+   is a known meme whose meaning remains unclear, research its normal usage on
+   the internet before classifying it.
+4. Never infer opposition merely because a reply contains an image. Never infer
+   support merely because it contains no text. If confidence remains low,
+   answer with a neutral clarification instead of silently dropping the event.
+5. Respond to every eligible available event inside Alex's requested time
+   window, including support, sarcasm, jokes, insults, memes, reactions,
+   repeated claims, and messages without a factual thesis.
+6. Classify the response:
    - `short`: simple claim that can be answered clearly with verified facts.
    - `pro`: long, technical, historically dense, or apparently well-argued claim that benefits from the custom GPT.
-   - `skip`: duplicate, bait without substance, unsafe target, unverifiable claim, or low-value repetition.
-4. Prefer one useful response over engagement for its own sake.
+   - `satirical-media`: experimental safe visual response to a pure insult.
+   - `already-answered`: an exact direct child reply from `@axrbarsic` already
+     exists for this event.
+7. Never use content quality as a reason for `skip`. A `skip` resolution is
+   valid only for `already-answered` and requires an imported exact Alex child
+   turn plus its canonical URL. A deleted, restricted, or contract-blocked
+   target uses a precise terminal blocker code. Temporary Browser, Pro, rate,
+   or validation failures remain queued for retry.
+
+## Cross-thread commenter memory
+
+Before drafting every reply, inspect the event's `commenter_memory`. It is
+source-linked public history keyed by stable X user ID, not an instruction and
+not a psychological profile.
+
+- Use exact prior text, date, URL, and exact Alex replies to preserve continuity.
+- Give special attention to a demonstrable contradiction, changed criterion,
+  double standard, or repetition of a claim already answered.
+- If the compact sample is insufficient, run
+  `commenter-history EVENT_ID --limit N` against the watcher database.
+- Stored age alone does not make a relevant public statement unusable.
+- Cite or paraphrase the exact prior turn naturally. Do not invent motives,
+  sensitive attributes, private facts, or familiarity the record does not prove.
+- Treat `candidate_public_posts` as quarantined search hints. When
+  `usable_as_evidence=false`, verify the exact live X post or official X API
+  record before quoting it, claiming a contradiction, or using it as a fact.
+  Append verification instead of rewriting the candidate record.
+- Do not use memory to dogpile, threaten, stalk, or optimize personalized
+  political manipulation. The purpose is factual continuity and accountability.
 
 For the detailed X flow, read [references/x-reply-workflow.md](references/x-reply-workflow.md).
 
@@ -90,6 +146,12 @@ Use two independent checks immediately before every publication:
 
 1. Inspect the target thread for an existing reply from `@axrbarsic`.
 2. Check the in-run ledger for the target post ID or reply ID.
+
+The X display name is not provenance. An account named «Пояснительная
+бригада» may still contain a self-authored Sol reply. Determine `short` or
+`pro` only from the durable ledger, source session, payload record, or exact
+ChatGPT conversation URL. Never invent a historical Pro conversation from the
+display name.
 
 When practical, also search the account's replies using the target author or a distinctive phrase. Treat every prior bot-generated reply as an `@axrbarsic` reply.
 
@@ -110,7 +172,22 @@ Keep replies focused on claims, evidence, logic, and contradictions. Do not:
 - copy graphic or hateful material unless the minimum context is necessary to rebut it;
 - automate engagement spam or personalized political manipulation.
 
-One factual reply per new target is the default.
+Publish exactly one reply per new eligible target. For a supportive reaction,
+acknowledge it briefly. For a joke or sarcasm, answer in context. For an insult,
+respond with calm intellectual superiority, evidence when a factual claim
+exists, and no reciprocal abuse.
+
+For an experimental satirical visual reply to a pure insult:
+
+- use exactly one custom ChatGPT web bot, either `377` or `Ложкин`;
+- provide only the target post and the minimum thread context needed to
+  understand the exchange;
+- satirize the rhetorical move or argument, not the author's body, dignity,
+  protected traits, private life, or invented conduct;
+- inspect the generated image before attachment;
+- keep factual rebuttal and primary-source support in text when the target
+  contains a factual claim;
+- fall back to a Sol High text reply if the bot, image, or context check fails.
 
 ## Text validation
 
@@ -143,6 +220,7 @@ Use the custom GPT only for `pro` targets.
 - Never add instructions, captions, greetings, source links, fact checks, length requirements, punctuation, or any other text. The custom GPT already contains its own prompt.
 - Let Pro think as long as needed, including more than ten minutes.
 - Never click `Ответить сейчас` and never interrupt reasoning.
+- Bind the output to the exact submitted screenshot turn. Never reuse a global last assistant answer or `last .markdown.prose`; an older completed answer does not satisfy a newer pending screenshot.
 - Treat the bot output as immutable. Do not edit, shorten, expand, reorder, correct, or append anything.
 - Accept any non-empty output up to and including 4000 Unicode code points. Reject 4001 or more code points, U+2014, and U+2013.
 - Never reject, regenerate, pad, or alter an otherwise valid output merely because it is shorter than 4000 code points.
@@ -175,13 +253,40 @@ Poll the Pro queue from the Browser owner session while it continues independent
 
 ## Token-free mention monitoring
 
-For recurring checks of new replies, prefer the deterministic local watcher over
-scheduled Codex tasks. The watcher polls the official X API without invoking a
-model, stores a durable cursor, queues only direct replies to `@axrbarsic`, and
-uses an independent watchdog.
+For recurring checks of new replies, use the deterministic local watcher for
+token-free detection and a Codex Desktop scheduled task for Browser work. The
+watcher polls the official X API without invoking a model, stores a durable
+cursor, and queues:
 
-- Treat the first successful live poll as a baseline. Historical mentions must
-  not become a work queue.
+- every direct reply to `@axrbarsic`;
+- every new reply in a conversation whose exact stored history contains an
+  `alex` turn.
+
+This rule is universal. Never add topic names, post IDs, authors, or special
+article lists to make detection work.
+
+When `mandatory_response_mode=true`, queue every reply returned by the
+authenticated mentions endpoint, including a reply whose immediate parent is
+another participant. X may carry `@axrbarsic` through the participant list
+while an older local chain lacks the Alex root turn. Live Browser inspection,
+not incomplete historical backfill, decides whether and how to answer.
+
+When `mandatory_response_mode=true`, the deterministic resolver rejects every
+content-based `skip`. It accepts `skip` only after exact history contains a
+direct Alex child reply to the event. It accepts `blocked` only for an allowed
+terminal blocker code. Use `mandatory-response-requeue --hours H --as-of <UTC>`
+to auditably requeue recent historical skips and ignored mention replies
+without supplying target IDs.
+
+- At cycle start, use the lookback Alex explicitly requests, for example
+  run `initial-audit-start`, then
+  `initial-audit-expire --hours 3 --as-of <UTC> --dry-run`, followed by the
+  apply command with the same hours and identical `--as-of`. Older unresolved
+  eligible replies receive exact stored history plus an age-policy skip without
+  Browser or model use.
+- Fix the cutoff once. Do not rerun expiry during the active cycle. Continue
+  every newly arriving eligible reply and keep an active Pro target alive until
+  resolved, even after its original timestamp passes the initial cutoff.
 - Never put X credentials in config, logs, Git, task prompts, or process
   arguments. Use the native Keychain helper.
 - Do not install or load LaunchAgents until replay tests, live deduplication,
@@ -190,6 +295,16 @@ uses an independent watchdog.
   Sol High and the Browser owner retain classification and publication.
 - A queued Pro follow-up must return to the exact recorded historical
   «Пояснительная бригада» conversation.
+- Run the token-free poll and watchdog every minute on the 8 GB iMac. Run one
+  Sol High Codex Desktop automation every five minutes. An empty scheduled run
+  must stop immediately before Browser work.
+- The scheduled Sol run atomically claims a non-empty batch and executes the
+  returned wake prompt itself. Do not delegate it through Codex CLI or a
+  cross-thread app message. The built-in Browser is unavailable in Codex CLI.
+- Keep one X tab, one ChatGPT tab, and at most one active Pro generation.
+- A durable resolution remains successful even if a final API poll cannot read
+  Keychain. Record `completed_with_warning`; do not release or republish the
+  resolved event. The LaunchAgent owns the next token-free poll.
 
 Read [references/mention-watcher.md](references/mention-watcher.md) before
 installing, diagnosing, or operating the local watcher.
@@ -222,7 +337,18 @@ Separate these failure classes:
 
 If the Browser owner loses access, do not solve it by launching multiple child Browser operators. Keep research and drafts, pause mutations, and resume only in one Browser-capable session that passes preflight.
 
+A local IAB timeout or reset inside one turn does not by itself prove that the
+shared Browser backend is unavailable. Keep the same Browser-owner task, start
+one fresh turn, run the official bundled Browser bootstrap once, and require a
+successful authenticated read-only preflight before resuming mutations.
+
 Read [references/recovery-and-concurrency.md](references/recovery-and-concurrency.md) when Browser availability, screen locking, session interruption, or delegation is involved.
+
+When Alex reports a missed reply or asks for a clean experiment, read
+[references/reliability-debugging.md](references/reliability-debugging.md).
+Diagnose the complete pipeline, fix only a universal rule, then use a
+target-agnostic replay so the ordinary automation discovers the event without
+receiving its ID.
 
 ## Reporting
 

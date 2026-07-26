@@ -1,0 +1,8 @@
+{
+  "archive_vault": null,
+  "aws_region": "REPLACE_WITH_B2_REGION",
+  "backend": "backblaze-b2-s3",
+  "keychain_service": "axrbarsic-x-memory-backup",
+  "restic_binary": "restic",
+  "tag": "axrbarsic-x-memory"
+}

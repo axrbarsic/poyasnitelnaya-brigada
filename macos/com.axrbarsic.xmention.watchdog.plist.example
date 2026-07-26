@@ -13,7 +13,7 @@
     <string>watchdog</string>
   </array>
   <key>StartInterval</key>
-  <integer>60</integer>
+  <integer>REPLACE_WATCHDOG_INTERVAL</integer>
   <key>RunAtLoad</key>
   <true/>
   <key>StandardOutPath</key>

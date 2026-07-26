@@ -4,8 +4,12 @@
   "lock_file": "var/poll.lock",
   "health_file": "var/health.json",
   "wake_file": "var/wake-request.json",
+  "autopilot_state_file": "var/autopilot-dispatch.json",
+  "autopilot_health_file": "var/autopilot-health.json",
+  "autopilot_owner_rotation_after_runs": 20,
+  "browser_owner_cwd": ".",
   "alert_file": "var/watchdog-alert.json",
-  "poll_interval_seconds": 300,
+  "poll_interval_seconds": 60,
   "stale_after_seconds": 900,
   "failure_threshold": 2,
   "silence_review_seconds": 21600,
@@ -17,5 +21,7 @@
   "keychain_service": "axrbarsic-x-mention-watcher",
   "keychain_account": "axrbarsic",
   "queue_direct_replies_only": true,
+  "mandatory_response_mode": true,
+  "commenter_memory_limit": 12,
   "notifications_enabled": true
 }

@@ -25,29 +25,56 @@
 - [x] Start with a new empty shadow database.
 - [x] Run one live baseline poll and compare relevant IDs with the manual
   Browser scan and durable publication ledger.
-- [x] Run at least three more polls and confirm no duplicates or missed direct
-  replies.
+- [x] Run at least three more polls and confirm no duplicates or missed
+  eligible replies.
 - [x] Inject two invalid-token failures and confirm the watchdog changes to
   `failing`.
 - [x] Restore the token and confirm a successful poll clears the old error.
 - [x] Complete the supervised trial with healthy recovery and zero pending
-  direct replies.
+  eligible replies.
 
 ## Gate 3: production
 
 - [x] Render the two machine-specific LaunchAgent plists.
 - [x] Inspect their absolute paths and load them explicitly with `launchctl`.
-- [x] Confirm poll and watchdog complete independently with exit code 0.
-- [ ] Confirm a real new mention creates one queue item and one notification.
+- [x] Confirm poll and watchdog complete with exit code 0.
+- [x] Confirm the retired CLI launcher exits nonzero before claiming an event.
+- [x] Create the Sol High Codex Desktop worker automation.
+- [x] Confirm real new replies create exact queue items.
 - [ ] Acknowledge the event only after the existing X workflow records its
   disposition.
-- [ ] Keep all publishing in the Sol High Browser-owner session.
+- [x] Keep all publishing inside the claimed Sol High Browser run.
+- [x] Confirm four naturally rediscovered events produce one dispatcher claim.
+- [x] Confirm a second scheduled run inside the lease does not start a
+  duplicate Sol turn.
+- [x] Confirm a failed pre-resolution worker releases the exact claim.
+- [x] Confirm the Browser worker durably resolves every event and the
+  dispatcher prunes the claim.
+- [x] Confirm postflight Keychain failure is represented as a warning after
+  durable resolution, not as a rolled-back result.
+- [x] Confirm mandatory response mode rejects content-based skips.
+- [x] Confirm a clean API canary rediscovers prior content skips and publishes
+  exactly one reply to each without receiving target IDs.
 
 ## Gate 4: backup
 
 - [x] Initialize a clean Git repository with runtime state ignored.
 - [x] Verify that config, tokens, SQLite, queues, health, alerts, and logs are
   excluded.
+- [x] Run every external candidate import in dry-run mode before `--apply`.
+- [x] Confirm candidate records use the expected stable X user ID and remain
+  `usable_as_evidence=false` until live X or official API verification.
+- [x] Keep candidate corpora and exact-text verification scratch files out of
+  Git when their redistribution status is unknown.
 - [x] Create a private GitHub repository.
 - [x] Push source, tests, templates, and documentation.
 - [x] Add the watcher contract to the X skill only after the live gate is green.
+- [x] Generate transactionally consistent, manifested SQLite snapshots.
+- [x] Require a matching SHA-256 dry-run plan before official archive apply.
+- [x] Snapshot and audit memory before and after official archive intake.
+- [x] Import legacy Browser evidence into one manifested canonical tree.
+- [x] Implement a fail-closed restic source plan that excludes live SQLite.
+- [x] Cover secret-free command execution and a real local restore smoke test.
+- [ ] Create the private B2 bucket and bucket-scoped application key.
+- [ ] Initialize the encrypted remote repository after explicit approval.
+- [ ] Run the first remote backup, `check --read-data`, and restore drill.
