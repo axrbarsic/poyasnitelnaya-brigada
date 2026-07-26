@@ -16,8 +16,7 @@ class AutopilotBridgeTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
-        self.owner = self.root / "owner"
-        self.owner.mkdir()
+        self.owner = self.root
         self.config = self.root / "config.json"
         self.config.write_text(
             json.dumps(
@@ -26,13 +25,26 @@ class AutopilotBridgeTests(unittest.TestCase):
                     "autopilot_state_file": "var/autopilot-dispatch.json",
                     "autopilot_health_file": "var/autopilot-health.json",
                     "database": "var/watcher.sqlite3",
-                    "browser_owner_cwd": str(self.owner),
+                    "browser_owner_cwd": ".",
                 }
             ),
             encoding="utf-8",
         )
         self.wake = self.root / "var" / "wake-request.json"
         self.write_events([])
+
+    def test_claim_rejects_external_browser_workspace(self) -> None:
+        external = self.root / "owner"
+        external.mkdir()
+        payload = json.loads(self.config.read_text(encoding="utf-8"))
+        payload["browser_owner_cwd"] = str(external)
+        self.config.write_text(json.dumps(payload), encoding="utf-8")
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "must equal the canonical project root",
+        ):
+            autopilot_bridge.claim(self.config, lease_seconds=1800)
 
     def tearDown(self) -> None:
         self.temporary.cleanup()

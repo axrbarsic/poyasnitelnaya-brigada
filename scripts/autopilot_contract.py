@@ -85,6 +85,7 @@ def resolve_path(config_path: Path, value: str) -> Path:
 
 def load_workspace(config_path: Path) -> Path:
     config = autopilot_dispatch.read_json(config_path)
+    canonical_root = config_path.resolve().parent
     browser_owner_cwd = resolve_path(
         config_path,
         str(config.get("browser_owner_cwd", ".")),
@@ -92,6 +93,11 @@ def load_workspace(config_path: Path) -> Path:
     if not browser_owner_cwd.is_dir():
         raise ValueError(
             f"browser_owner_cwd is not a directory: {browser_owner_cwd}"
+        )
+    if browser_owner_cwd.resolve() != canonical_root:
+        raise ValueError(
+            "browser_owner_cwd must equal the canonical project root: "
+            f"{canonical_root}"
         )
     return browser_owner_cwd
 

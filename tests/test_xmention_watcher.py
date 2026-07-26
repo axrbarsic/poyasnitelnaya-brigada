@@ -1368,6 +1368,86 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(records[1]["stance_detail"], "supportive_reaction")
         self.assertNotIn("payload_json", records[1])
 
+    def test_memory_audit_waits_for_valid_official_archive(self) -> None:
+        completed = watcher.complete_initial_audit(
+            self.config,
+            self.connection,
+        )
+        self.assertTrue(completed["complete"])
+        pending = watcher.memory_audit(self.config, self.connection)
+        self.assertTrue(pending["current_memory_ok"])
+        self.assertFalse(pending["archive_ready"])
+        self.assertFalse(pending["final_complete"])
+        self.assertEqual(pending["status"], "archive_pending")
+
+        with self.connection:
+            cursor = self.connection.execute(
+                """
+                INSERT INTO archive_imports(
+                    archive_fingerprint, account_user_id, username,
+                    source_name, imported_at, post_count, inserted_post_count
+                ) VALUES(?, ?, 'axrbarsic', 'archive.zip', ?, 1, 1)
+                """,
+                (
+                    "a" * 64,
+                    self.config.user_id,
+                    watcher.isoformat(),
+                ),
+            )
+            import_id = int(cursor.lastrowid)
+            self.connection.execute(
+                """
+                INSERT INTO archive_account_aliases(
+                    account_user_id, username, first_import_id, last_import_id
+                ) VALUES(?, 'axrbarsic', ?, ?)
+                """,
+                (self.config.user_id, import_id, import_id),
+            )
+            self.connection.execute(
+                """
+                INSERT INTO archive_posts(
+                    status_id, first_import_id, author_id,
+                    username_at_import, posted_at, exact_text,
+                    canonical_url, source_member, payload_sha256
+                ) VALUES(
+                    '100', ?, ?, 'axrbarsic', ?, 'Archived post',
+                    'https://x.com/i/web/status/100', 'data/tweets.js', ?
+                )
+                """,
+                (
+                    import_id,
+                    self.config.user_id,
+                    watcher.isoformat(),
+                    "b" * 64,
+                ),
+            )
+
+        complete = watcher.memory_audit(self.config, self.connection)
+        self.assertTrue(complete["current_memory_ok"])
+        self.assertTrue(complete["archive_ready"])
+        self.assertTrue(complete["final_complete"])
+        self.assertEqual(complete["status"], "complete")
+        self.assertEqual(complete["archive"]["direct_messages_imported"], 0)
+
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE archive_imports
+                SET account_user_id = '999'
+                WHERE id = ?
+                """,
+                (import_id,),
+            )
+        invalid = watcher.memory_audit(self.config, self.connection)
+        self.assertFalse(invalid["current_memory_ok"])
+        self.assertFalse(invalid["archive_ready"])
+        self.assertFalse(invalid["final_complete"])
+        self.assertEqual(invalid["status"], "invalid")
+        self.assertIn(
+            "archive_import_owner_mismatch",
+            invalid["archive_errors"],
+        )
+
     def test_resolve_requires_exact_history_turn(self) -> None:
         watcher.ingest_response(
             self.config,

@@ -3,6 +3,9 @@ __pycache__/
 .DS_Store
 config.json
 var/
+history-backup/
+work/
+outputs/
 x-archive*.zip
 x-archive*/
 *x-archive-import-report*.json

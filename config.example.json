@@ -7,7 +7,7 @@
   "autopilot_state_file": "var/autopilot-dispatch.json",
   "autopilot_health_file": "var/autopilot-health.json",
   "autopilot_owner_rotation_after_runs": 20,
-  "browser_owner_cwd": "REPLACE_WITH_BROWSER_OWNER_WORKING_DIRECTORY",
+  "browser_owner_cwd": ".",
   "alert_file": "var/watchdog-alert.json",
   "poll_interval_seconds": 60,
   "stale_after_seconds": 900,

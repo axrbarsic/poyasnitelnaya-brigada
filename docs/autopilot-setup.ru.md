@@ -44,12 +44,15 @@ Codex CLI намеренно исключен из Browser-работы. Офи�
 {
   "autopilot_state_file": "var/autopilot-dispatch.json",
   "autopilot_health_file": "var/autopilot-health.json",
-  "browser_owner_cwd": "/absolute/path/to/browser-owner-workspace",
+  "browser_owner_cwd": ".",
   "commenter_memory_limit": 12,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }
 ```
+
+Точка означает каталог рядом с `config.json`, то есть канонический корень
+этого проекта. Не создавайте отдельный Browser owner workspace.
 
 Вложенные ответы отслеживаются автоматически, как только в точной истории
 диалога появляется ход `alex`. Список тематических ID корневых постов не нужен.

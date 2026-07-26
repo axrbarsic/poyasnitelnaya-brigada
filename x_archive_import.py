@@ -478,6 +478,24 @@ def _write_report(path: Path, result: dict[str, Any]) -> None:
     )
 
 
+def require_outside_project(
+    path: Path,
+    *,
+    project_root: Path,
+    label: str,
+) -> Path:
+    resolved = path.expanduser().resolve()
+    canonical_root = project_root.expanduser().resolve()
+    try:
+        resolved.relative_to(canonical_root)
+    except ValueError:
+        return resolved
+    raise ValueError(
+        f"{label} must be stored outside the canonical project root: "
+        f"{canonical_root}"
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Safely import public posts from an official X archive.",
@@ -491,9 +509,25 @@ def main() -> int:
     )
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
-    config = watcher.load_config(args.config)
+    config_path = args.config.expanduser().resolve()
+    project_root = config_path.parent
+    archive_path = require_outside_project(
+        args.archive,
+        project_root=project_root,
+        label="archive",
+    )
+    report_path = (
+        require_outside_project(
+            args.report,
+            project_root=project_root,
+            label="report",
+        )
+        if args.report is not None
+        else None
+    )
+    config = watcher.load_config(config_path)
     plan = plan_archive_import(
-        args.archive.expanduser().resolve(),
+        archive_path,
         expected_user_id=config.user_id,
     )
     result: dict[str, Any] = {
@@ -510,8 +544,8 @@ def main() -> int:
             }
         finally:
             connection.close()
-    if args.report:
-        _write_report(args.report.expanduser().resolve(), result)
+    if report_path is not None:
+        _write_report(report_path, result)
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
     return 0
 

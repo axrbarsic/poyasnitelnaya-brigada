@@ -44,12 +44,15 @@ Add local values to ignored `config.json`:
 {
   "autopilot_state_file": "var/autopilot-dispatch.json",
   "autopilot_health_file": "var/autopilot-health.json",
-  "browser_owner_cwd": "/absolute/path/to/browser-owner-workspace",
+  "browser_owner_cwd": ".",
   "commenter_memory_limit": 12,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }
 ```
+
+The dot resolves to the directory beside `config.json`, which is the canonical
+project root. Do not create a separate Browser owner workspace.
 
 Nested replies are tracked automatically once exact conversation history
 contains an `alex` turn. No topic-specific root ID list is required. A nested

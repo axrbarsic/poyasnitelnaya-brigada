@@ -23,6 +23,10 @@ content decisions:
 Start with [the autopilot setup guide](docs/autopilot-setup.md) to adapt the
 system to another X account and Codex task.
 
+The complete executable project uses one canonical directory. See
+[the project layout contract](docs/project-layout.md) and
+[the storage and backup contract](docs/storage-and-backup.md).
+
 The watcher uses the official X API user mentions endpoint with `since_id`. It
 stores immutable event IDs in SQLite, writes a durable pending queue, and
 maintains a health file. A separate watchdog detects stale polling and repeated
@@ -89,6 +93,14 @@ in each automation handoff. Deeper history remains available on demand:
 ```bash
 python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \
   --limit 50
+```
+
+Verify that the runtime, Browser owner workspace, and installed skill use the
+single canonical project root:
+
+```bash
+python3 project_layout_audit.py --config config.json \
+  --require-installed-skill
 ```
 
 ## Import an official X archive
@@ -449,6 +461,31 @@ Only complete the initial audit after every direct reply has a durable
 python3 xmention_watcher.py --config config.json initial-audit-complete
 ```
 
+Audit the complete durable memory independently of the Browser:
+
+```bash
+python3 xmention_watcher.py --config config.json memory-audit
+python3 xmention_watcher.py --config config.json memory-audit --require-archive
+```
+
+The first command must keep the existing watcher, stable identities, exact
+history, resolutions, quarantined candidate corpus, SQLite integrity, and
+foreign keys valid while the official archive is pending. The second command
+is the final fail-closed gate: it also requires at least one valid official X
+archive import for the configured stable user ID, consistent post counts,
+canonical post records, and a matching account alias. It never treats private
+messages as imported memory.
+
+Create a transactionally consistent backup source instead of copying the live
+SQLite and WAL files:
+
+```bash
+python3 memory_snapshot.py --config config.json
+```
+
+The canonical local layout and the encrypted off-site backup design are
+documented in [docs/storage-and-backup.md](docs/storage-and-backup.md).
+
 Completion fails closed while any direct reply lacks an `event_resolutions`
 row, even if an old client changed its delivery state. `initial-audit-start`
 requeues legacy baseline or acknowledged direct replies that have no durable
@@ -515,7 +552,7 @@ Export a canonical reviewable backup after a completed response batch:
 
 ```bash
 python3 xmention_watcher.py --config config.json history-export \
-  --output history-backup/conversation-history.jsonl
+  --output var/exports/conversation-history.jsonl
 ```
 
 Imports are idempotent and atomic for the complete input file. A conflicting
@@ -559,8 +596,10 @@ python3 -m unittest discover -s tests -v
 
 `skill-backup/x-twitter-operator` is a restorable snapshot of the installed
 Codex skill contract that governs detection, Browser ownership, duplicate
-checks, Pro continuity, and publication. Runtime state and credentials remain
-outside this repository.
+checks, Pro continuity, and publication. Mutable runtime data remains under
+the ignored `var/` directory in the same canonical project root. Credentials
+remain in macOS Keychain, and official X archive ZIP files remain in the
+separate archive vault.
 
 Official references:
 

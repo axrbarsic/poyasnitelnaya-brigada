@@ -3411,6 +3411,251 @@ def history_status(connection: sqlite3.Connection) -> dict[str, Any]:
     }
 
 
+def memory_audit(
+    config: Config,
+    connection: sqlite3.Connection,
+) -> dict[str, Any]:
+    integrity_rows = [
+        str(row[0])
+        for row in connection.execute("PRAGMA integrity_check").fetchall()
+    ]
+    foreign_key_violations = len(
+        connection.execute("PRAGMA foreign_key_check").fetchall()
+    )
+    configured_user_id = get_meta(connection, "configured_user_id")
+    initial_audit = initial_audit_status(connection)
+    history = history_status(connection)
+    event_row = connection.execute(
+        """
+        SELECT COUNT(*) AS event_count,
+               COUNT(DISTINCT author_id) AS stable_author_count,
+               COUNT(DISTINCT lower(username)) AS username_count,
+               SUM(
+                   CASE
+                       WHEN COALESCE(author_id, '') = ''
+                         OR COALESCE(username, '') = ''
+                       THEN 1 ELSE 0
+                   END
+               ) AS missing_identity_count
+        FROM events
+        """
+    ).fetchone()
+    turn_row = connection.execute(
+        """
+        SELECT SUM(
+                   CASE
+                       WHEN actor IN ('user', 'target')
+                        AND COALESCE(author, '') = ''
+                       THEN 1 ELSE 0
+                   END
+               ) AS missing_user_author_count
+        FROM conversation_turns
+        """
+    ).fetchone()
+    archive_row = connection.execute(
+        """
+        SELECT COUNT(*) AS import_count,
+               COALESCE(SUM(post_count), 0) AS declared_post_count,
+               COALESCE(SUM(inserted_post_count), 0) AS inserted_post_count,
+               SUM(
+                   CASE
+                       WHEN account_user_id <> ?
+                       THEN 1 ELSE 0
+                   END
+               ) AS owner_mismatch_count,
+               SUM(
+                   CASE
+                       WHEN post_count <= 0
+                         OR inserted_post_count < 0
+                         OR inserted_post_count > post_count
+                       THEN 1 ELSE 0
+                   END
+               ) AS invalid_count_count
+        FROM archive_imports
+        """,
+        (config.user_id,),
+    ).fetchone()
+    archive_post_row = connection.execute(
+        """
+        SELECT COUNT(*) AS post_count,
+               SUM(
+                   CASE
+                       WHEN author_id <> ?
+                       THEN 1 ELSE 0
+                   END
+               ) AS owner_mismatch_count,
+               SUM(
+                   CASE
+                       WHEN canonical_url <>
+                            'https://x.com/i/web/status/' || status_id
+                         OR length(payload_sha256) <> 64
+                       THEN 1 ELSE 0
+                   END
+               ) AS invalid_record_count
+        FROM archive_posts
+        """,
+        (config.user_id,),
+    ).fetchone()
+    archive_alias_mismatch = int(
+        connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM archive_imports i
+            LEFT JOIN archive_account_aliases a
+              ON a.account_user_id = i.account_user_id
+             AND lower(a.username) = lower(i.username)
+            WHERE a.account_user_id IS NULL
+            """
+        ).fetchone()[0]
+    )
+    candidate_row = connection.execute(
+        """
+        SELECT COUNT(*) AS import_count,
+               COALESCE(SUM(inserted_record_count), 0) AS inserted_count,
+               SUM(
+                   CASE
+                       WHEN record_count <= 0
+                         OR inserted_record_count < 0
+                         OR inserted_record_count > record_count
+                       THEN 1 ELSE 0
+                   END
+               ) AS invalid_count_count
+        FROM candidate_corpus_imports
+        """
+    ).fetchone()
+    candidate_post_row = connection.execute(
+        """
+        SELECT COUNT(*) AS post_count,
+               SUM(
+                   CASE
+                       WHEN post.subject_user_id <> import.subject_user_id
+                         OR post.trust_state <> 'unverified_candidate'
+                         OR length(post.payload_sha256) <> 64
+                       THEN 1 ELSE 0
+                   END
+               ) AS invalid_record_count
+        FROM candidate_public_posts post
+        JOIN candidate_corpus_imports import
+          ON import.id = post.first_import_id
+        """
+    ).fetchone()
+    candidate_verification_count = int(
+        connection.execute(
+            "SELECT COUNT(*) FROM candidate_post_verifications"
+        ).fetchone()[0]
+    )
+
+    current_errors: list[str] = []
+    if integrity_rows != ["ok"]:
+        current_errors.append("sqlite_integrity_check_failed")
+    if foreign_key_violations:
+        current_errors.append("foreign_key_violations")
+    if configured_user_id != config.user_id:
+        current_errors.append("configured_user_id_mismatch")
+    if int(event_row["missing_identity_count"] or 0):
+        current_errors.append("events_missing_stable_identity")
+    if int(turn_row["missing_user_author_count"] or 0):
+        current_errors.append("history_turns_missing_author")
+    if not initial_audit["complete"]:
+        current_errors.append("initial_audit_incomplete")
+    if not initial_audit["history_complete"]:
+        current_errors.append("resolution_history_incomplete")
+    if not initial_audit["invariant_ok"]:
+        current_errors.append("resolution_invariant_failed")
+    if int(candidate_row["invalid_count_count"] or 0):
+        current_errors.append("candidate_import_counts_invalid")
+    if int(candidate_post_row["invalid_record_count"] or 0):
+        current_errors.append("candidate_records_invalid")
+    if (
+        int(candidate_row["inserted_count"] or 0)
+        != int(candidate_post_row["post_count"] or 0)
+    ):
+        current_errors.append("candidate_inserted_count_mismatch")
+
+    archive_errors: list[str] = []
+    archive_import_count = int(archive_row["import_count"] or 0)
+    archive_post_count = int(archive_post_row["post_count"] or 0)
+    if int(archive_row["owner_mismatch_count"] or 0):
+        archive_errors.append("archive_import_owner_mismatch")
+    if int(archive_post_row["owner_mismatch_count"] or 0):
+        archive_errors.append("archive_post_owner_mismatch")
+    if int(archive_row["invalid_count_count"] or 0):
+        archive_errors.append("archive_import_counts_invalid")
+    if int(archive_post_row["invalid_record_count"] or 0):
+        archive_errors.append("archive_records_invalid")
+    if archive_alias_mismatch:
+        archive_errors.append("archive_account_alias_missing")
+    if (
+        int(archive_row["inserted_post_count"] or 0)
+        != archive_post_count
+    ):
+        archive_errors.append("archive_inserted_count_mismatch")
+
+    current_memory_ok = not current_errors and not archive_errors
+    archive_ready = (
+        archive_import_count > 0
+        and archive_post_count > 0
+        and not archive_errors
+    )
+    final_complete = current_memory_ok and archive_ready
+    status = (
+        "complete"
+        if final_complete
+        else "archive_pending"
+        if current_memory_ok
+        else "invalid"
+    )
+    return {
+        "status": status,
+        "schema_version": SCHEMA_VERSION,
+        "current_memory_ok": current_memory_ok,
+        "archive_ready": archive_ready,
+        "final_complete": final_complete,
+        "errors": current_errors,
+        "archive_errors": archive_errors,
+        "database": {
+            "integrity_check": integrity_rows,
+            "foreign_key_violations": foreign_key_violations,
+        },
+        "identity": {
+            "configured_user_id": configured_user_id,
+            "expected_user_id": config.user_id,
+            "events": int(event_row["event_count"]),
+            "stable_authors": int(event_row["stable_author_count"]),
+            "usernames": int(event_row["username_count"]),
+            "missing_event_identities": int(
+                event_row["missing_identity_count"] or 0
+            ),
+            "missing_history_authors": int(
+                turn_row["missing_user_author_count"] or 0
+            ),
+        },
+        "history": {
+            **history,
+            "initial_audit": initial_audit,
+        },
+        "archive": {
+            "import_count": archive_import_count,
+            "declared_post_count": int(
+                archive_row["declared_post_count"] or 0
+            ),
+            "inserted_post_count": int(
+                archive_row["inserted_post_count"] or 0
+            ),
+            "post_count": archive_post_count,
+            "account_alias_mismatch": archive_alias_mismatch,
+            "direct_messages_imported": 0,
+        },
+        "candidate_corpus": {
+            "import_count": int(candidate_row["import_count"] or 0),
+            "inserted_count": int(candidate_row["inserted_count"] or 0),
+            "post_count": int(candidate_post_row["post_count"] or 0),
+            "verified_post_count": candidate_verification_count,
+            "unverified_posts_usable_as_evidence": 0,
+        },
+    }
+
+
 def record_failure(
     config: Config,
     connection: sqlite3.Connection,
@@ -3982,6 +4227,21 @@ def build_parser() -> argparse.ArgumentParser:
         "history-status",
         help="Show conversation history database counts.",
     )
+    memory_check = commands.add_parser(
+        "memory-audit",
+        help=(
+            "Fail closed on database, identity, history, archive, and "
+            "candidate-memory inconsistencies."
+        ),
+    )
+    memory_check.add_argument(
+        "--require-archive",
+        action="store_true",
+        help=(
+            "Return failure until a valid official X archive import is "
+            "present."
+        ),
+    )
     commenter_history = commands.add_parser(
         "commenter-history",
         help=(
@@ -4271,6 +4531,15 @@ def main() -> int:
 
         if args.command == "history-status":
             print_json(history_status(connection))
+            return 0
+
+        if args.command == "memory-audit":
+            result = memory_audit(config, connection)
+            print_json(result)
+            if not result["current_memory_ok"]:
+                return 2
+            if args.require_archive and not result["final_complete"]:
+                return 2
             return 0
 
         if args.command == "commenter-history":

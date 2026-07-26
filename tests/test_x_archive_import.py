@@ -156,6 +156,39 @@ class XArchiveImportTests(unittest.TestCase):
         )
         self.assertEqual(plan.summary()["direct_messages_imported"], 0)
 
+    def test_archive_and_report_must_be_outside_project_root(self) -> None:
+        archive = self.write_zip_archive(self.archive_members())
+        report = self.root / "report.json"
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "archive must be stored outside",
+        ):
+            archive_import.require_outside_project(
+                archive,
+                project_root=self.root,
+                label="archive",
+            )
+        with self.assertRaisesRegex(
+            ValueError,
+            "report must be stored outside",
+        ):
+            archive_import.require_outside_project(
+                report,
+                project_root=self.root,
+                label="report",
+            )
+
+        external = self.root.parent / "archive-vault" / "archive.zip"
+        self.assertEqual(
+            archive_import.require_outside_project(
+                external,
+                project_root=self.root,
+                label="archive",
+            ),
+            external.resolve(),
+        )
+
     def test_plan_rejects_archive_for_other_account(self) -> None:
         archive = self.write_directory_archive(
             self.archive_members(user_id="999")

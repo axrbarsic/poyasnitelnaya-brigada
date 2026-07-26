@@ -316,7 +316,7 @@ python3 xmention_watcher.py --config config.json history-show STATUS_ID
 python3 xmention_watcher.py --config config.json history-import \
   --file /absolute/path/to/snapshot.jsonl
 python3 xmention_watcher.py --config config.json history-export \
-  --output history-backup/conversation-history.jsonl
+  --output var/exports/conversation-history.jsonl
 ```
 
 The import is idempotent and append-only. A different exact text, URL, actor,

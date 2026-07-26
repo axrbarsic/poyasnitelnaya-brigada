@@ -70,6 +70,8 @@ printf '%s' "$X_BEARER_TOKEN" | \
 Проверьте готовность и тесты:
 
 ```bash
+python3 project_layout_audit.py --config config.json \
+  --require-installed-skill
 python3 xmention_watcher.py --config config.json preflight
 python3 -m unittest discover -s tests -v
 ```
@@ -109,6 +111,21 @@ Desktop на Sol High по
 - `target_screenshot_unavailable` используется только после повторных
   проверенных попыток, когда обязательный чистый screenshot цели невозможно
   получить и безопасного контрактного обхода нет.
+- `memory-audit` проверяет целостность SQLite, foreign keys, стабильные X user
+  ID, точную историю, resolutions и карантин candidate corpus. Пока официальный
+  архив готовится, нормальный статус равен `archive_pending`.
+- `memory-audit --require-archive` является финальным fail-closed gate. Он
+  требует импорт официального архива именно владельца из `config.json`,
+  согласованные счетчики публикаций, canonical URL, account alias и ноль
+  импортированных личных сообщений.
+- `memory_snapshot.py --config config.json` создаёт согласованную SQLite-копию,
+  exports и SHA-256 manifest. Live SQLite, WAL и SHM напрямую в облако не
+  копируются.
+- Весь исполняемый проект хранится в одном каноническом каталоге. Его точная
+  карта и границы внешних deployment points описаны в
+  [docs/project-layout.ru.md](docs/project-layout.ru.md).
+- Единый локальный layout и независимый зашифрованный online backup описаны в
+  [docs/storage-and-backup.ru.md](docs/storage-and-backup.ru.md).
 - На оскорбление публикуется спокойный умный ответ без встречного оскорбления.
   Экспериментальный media-маршрут может использовать одного бота `377` или
   `Ложкин`, но картинка высмеивает аргумент, а не внешность или достоинство.
@@ -262,7 +279,7 @@ skill. Историю диалогов можно экспортировать �
 
 ```bash
 python3 xmention_watcher.py --config config.json history-export \
-  --output history-backup/conversation-history.jsonl
+  --output var/exports/conversation-history.jsonl
 ```
 
 Подробная архитектура находится в [docs/architecture.md](docs/architecture.md).
