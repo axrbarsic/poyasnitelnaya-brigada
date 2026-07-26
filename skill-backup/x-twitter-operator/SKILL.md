@@ -265,11 +265,18 @@ cursor, and queues:
 This rule is universal. Never add topic names, post IDs, authors, or special
 article lists to make detection work.
 
+When `mandatory_response_mode=true`, queue every reply returned by the
+authenticated mentions endpoint, including a reply whose immediate parent is
+another participant. X may carry `@axrbarsic` through the participant list
+while an older local chain lacks the Alex root turn. Live Browser inspection,
+not incomplete historical backfill, decides whether and how to answer.
+
 When `mandatory_response_mode=true`, the deterministic resolver rejects every
 content-based `skip`. It accepts `skip` only after exact history contains a
 direct Alex child reply to the event. It accepts `blocked` only for an allowed
 terminal blocker code. Use `mandatory-response-requeue --hours H --as-of <UTC>`
-to auditably requeue recent historical skips without supplying target IDs.
+to auditably requeue recent historical skips and ignored mention replies
+without supplying target IDs.
 
 - At cycle start, use the lookback Alex explicitly requests, for example
   run `initial-audit-start`, then
@@ -336,6 +343,12 @@ one fresh turn, run the official bundled Browser bootstrap once, and require a
 successful authenticated read-only preflight before resuming mutations.
 
 Read [references/recovery-and-concurrency.md](references/recovery-and-concurrency.md) when Browser availability, screen locking, session interruption, or delegation is involved.
+
+When Alex reports a missed reply or asks for a clean experiment, read
+[references/reliability-debugging.md](references/reliability-debugging.md).
+Diagnose the complete pipeline, fix only a universal rule, then use a
+target-agnostic replay so the ordinary automation discovers the event without
+receiving its ID.
 
 ## Reporting
 

@@ -164,6 +164,22 @@ def is_eligible_reply(
     ).fetchone() is not None
 
 
+def event_mentions_configured_account(
+    config: Config,
+    event: sqlite3.Row,
+) -> bool:
+    handle = config.keychain_account.strip().lstrip("@")
+    if not handle or not bool(event["is_reply"]):
+        return False
+    try:
+        payload = json.loads(str(event["payload_json"]))
+    except (TypeError, ValueError):
+        return False
+    text = str(payload.get("text") or "")
+    pattern = rf"(?<![A-Za-z0-9_])@{re.escape(handle)}(?![A-Za-z0-9_])"
+    return re.search(pattern, text, flags=re.IGNORECASE) is not None
+
+
 def connect_database(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
@@ -856,6 +872,18 @@ def ingest_response(
                 in_reply_to_user_id=in_reply_to_user_id,
                 conversation_id=conversation_id,
             )
+            if (
+                config.mandatory_response_mode
+                and source == "x_api"
+                and is_reply
+            ):
+                # The endpoint itself is the authenticated user's mentions
+                # timeline. In mandatory mode, a reply to another participant
+                # can still be an eligible continuation when X carries
+                # @axrbarsic through the thread participant list. Queue it for
+                # live Browser inspection instead of trusting an incomplete
+                # local history backfill to prove the conversation route.
+                eligible_reply = True
             if config.queue_direct_replies_only and not eligible_reply:
                 delivery_state = "ignored"
             else:
@@ -1701,9 +1729,16 @@ def requeue_unanswered_skips(
         """
         SELECT e.*, r.*
         FROM events e
-        JOIN event_resolutions r ON r.event_id = e.event_id
-        WHERE r.disposition = 'skip'
-          AND e.delivery_state != 'queued'
+        LEFT JOIN event_resolutions r ON r.event_id = e.event_id
+        WHERE e.delivery_state != 'queued'
+          AND (
+              r.disposition = 'skip'
+              OR (
+                  r.event_id IS NULL
+                  AND e.delivery_state = 'ignored'
+                  AND e.is_reply = 1
+              )
+          )
         ORDER BY e.created_at, CAST(e.event_id AS INTEGER)
         """
     ).fetchall()
@@ -1718,14 +1753,20 @@ def requeue_unanswered_skips(
         created_at_utc = created_at.astimezone(timezone.utc)
         if created_at_utc < cutoff or created_at_utc > current:
             continue
-        if not is_eligible_reply(
-            connection,
-            config,
-            is_reply=bool(row["is_reply"]),
-            in_reply_to_user_id=row["in_reply_to_user_id"],
-            conversation_id=row["conversation_id"],
-        ):
-            continue
+        is_ignored_mention_reply = (
+            row["disposition"] is None
+            and row["delivery_state"] == "ignored"
+            and bool(row["is_reply"])
+        )
+        if not is_ignored_mention_reply:
+            if not is_eligible_reply(
+                connection,
+                config,
+                is_reply=bool(row["is_reply"]),
+                in_reply_to_user_id=row["in_reply_to_user_id"],
+                conversation_id=row["conversation_id"],
+            ):
+                continue
         if _matching_alex_reply_turns(connection, str(row["event_id"])):
             continue
         candidates.append(row)
@@ -1736,18 +1777,31 @@ def requeue_unanswered_skips(
             delete_meta(connection, "initial_audit_completed_at")
             for row in candidates:
                 event_id = str(row["event_id"])
+                previous_resolution = (
+                    _resolution_row_payload(row)
+                    if row["disposition"] is not None
+                    else {
+                        "delivery_state": "ignored",
+                        "disposition": None,
+                    }
+                )
                 connection.execute(
                     """
                     INSERT INTO response_policy_requeues(
                         event_id, previous_resolution_json, reason, requeued_at
-                    ) VALUES(?, ?, 'mandatory_response_policy_migration', ?)
+                    ) VALUES(?, ?, ?, ?)
                     """,
                     (
                         event_id,
                         json.dumps(
-                            _resolution_row_payload(row),
+                            previous_resolution,
                             ensure_ascii=False,
                             sort_keys=True,
+                        ),
+                        (
+                            "mandatory_response_ignored_mention_reconciliation"
+                            if row["disposition"] is None
+                            else "mandatory_response_policy_migration"
                         ),
                         requeued_at,
                     ),
@@ -2967,6 +3021,9 @@ def sync_browser_handoffs(
                 "tracked_conversation_reply": record.get(
                     "tracked_conversation_reply"
                 ),
+                "mention_reply_to_axrbarsic": record.get(
+                    "mention_reply_to_axrbarsic"
+                ),
                 "history_status": record.get("history_status"),
                 "watcher_disposition": record.get("watcher_disposition"),
                 "disposition": record.get("disposition"),
@@ -3040,7 +3097,16 @@ def sync_browser_handoffs(
         confirmed_tracked = (
             record.get("tracked_conversation_reply") is True
         )
-        if confirmed_direct == confirmed_tracked:
+        confirmed_mention = (
+            record.get("mention_reply_to_axrbarsic") is True
+        )
+        if sum(
+            (
+                confirmed_direct,
+                confirmed_tracked,
+                confirmed_mention,
+            )
+        ) != 1:
             raise ValueError(
                 f"Browser handoff {event_id} must confirm exactly one route"
             )
@@ -3065,9 +3131,11 @@ def sync_browser_handoffs(
             in_reply_to_user_id=None,
             conversation_id=event["conversation_id"],
         )
+        event_is_mention = event_mentions_configured_account(config, event)
         if (
             (confirmed_direct and not event_is_direct)
             or (confirmed_tracked and not event_is_tracked)
+            or (confirmed_mention and not event_is_mention)
         ):
             raise ValueError(
                 f"Browser handoff {event_id} route does not match stored event"
@@ -4195,8 +4263,8 @@ def build_parser() -> argparse.ArgumentParser:
     response_requeue = commands.add_parser(
         "mandatory-response-requeue",
         help=(
-            "Requeue recent content-based skips that have no exact Alex child "
-            "reply."
+            "Requeue recent content-based skips and previously ignored mention "
+            "replies that have no exact Alex child reply."
         ),
     )
     response_requeue.add_argument(

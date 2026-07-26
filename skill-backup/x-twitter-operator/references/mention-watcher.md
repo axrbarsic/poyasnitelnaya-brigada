@@ -30,7 +30,11 @@ drafts, posts, deletes, likes, follows, or changes X account state.
   `in_reply_to_user_id` equals `16337609`.
 - Also queue a nested reply when its `conversation_id` has an exact stored
   `conversation_turns` row with `actor=alex`.
-- Store unrelated mentions and nested replies as `ignored`.
+- When `mandatory_response_mode=true`, queue every reply returned by the
+  authenticated mentions endpoint. The immediate parent may be another
+  participant and an older local chain may be missing its Alex root turn.
+- Outside mandatory mode, store unrelated mentions and untracked nested replies
+  as `ignored`.
 - Never use static topic names, post IDs, authors, or special article lists as
   an eligibility rule.
 - Deduplicate by immutable X event ID.
@@ -138,7 +142,8 @@ classify, draft, or publish. Every handoff must contain exactly one proven
 route:
 
 - `direct_reply_to_axrbarsic=true`; or
-- `tracked_conversation_reply=true`;
+- `tracked_conversation_reply=true`; or
+- `mention_reply_to_axrbarsic=true`;
 - `history_status=exact_user_turn_appended`;
 - `alex_history_status=exact_alex_turn_appended` for a publication;
 - a pending root resolution marker;
@@ -305,11 +310,17 @@ python3 xmention_watcher.py --config config.json mandatory-response-requeue \
 ```
 
 Use the same `--as-of` for dry-run and apply. The command receives no event ID.
-It selects recent eligible `skip` resolutions with no exact direct Alex child,
-records the prior resolution in `response_policy_requeues`, and returns them to
-the ordinary wake queue. The scheduled Sol run then discovers them through the
-same queue contract as any new event. Existing publications and proven
-already-answered events remain untouched.
+It selects recent eligible `skip` resolutions and previously ignored mention
+replies with no exact direct Alex child, records the prior state in
+`response_policy_requeues`, and returns them to the ordinary wake queue. The
+scheduled Sol run then discovers them through the same queue contract as any
+new event. Existing publications and proven already-answered events remain
+untouched.
+
+When diagnosing a reported miss, do not manually queue its known ID. Fix the
+universal eligibility rule, run the target-agnostic reconciliation, and let the
+ordinary scheduled Sol run discover and process it. See
+[reliability-debugging.md](reliability-debugging.md).
 
 ## Conversation history commands
 

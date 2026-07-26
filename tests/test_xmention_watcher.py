@@ -811,6 +811,29 @@ class WatcherTests(unittest.TestCase):
         ).fetchone()["delivery_state"]
         self.assertEqual(state, "ignored")
 
+    def test_mandatory_mode_queues_non_direct_mention_reply(self) -> None:
+        watcher.set_meta(self.connection, "first_success_at", watcher.isoformat())
+        payload = json.loads(json.dumps(self.fixture))
+        payload["data"][0]["in_reply_to_user_id"] = "another-user"
+        strict_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+
+        result = watcher.ingest_response(
+            strict_config,
+            self.connection,
+            payload,
+            source="x_api",
+        )
+
+        self.assertEqual(result["new_count"], 3)
+        state = self.connection.execute(
+            "SELECT delivery_state FROM events WHERE event_id = ?",
+            ("2080696811623190996",),
+        ).fetchone()["delivery_state"]
+        self.assertEqual(state, "queued")
+
     def test_baseline_existing_queue_preserves_cursor(self) -> None:
         watcher.ingest_response(
             self.config,
@@ -1928,6 +1951,72 @@ class WatcherTests(unittest.TestCase):
             1,
         )
 
+    def test_mandatory_response_requeues_recent_ignored_mentions(self) -> None:
+        watcher.set_meta(self.connection, "first_success_at", watcher.isoformat())
+        payload = json.loads(json.dumps(self.fixture))
+        event_id = "2080696811623190996"
+        payload["data"][0]["in_reply_to_user_id"] = "another-user"
+        watcher.ingest_response(
+            self.config,
+            self.connection,
+            payload,
+            source="x_api",
+        )
+        event = self.connection.execute(
+            "SELECT * FROM events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(event["delivery_state"], "ignored")
+        strict_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+        as_of = watcher.parse_time(event["created_at"]) + timedelta(hours=1)
+
+        preview = watcher.requeue_unanswered_skips(
+            strict_config,
+            self.connection,
+            response_window_hours=12,
+            now=as_of,
+            dry_run=True,
+        )
+        applied = watcher.requeue_unanswered_skips(
+            strict_config,
+            self.connection,
+            response_window_hours=12,
+            now=as_of,
+            dry_run=False,
+        )
+
+        self.assertEqual(preview["candidate_event_ids"], [event_id])
+        self.assertEqual(applied["candidate_event_ids"], [event_id])
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT delivery_state FROM events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()["delivery_state"],
+            "queued",
+        )
+        audit = self.connection.execute(
+            """
+            SELECT reason, previous_resolution_json
+            FROM response_policy_requeues
+            WHERE event_id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(
+            audit["reason"],
+            "mandatory_response_ignored_mention_reconciliation",
+        )
+        self.assertEqual(
+            json.loads(audit["previous_resolution_json"]),
+            {
+                "delivery_state": "ignored",
+                "disposition": None,
+            },
+        )
+
     def test_resolve_can_enrich_missing_stance_detail_once(self) -> None:
         watcher.ingest_response(
             self.config,
@@ -2204,6 +2293,122 @@ class WatcherTests(unittest.TestCase):
         )
 
         self.assertEqual(result["resolved_event_ids"], [event_id])
+
+    def test_browser_handoff_sync_accepts_explicit_mention_route(
+        self,
+    ) -> None:
+        conversation_id = "2080312847230210375"
+        event_id = "2081231683437699278"
+        response = {
+            "data": [
+                {
+                    "id": event_id,
+                    "author_id": "901",
+                    "text": "@other_user @axrbarsic Follow-up mention",
+                    "created_at": "2026-07-26T04:14:35Z",
+                    "conversation_id": conversation_id,
+                    "in_reply_to_user_id": "1246293284",
+                    "referenced_tweets": [
+                        {
+                            "type": "replied_to",
+                            "id": "2081230000000000000",
+                        }
+                    ],
+                }
+            ],
+            "includes": {
+                "users": [{"id": "901", "username": "target_user"}]
+            },
+            "meta": {"newest_id": event_id},
+        }
+        strict_config = replace(
+            self.config,
+            keychain_account="axrbarsic",
+            mandatory_response_mode=True,
+        )
+        watcher.ingest_response(
+            strict_config,
+            self.connection,
+            response,
+            source="x_api",
+        )
+        history_file = self.root / "mention-history.jsonl"
+        ledger_file = self.root / "mention-ledger.jsonl"
+        history_file.write_text(
+            json.dumps(
+                {
+                    "record_type": "initial_audit_event_turn",
+                    "chain_id": conversation_id,
+                    "conversation_root_id": conversation_id,
+                    "chain_provenance": "short",
+                    "parent_status_id": "2081230000000000000",
+                    "status_id": event_id,
+                    "actor": "user",
+                    "author": "target_user",
+                    "url": f"https://x.com/target_user/status/{event_id}",
+                    "exact_text": "@other_user @axrbarsic Follow-up mention",
+                    "provenance": "live_x_dom",
+                    "media_json": [],
+                    "sources": [],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+        ledger_file.write_text(
+            json.dumps(
+                {
+                    "event": "initial_audit_disposition",
+                    "event_id": event_id,
+                    "conversation_id": conversation_id,
+                    "direct_reply_to_axrbarsic": False,
+                    "tracked_conversation_reply": False,
+                    "mention_reply_to_axrbarsic": True,
+                    "history_status": "exact_user_turn_appended",
+                    "watcher_disposition":
+                        "durable_skip_pending_root_resolve",
+                    "disposition": "skip",
+                    "reason": "route validation fixture",
+                    "reply_url": None,
+                    "stance": "neutral",
+                    "confidence": "high",
+                    "media_meaning": None,
+                    "evidence": ["live full chain"],
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        result = watcher.sync_browser_handoffs(
+            replace(self.config, keychain_account="axrbarsic"),
+            self.connection,
+            history_path=history_file,
+            ledger_path=ledger_file,
+        )
+
+        self.assertEqual(result["resolved_event_ids"], [event_id])
+
+    def test_explicit_mention_route_requires_exact_handle_boundary(self) -> None:
+        event_id = "2081231683437699279"
+        self.insert_direct_event(
+            event_id=event_id,
+            created_at="2026-07-26T04:14:35Z",
+            conversation_id="2080312847230210375",
+            parent_status_id="2081230000000000000",
+            text="@axrbarsic_extra is a different account",
+        )
+        event = self.connection.execute(
+            "SELECT * FROM events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+
+        self.assertFalse(
+            watcher.event_mentions_configured_account(
+                replace(self.config, keychain_account="axrbarsic"),
+                event,
+            )
+        )
 
     def test_browser_handoff_sync_requires_explicit_correction_marker(self) -> None:
         watcher.ingest_response(

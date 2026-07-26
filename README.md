@@ -1,8 +1,21 @@
-# X mention watcher
+# Пояснительная бригада
 
 [English](README.md) | [Русский](README.ru.md)
 
-Read-only polling for new X mentions and replies with zero model-token use.
+<p align="center">
+  <img src="docs/assets/poyasnitelnaya-brigada-logo.jpg"
+       alt="Пояснительная бригада logo"
+       width="160">
+</p>
+
+Reliable X reply autopilot with token-free detection, durable conversation
+memory, Sol High reasoning, and verified Browser publication.
+
+<p align="center">
+  <img src="docs/assets/system-flow-en.png"
+       alt="Poyasnitelnaya Brigada system flow"
+       width="430">
+</p>
 
 ## What this project is
 
@@ -65,6 +78,11 @@ requested lookback receives exactly one reply. Support, sarcasm, jokes, insults,
 memes, and content-free reactions are not skip reasons. A `skip` is accepted
 only when exact history proves an existing direct Alex child reply. Terminal
 technical blockers require a machine-readable `blocker_code`.
+
+In mandatory mode, every reply returned by the authenticated X mentions
+endpoint is queued for live inspection, even when its immediate parent is
+another participant. This prevents an incomplete historical backfill from
+hiding a real continuation that still mentions the account.
 
 Before drafting, Sol receives compact cross-thread memory keyed by the stable X
 user ID: exact public turns, dates, URLs, and exact Alex replies. The
@@ -458,7 +476,7 @@ already be in exact conversation history. The `reply_url` field belongs only
 to a `published` handoff created by the current resolution.
 
 After enabling the strict policy, reconcile recent historical content skips
-without supplying event IDs:
+and previously ignored mention replies without supplying event IDs:
 
 ```bash
 python3 xmention_watcher.py --config config.json mandatory-response-requeue \
@@ -466,6 +484,12 @@ python3 xmention_watcher.py --config config.json mandatory-response-requeue \
 python3 xmention_watcher.py --config config.json mandatory-response-requeue \
   --hours 12 --as-of 2026-07-25T20:00:00Z
 ```
+
+This command is also the clean-experiment entry point after an eligibility fix.
+Run dry-run and apply with one identical `as-of`, then let the ordinary
+scheduled Sol automation discover the event. Do not manually inject its known
+ID. The reusable diagnostic contract is stored in
+[`reliability-debugging.md`](skill-backup/x-twitter-operator/references/reliability-debugging.md).
 
 Never rewrite an old ledger record when scope changes or a contract dependency
 is recovered. Append a replacement handoff with

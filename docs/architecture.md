@@ -12,7 +12,9 @@ an X reply.
    `published`, proven `already-answered` skip, or terminal contract-level
    `blocked` resolution. Queue state alone cannot satisfy this invariant.
 4. Later polls queue direct replies and replies in any conversation whose exact
-   history already contains an `alex` turn.
+   history already contains an `alex` turn. In mandatory mode, every reply
+   returned by the authenticated mentions endpoint is queued for live
+   inspection, even when its immediate parent is another participant.
 5. SQLite deduplicates immutable event IDs and advances `since_id`.
 6. `wake-request.json` exposes only queued event metadata and canonical URLs.
 7. A macOS notification reports a new queue item without invoking a model.
@@ -40,6 +42,9 @@ an X reply.
     verified Alex turn linked to that user event. When the handoff files are
     inside the canonical Browser evidence tree, the same command atomically
     creates and verifies the evidence manifest after durable resolution.
+    Every handoff proves exactly one authorization route: a direct reply to
+    Alex, a reply in a conversation with a stored Alex turn, or an explicit
+    `@axrbarsic` mention returned by the authenticated mentions endpoint.
 15. `autopilot_bridge` enriches each claimed event with compact
     `commenter_memory` keyed by stable X user ID. It contains source-linked
     public turns and exact Alex children from any stored conversation. A deeper
@@ -73,10 +78,29 @@ an ordinary duplicate or stale handoff cannot overwrite a decision.
 mandatory response mode it requires an allowed terminal `blocker_code`.
 Temporary Browser, Pro, rate, and validation failures remain queued for retry.
 
-`mandatory-response-requeue` selects recent content-based skips with no exact
-direct Alex child reply, records their prior resolution in
-`response_policy_requeues`, and returns them to the ordinary wake queue without
-receiving target IDs.
+`mandatory-response-requeue` selects recent content-based skips and previously
+ignored mention replies with no exact direct Alex child reply, records their
+prior state in `response_policy_requeues`, and returns them to the ordinary wake
+queue without receiving target IDs.
+
+## Clean reliability experiment
+
+When a screenshot appears to show a missed event, inspect every visible
+candidate and identify the first failing pipeline layer. A clean replay never
+injects the known target ID into the queue or automation prompt.
+
+1. Preserve live X, API, SQLite, queue, lease and Browser evidence.
+2. Fix a universal eligibility or lifecycle rule with synthetic regression
+   data.
+3. Deploy the change.
+4. Run target-agnostic `mandatory-response-requeue` with one fixed lookback and
+   `as-of`, first dry-run and then apply.
+5. Let the ordinary five-minute Sol automation claim and process the result.
+6. Verify one live direct Alex child, exact history, durable resolution, empty
+   queue and no active lease.
+
+The full operator procedure is stored in
+[`reliability-debugging.md`](../skill-backup/x-twitter-operator/references/reliability-debugging.md).
 
 The stable `stance` field keeps one of four broad classes. `stance_detail`
 preserves the exact Sol classification without weakening deterministic
