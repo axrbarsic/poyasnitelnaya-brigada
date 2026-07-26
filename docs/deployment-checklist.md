@@ -59,6 +59,9 @@
 - [x] Confirm every transient relay process exits after a terminal relay
   outcome, including a failed handoff.
 - [ ] Delete the old automation through the official Codex automation API.
+  It remains `PAUSED`: the current Desktop build returns
+  `No handler registered` for `codex_app.automation_update`, so deployment
+  does not bypass the official API by deleting its files directly.
 - [x] Confirm real new replies create exact queue items.
 - [x] Acknowledge the event only after the existing X workflow records its
   disposition.
@@ -85,6 +88,10 @@
 - [x] Install and load the event dispatcher and Codex CLI updater LaunchAgents.
 - [x] Prove the loaded dispatcher remains model-free and process-neutral across
   repeated empty cycles.
+- [x] Prove on two organic events that the loaded dispatcher launches an
+  absent Desktop, marks the exact PID as supervisor-managed, lets the existing
+  Luna relay wake the pinned Sol owner, preserves the queue through a resource
+  deferral, and closes the managed Desktop after durable resolution.
 
 ## Gate 4: backup
 
