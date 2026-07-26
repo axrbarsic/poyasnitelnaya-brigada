@@ -1,0 +1,36 @@
+# Единый аудит готовности
+
+`readiness_audit.py` является единственным итоговым fail-closed gate всей
+системы памяти X. Зелёный отдельный тест не означает, что вся система готова.
+
+Запуск:
+
+```bash
+python3 readiness_audit.py
+```
+
+Команда выполняется без сетевых запросов, не читает секреты и не изменяет
+рабочую базу. Она одновременно проверяет:
+
+- единый канонический layout и соответствие установленного skill;
+- SQLite integrity, foreign keys, идентичности, историю и resolutions;
+- импорт полного официального архива правильного X user ID;
+- здоровье watcher;
+- совпадение последнего snapshot с текущим состоянием памяти;
+- полноту локального backup-plan, включая archive vault после импорта;
+- наличие удалённой backup receipt для точного текущего plan fingerprint;
+- успешный restore-smoke именно того же restic snapshot.
+
+Итог `complete: true` возможен только при прохождении всех компонентов.
+Ожидаемые незавершённые состояния выводятся как машинные коды в `blockers`.
+До получения официального архива нормален
+`official_x_archive_pending`. До настройки B2 нормальны
+`remote_backup_not_configured`, `remote_backup_receipt_missing` и
+`restore_smoke_receipt_missing`. Во время обработки свежего ответа временно
+появляется `response_queue_pending`.
+
+Успешный `restore-smoke` теперь сохраняет отдельную долговечную квитанцию
+`var/backup-state/last-successful-restore-smoke.json`. Она не теряется, когда
+`latest.json` перезаписывается последующей проверкой или retention-командой.
+Аудит сравнивает её `snapshot_id`, fingerprint и число источников с точной
+квитанцией последнего backup.

@@ -140,6 +140,9 @@ CLI всегда пишет только в канонический `var/eviden
 
 - Единый локальный layout и независимый зашифрованный online backup описаны в
   [docs/storage-and-backup.ru.md](docs/storage-and-backup.ru.md).
+- Единый итоговый fail-closed gate описан в
+  [docs/readiness-audit.ru.md](docs/readiness-audit.ru.md) и запускается через
+  `python3 readiness_audit.py`.
 - Исполняемый контракт находится в `restic_backup.py`. Он сохраняет только
   проверенные memory snapshots, manifested Browser evidence и внешний vault
   официальных архивов. Настройка Keychain, preflight, retention, проверки

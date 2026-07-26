@@ -269,6 +269,11 @@ class ResticBackupTests(unittest.TestCase):
         self.assertEqual(restore["restored_evidence_count"], 1)
         self.assertTrue(restore["archive_vault_restored"])
         self.assertFalse(restore["restore_kept"])
+        durable_restore = restic_backup.load_restore_receipt(settings)
+        self.assertEqual(
+            durable_restore["snapshot_id"],
+            backup["snapshot_id"],
+        )
 
 
 def dataclasses_replace(

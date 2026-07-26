@@ -175,8 +175,18 @@ python3 restic_backup.py restore-smoke
 сохраняет точный restic snapshot ID и fingerprinted receipt источников.
 `restore-smoke` восстанавливает только этот snapshot, сверяет каждый источник
 с receipt, заранее проверяет свободное место с запасом, записывает результат
-без секретов в `var/backup-state/latest.json` и удаляет временное
+без секретов в `var/backup-state/latest.json` и в долговечную квитанцию
+`var/backup-state/last-successful-restore-smoke.json`, затем удаляет временное
 восстановление после успешной или неуспешной проверки.
+
+Итоговая готовность проверяется одной командой:
+
+```bash
+python3 readiness_audit.py
+```
+
+Полный контракт компонентов и машинных blocker-кодов описан в
+[readiness-audit.ru.md](readiness-audit.ru.md).
 
 ## Официальные источники
 

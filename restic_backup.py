@@ -31,6 +31,7 @@ SNAPSHOT_ROOT = PROJECT_ROOT / "var/snapshots"
 EVIDENCE_ROOT = PROJECT_ROOT / "var/evidence/browser-owner"
 STATE_ROOT = PROJECT_ROOT / "var/backup-state"
 BACKUP_RECEIPT_NAME = "last-successful-backup.json"
+RESTORE_RECEIPT_NAME = "last-successful-restore-smoke.json"
 KEYCHAIN_HELPER = PROJECT_ROOT / "var/keychain-helper"
 KEYCHAIN_ACCOUNTS = {
     "repository": "repository",
@@ -320,6 +321,7 @@ def audit_memory_snapshot(
         "snapshot": str(snapshot),
         "created_at": manifest.get("created_at"),
         "configured_user_id": manifest.get("configured_user_id"),
+        "memory_audit": manifest.get("memory_audit"),
         "files": len(files),
         "errors": errors,
     }
@@ -761,7 +763,7 @@ def _backup_receipt_path(settings: BackupSettings) -> Path:
     return settings.state_root / BACKUP_RECEIPT_NAME
 
 
-def _load_backup_receipt(settings: BackupSettings) -> dict[str, Any]:
+def load_backup_receipt(settings: BackupSettings) -> dict[str, Any]:
     receipt = _json_object(_backup_receipt_path(settings))
     try:
         snapshot_id = str(receipt["snapshot_id"])
@@ -776,6 +778,29 @@ def _load_backup_receipt(settings: BackupSettings) -> dict[str, Any]:
         raise ValueError("Backup receipt source records are invalid")
     if _plan_fingerprint(source_records) != fingerprint:
         raise ValueError("Backup receipt plan fingerprint is invalid")
+    return receipt
+
+
+def load_restore_receipt(settings: BackupSettings) -> dict[str, Any]:
+    receipt = _json_object(settings.state_root / RESTORE_RECEIPT_NAME)
+    try:
+        status = str(receipt["status"])
+        action = str(receipt["action"])
+        snapshot_id = str(receipt["snapshot_id"])
+        plan_fingerprint = str(receipt["plan_fingerprint"])
+        restored_source_count = int(receipt["restored_source_count"])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError("Restore receipt contract is invalid") from error
+    if status != "complete" or action != "restore-smoke":
+        raise ValueError(
+            "Restore receipt did not record a completed restore-smoke"
+        )
+    if not re.fullmatch(r"[0-9a-f]{64}", snapshot_id):
+        raise ValueError("Restore receipt snapshot ID is invalid")
+    if not re.fullmatch(r"[0-9a-f]{64}", plan_fingerprint):
+        raise ValueError("Restore receipt plan fingerprint is invalid")
+    if restored_source_count <= 0:
+        raise ValueError("Restore receipt source count is invalid")
     return receipt
 
 
@@ -993,7 +1018,7 @@ def restore_smoke(
     keep_restore: bool = False,
 ) -> dict[str, Any]:
     with backup_lock(settings):
-        receipt = _load_backup_receipt(settings)
+        receipt = load_backup_receipt(settings)
         plan = receipt["plan"]
         total_source_bytes = int(plan["total_source_bytes"])
         restore_root = settings.state_root / "restore-drills"
@@ -1059,6 +1084,10 @@ def restore_smoke(
                 "restore_kept": keep_restore,
                 "restore_path": str(target) if keep_restore else None,
             }
+            _atomic_json(
+                settings.state_root / RESTORE_RECEIPT_NAME,
+                state,
+            )
             _atomic_json(settings.state_root / "latest.json", state)
             return state
         finally:
