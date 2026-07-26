@@ -2925,6 +2925,22 @@ def sync_browser_handoffs(
     history_path: Path,
     ledger_path: Path,
 ) -> dict[str, Any]:
+    history_parent = history_path.expanduser().resolve().parent
+    ledger_parent = ledger_path.expanduser().resolve().parent
+    canonical_evidence_root = (
+        config.source_path.parent / "var/evidence/browser-owner"
+    ).resolve()
+    history_is_canonical = history_parent.parent == canonical_evidence_root
+    ledger_is_canonical = ledger_parent.parent == canonical_evidence_root
+    if (history_is_canonical or ledger_is_canonical) and not (
+        history_is_canonical
+        and ledger_is_canonical
+        and history_parent == ledger_parent
+    ):
+        raise ValueError(
+            "Canonical Browser handoff files must share one evidence directory"
+        )
+
     history_result = import_history_file(connection, history_path)
     records = _history_records(ledger_path)
     candidate_groups: dict[str, list[dict[str, Any]]] = {}
@@ -3266,7 +3282,7 @@ def sync_browser_handoffs(
                 evidence=item["evidence"],
             )
         )
-    return {
+    result = {
         "history": history_result,
         "eligible_handoffs": len(prepared),
         "resolved_event_ids": [item["event_id"] for item in resolved],
@@ -3274,6 +3290,18 @@ def sync_browser_handoffs(
         "already_resolved_event_ids": sorted(set(already_resolved)),
         "audit": initial_audit_status(connection),
     }
+    if (
+        history_parent == ledger_parent
+        and history_parent.parent == canonical_evidence_root
+    ):
+        from evidence_import import finalize_runtime_evidence
+
+        result["evidence_manifest"] = finalize_runtime_evidence(
+            destination=history_parent,
+            connection=connection,
+            output_root=canonical_evidence_root,
+        )
+    return result
 
 
 def history_chain_for_status(

@@ -28,6 +28,11 @@ canonical directory and does not require a second project under
 `Documents/Codex`. New screenshots, ledgers, payloads, and other evidence must
 be stored below `var/evidence/browser-owner/<session-id>/`.
 
+No separate manual step is required after durable synchronization.
+`browser-handoff-sync` automatically creates and verifies `manifest.json`
+when both input JSONL files are in the same canonical evidence directory. An
+incomplete or inconsistent set fails closed and blocks the backup plan.
+
 Import legacy evidence without modifying its source:
 
 ```bash

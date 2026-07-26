@@ -1999,8 +1999,16 @@ class WatcherTests(unittest.TestCase):
             (event_id,),
         ).fetchone()
         event_payload = json.loads(event["payload_json"])
-        history_file = self.root / "conversation-history.jsonl"
-        ledger_file = self.root / "run-ledger.jsonl"
+        evidence_dir = (
+            self.root
+            / "var"
+            / "evidence"
+            / "browser-owner"
+            / "test-browser-session"
+        )
+        evidence_dir.mkdir(parents=True)
+        history_file = evidence_dir / "conversation-history.jsonl"
+        ledger_file = evidence_dir / "run-ledger.jsonl"
         ledger_record = {
             "event": "initial_audit_disposition",
             "event_id": event_id,
@@ -2022,6 +2030,24 @@ class WatcherTests(unittest.TestCase):
             encoding="utf-8",
         )
         history_file.write_text("", encoding="utf-8")
+        other_evidence_dir = evidence_dir.parent / "other-browser-session"
+        other_evidence_dir.mkdir()
+        other_ledger_file = other_evidence_dir / "run-ledger.jsonl"
+        other_ledger_file.write_text(
+            ledger_file.read_text(encoding="utf-8"),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "must share one evidence directory",
+        ):
+            watcher.sync_browser_handoffs(
+                self.config,
+                self.connection,
+                history_path=history_file,
+                ledger_path=other_ledger_file,
+            )
 
         with self.assertRaisesRegex(
             ValueError,
@@ -2070,6 +2096,11 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(first["resolved_event_ids"], [event_id])
         self.assertEqual(first["audit"]["resolved_events"], 1)
         self.assertTrue(first["audit"]["history_complete"])
+        self.assertEqual(
+            first["evidence_manifest"]["status"],
+            "finalized",
+        )
+        self.assertTrue((evidence_dir / "manifest.json").is_file())
 
         second = watcher.sync_browser_handoffs(
             self.config,
@@ -2079,6 +2110,10 @@ class WatcherTests(unittest.TestCase):
         )
         self.assertEqual(second["resolved_event_ids"], [])
         self.assertEqual(second["already_resolved_event_ids"], [event_id])
+        self.assertEqual(
+            second["evidence_manifest"]["status"],
+            "already_finalized",
+        )
 
     def test_browser_handoff_sync_accepts_tracked_conversation_route(
         self,

@@ -37,7 +37,9 @@ an X reply.
     already confirmed Sol dispositions. It cannot draft, classify, or publish,
     and it fails closed on missing history or mismatched chain metadata. A
     publication must include both the inspected user turn and the exact
-    verified Alex turn linked to that user event.
+    verified Alex turn linked to that user event. When the handoff files are
+    inside the canonical Browser evidence tree, the same command atomically
+    creates and verifies the evidence manifest after durable resolution.
 15. `autopilot_bridge` enriches each claimed event with compact
     `commenter_memory` keyed by stable X user ID. It contains source-linked
     public turns and exact Alex children from any stored conversation. A deeper

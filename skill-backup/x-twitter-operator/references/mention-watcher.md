@@ -52,8 +52,8 @@ python3 xmention_watcher.py --config config.json initial-audit-expire \
 python3 xmention_watcher.py --config config.json initial-audit-expire \
   --hours 12 --as-of 2026-07-25T10:00:00Z
 python3 xmention_watcher.py --config config.json browser-handoff-sync \
-  --history-file /absolute/path/to/conversation-history.jsonl \
-  --ledger-file /absolute/path/to/run-ledger.jsonl
+  --history-file var/evidence/browser-owner/SESSION_ID/conversation-history.jsonl \
+  --ledger-file var/evidence/browser-owner/SESSION_ID/run-ledger.jsonl
 python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \
   --limit 50
 python3 candidate_corpus.py --config config.json history EVENT_ID --limit 20
@@ -151,6 +151,11 @@ Missing history, a mismatched chain, an invalid field, or conflicting
 unresolved handoffs blocks synchronization. Repeated synchronization is
 idempotent. A publication also blocks unless its verified reply URL resolves to
 an imported Alex turn whose parent is the inspected event.
+
+For canonical runtime evidence, the same successful sync must also return a
+complete `evidence_manifest`. It atomically creates and self-audits
+`manifest.json` only after every handoff in that evidence directory is durably
+resolved. Do not create runtime manifests by hand.
 
 When live X shows that Alex already answered an event before the current audit,
 record the audit disposition as `skip` with `reply_url=null`,
