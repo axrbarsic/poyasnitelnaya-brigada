@@ -2,6 +2,7 @@ __pycache__/
 *.pyc
 .DS_Store
 config.json
+backup.json
 var/
 history-backup/
 work/

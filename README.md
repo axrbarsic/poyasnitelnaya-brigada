@@ -501,6 +501,10 @@ python3 memory_snapshot.py --config config.json
 
 The canonical local layout and the encrypted off-site backup design are
 documented in [docs/storage-and-backup.md](docs/storage-and-backup.md).
+The executable backup contract is implemented by `restic_backup.py`. It backs
+up only verified memory snapshots, manifested Browser evidence, and the
+external official-archive vault. See the storage document for Keychain setup,
+preflight, retention, repository checks, and restore drills.
 
 Completion fails closed while any direct reply lacks an `event_resolutions`
 row, even if an old client changed its delivery state. `initial-audit-start`

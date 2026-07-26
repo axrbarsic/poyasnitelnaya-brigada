@@ -107,6 +107,64 @@ python3 xmention_watcher.py --config restored-config.json \
 Если нужна неизменяемость, используется отдельный bucket или prefix для
 периодических экспортных snapshot bundles.
 
+### Backup-оркестратор
+
+`restic_backup.py` обеспечивает контракт хранения, а не передаёт restic весь
+каталог проекта. Он отклоняет повреждённые и незавершённые snapshots, проверяет
+каждое manifested Browser evidence tree, исключает живую комбинацию
+SQLite/WAL/SHM, запрещает слишком широкие archive-vault paths и передаёт
+credentials только через окружение дочернего процесса. Для iMac с 8 ГБ памяти
+restic ограничен двумя S3-соединениями и двумя Go scheduler threads.
+
+Скопируйте `backup.example.json` в игнорируемый `backup.json`, затем укажите
+регион bucket B2 и безопасное имя Keychain service. Пока официальный архив не
+получен, `archive_vault` должен быть равен `null`. После получения указывается
+точный внешний путь. Настроенный отсутствующий или пустой vault останавливает
+backup. Под этим service сохраняются четыре generic-password items:
+
+| Account | Значение |
+| --- | --- |
+| `repository` | `s3:https://s3.<region>.backblazeb2.com/<bucket>/<dedicated-prefix>` |
+| `restic-password` | независимый пароль restic repository |
+| `aws-access-key-id` | ID ограниченного bucket B2 application key |
+| `aws-secret-access-key` | ограниченный bucket B2 application key |
+
+Значения не должны попадать в JSON, Git, shell history или аргументы команд.
+Для сохранения используется bundled Keychain helper, значение передаётся через
+standard input.
+
+До первой remote-записи:
+
+```bash
+python3 restic_backup.py plan
+python3 restic_backup.py preflight
+```
+
+После создания и проверки существующего private B2 bucket его restic prefix
+инициализируется один раз:
+
+```bash
+python3 restic_backup.py init --confirm-existing-private-bucket
+```
+
+Регулярные команды:
+
+```bash
+python3 restic_backup.py backup
+python3 restic_backup.py check
+python3 restic_backup.py retention
+python3 restic_backup.py retention --apply
+python3 restic_backup.py check --read-data
+python3 restic_backup.py restore-smoke
+```
+
+`retention` выполняет только dry run без `--apply`. Каждый успешный backup
+сохраняет точный restic snapshot ID и fingerprinted receipt источников.
+`restore-smoke` восстанавливает только этот snapshot, сверяет каждый источник
+с receipt, заранее проверяет свободное место с запасом, записывает результат
+без секретов в `var/backup-state/latest.json` и удаляет временное
+восстановление после успешной или неуспешной проверки.
+
 ## Официальные источники
 
 - [Настройка repository restic и рекомендации для B2](https://restic.readthedocs.io/en/stable/030_preparing_a_new_repo.html)
