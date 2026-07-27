@@ -33,6 +33,10 @@ drafts, posts, deletes, likes, follows, or changes X account state.
 - When `mandatory_response_mode=true`, queue every reply returned by the
   authenticated mentions endpoint. The immediate parent may be another
   participant and an older local chain may be missing its Alex root turn.
+- When `conversation_tail_enabled=true`, run a bounded recent search only for
+  recent conversation IDs that contain an exact stored Alex turn. Queue nested
+  replies even when they address another participant and do not repeat
+  `@axrbarsic`.
 - Outside mandatory mode, store unrelated mentions and untracked nested replies
   as `ignored`.
 - A post authored by the configured `user_id` is an exact Alex turn, never an
@@ -41,7 +45,9 @@ drafts, posts, deletes, likes, follows, or changes X account state.
 - Never use static topic names, post IDs, authors, or special article lists as
   an eligibility rule.
 - Deduplicate by immutable X event ID.
-- A successful poll alone may advance `since_id`. Failed polls never do.
+- A successful mentions poll alone may advance `since_id`. Conversation tail
+  search keeps an independent success timestamp and never advances the
+  mentions cursor. Failed polls never advance either boundary.
 - The legacy `baseline` command is disabled because it could hide unresolved
   history. Use `initial-audit-start` to requeue unresolved direct replies.
 
@@ -100,8 +106,10 @@ Before loading LaunchAgents, require all of the following:
 7. X API credits are positive and the spending cap is understood.
 
 The installed poll and independent watchdog intervals are both 60 seconds.
-Both write durable state and send local notifications only on meaningful
-changes. Background stdout and stderr go to `/dev/null`.
+Conversation tail search can use the same interval while limiting the first
+lookback, active conversation window, overlap and maximum conversation count.
+All sources deduplicate by immutable event ID. Background stdout and stderr go
+to `/dev/null`.
 
 If health is `billing_blocked`, do not keep polling. Restore X API credits
 before loading or restarting the LaunchAgents.

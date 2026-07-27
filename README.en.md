@@ -99,12 +99,16 @@ temporary directory, verifies SHA-256 for every file, and atomically publishes
 one manifested evidence tree. Its CLI always writes to the canonical
 `var/evidence/browser-owner` tree and exposes no arbitrary output path.
 
-The watcher uses the official X API user mentions endpoint with `since_id`. It
-stores immutable event IDs in SQLite, writes a durable pending queue, and
-maintains a health file. A token-free supervisor detects stale polling and
-contract failures. It performs one allowlisted poll kickstart, then creates one
-deduplicated durable incident for the existing Sol High owner if the failure
-persists. The official X API still requires an X API Bearer Token.
+The watcher uses the official X API user mentions endpoint with `since_id`.
+It can also run a bounded recent search over recent conversation IDs that
+contain an exact Alex turn. This closes the source gap for nested replies that
+continue the discussion without repeating `@axrbarsic`. The two sources keep
+independent cursors. The watcher stores immutable event IDs in SQLite, writes a
+durable pending queue, and maintains a health file. A token-free supervisor
+detects stale polling and contract failures. It performs one allowlisted poll
+kickstart, then creates one deduplicated durable incident for the existing Sol
+High owner if the failure persists. The official X API still requires an X API
+Bearer Token.
 
 It does not:
 
@@ -173,6 +177,11 @@ Copy `config.example.json` to `config.json`, then set the numeric X user ID.
 Keep `mandatory_response_mode=true` for the no-content-skip contract.
 Set `commenter_memory_limit` to the compact number of prior interactions placed
 in each automation handoff. Deeper history remains available on demand:
+
+Enable `conversation_tail_enabled` to watch only recent chains with an exact
+Alex turn. Use `conversation_tail_initial_lookback_hours` to bound the first
+scan, and keep the mentions cursor separate from the conversation tail scan
+timestamp.
 
 ```bash
 python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \

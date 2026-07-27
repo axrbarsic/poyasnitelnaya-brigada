@@ -6,6 +6,10 @@ The watcher is a read-only detector. It never drafts, classifies, or publishes
 an X reply.
 
 1. A one-minute Python poll calls the official X user mentions endpoint.
+   When conversation tail monitoring is enabled, the same token-free poll also
+   runs a bounded recent search over conversation IDs with a recent exact
+   `alex` turn. This finds nested replies that continue the live discussion
+   without repeating `@axrbarsic`.
 2. The first successful live poll stores available history, advances
    `since_id`, and queues every direct reply for an initial audit.
 3. The initial audit remains incomplete until every direct reply has a durable
@@ -15,7 +19,9 @@ an X reply.
    history already contains an `alex` turn. In mandatory mode, every reply
    returned by the authenticated mentions endpoint is queued for live
    inspection, even when its immediate parent is another participant.
-5. SQLite deduplicates immutable event IDs and advances `since_id`.
+5. SQLite deduplicates immutable event IDs. The mentions cursor and the
+   conversation tail scan timestamp are independent, so a newer nested reply
+   can never hide a direct mention.
 6. `wake-request.json` exposes only queued event metadata and canonical URLs.
 7. A macOS notification reports a new queue item without invoking a model.
 8. Under explicit standing authority, a one-minute LaunchAgent runs the
@@ -75,6 +81,11 @@ an X reply.
     compact search hints per event. Unverified hints have
     `usable_as_evidence=false`; only an append-only live X or official API
     verification can promote the exact observed record.
+21. Conversation tail search is not broad discovery. It watches only recent
+    chains already containing an exact Alex turn, excludes Alex's own posts,
+    applies a bounded first lookback, and reuses immutable event ID
+    deduplication. X bills read endpoints per returned resource and normally
+    deduplicates the same resource within one UTC day.
 
 Each event resolution can preserve stance, confidence, media meaning, and
 multiple evidence notes. This prevents a media-only reply from disappearing

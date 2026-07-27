@@ -262,6 +262,128 @@ class WatcherTests(unittest.TestCase):
                 ["2081034932135096804"],
             )
 
+    def test_conversation_tail_finds_unmentioned_nested_reply(self) -> None:
+        chain_id = "2080312847230210375"
+        event_id = "2081809174187372787"
+        self.insert_alex_turn_for_chain(chain_id)
+        configured = replace(
+            self.config,
+            conversation_tail_enabled=True,
+            conversation_tail_initial_lookback_hours=3,
+        )
+        watcher.set_meta(
+            self.connection,
+            "since_id",
+            "2081800000000000000",
+        )
+        requested_urls: list[str] = []
+
+        def fetch(url: str, token: str, timeout: int) -> dict:
+            requested_urls.append(url)
+            if "/users/900/mentions?" in url:
+                return {
+                    "data": [],
+                    "meta": {"newest_id": "2081800000000000000"},
+                }
+            self.assertIn("/tweets/search/recent?", url)
+            query = watcher.urllib.parse.parse_qs(
+                watcher.urllib.parse.urlsplit(url).query
+            )
+            self.assertIn(f"conversation_id:{chain_id}", query["query"][0])
+            self.assertIn("is:reply", query["query"][0])
+            return {
+                "data": [
+                    {
+                        "id": event_id,
+                        "author_id": "901",
+                        "text": "Nested reply without configured account mention",
+                        "created_at": "2026-07-27T18:29:00Z",
+                        "conversation_id": chain_id,
+                        "in_reply_to_user_id": "902",
+                        "referenced_tweets": [
+                            {
+                                "type": "replied_to",
+                                "id": "2081808000000000000",
+                            }
+                        ],
+                    }
+                ],
+                "includes": {
+                    "users": [{"id": "901", "username": "nested_user"}]
+                },
+                "meta": {"newest_id": event_id},
+            }
+
+        with mock.patch.dict(
+            os.environ,
+            {"X_BEARER_TOKEN": "test-token"},
+            clear=True,
+        ):
+            result = watcher.poll_live(
+                configured,
+                self.connection,
+                fetch=fetch,
+            )
+
+        self.assertEqual(len(requested_urls), 2)
+        self.assertEqual(result["new_event_ids"], [event_id])
+        self.assertEqual(result["conversation_tail"]["new_event_ids"], [event_id])
+        stored = self.connection.execute(
+            """
+            SELECT delivery_state, conversation_id, in_reply_to_user_id
+            FROM events
+            WHERE event_id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(stored["delivery_state"], "queued")
+        self.assertEqual(stored["conversation_id"], chain_id)
+        self.assertEqual(stored["in_reply_to_user_id"], "902")
+        self.assertEqual(
+            watcher.get_meta(self.connection, "since_id"),
+            "2081800000000000000",
+        )
+        self.assertIsNotNone(
+            watcher.get_meta(
+                self.connection,
+                "conversation_tail_last_success_at",
+            )
+        )
+
+    def test_conversation_tail_is_not_due_before_interval(self) -> None:
+        chain_id = "2080312847230210375"
+        self.insert_alex_turn_for_chain(chain_id)
+        configured = replace(
+            self.config,
+            conversation_tail_enabled=True,
+            conversation_tail_poll_interval_seconds=300,
+        )
+        watcher.set_meta(
+            self.connection,
+            "conversation_tail_last_success_at",
+            watcher.isoformat(),
+        )
+        requested_urls: list[str] = []
+
+        def fetch(url: str, token: str, timeout: int) -> dict:
+            requested_urls.append(url)
+            return {"data": [], "meta": {}}
+
+        with mock.patch.dict(
+            os.environ,
+            {"X_BEARER_TOKEN": "test-token"},
+            clear=True,
+        ):
+            result = watcher.poll_live(
+                configured,
+                self.connection,
+                fetch=fetch,
+            )
+
+        self.assertEqual(len(requested_urls), 1)
+        self.assertEqual(result["conversation_tail"]["status"], "not_due")
+        self.assertEqual(result["new_count"], 0)
+
     def test_record_failure_and_watchdog_threshold(self) -> None:
         watcher.ingest_response(
             self.config,

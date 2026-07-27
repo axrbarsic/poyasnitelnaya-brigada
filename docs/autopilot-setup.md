@@ -6,8 +6,9 @@
 
 The system separates token-free mechanics from content decisions:
 
-1. The X watcher polls the official mentions endpoint every minute, deduplicates
-   events, and updates SQLite plus the durable queue.
+1. The X watcher polls the official mentions endpoint every minute and runs a
+   bounded tail scan for recent conversations containing an exact Alex turn.
+   It deduplicates events and updates SQLite plus the durable queue.
 2. The token-free supervisor checks polling freshness, the recovery contract,
    and API failures. It attempts one allowlisted stale-poll repair.
 3. A Python dispatcher runs the model-free repair gate, then the X gate.
@@ -51,7 +52,7 @@ Official architecture references:
 
 | Component | Frequency | Model | Responsibility |
 | --- | --- | --- | --- |
-| X watcher LaunchAgent | 1 minute | none | API, dedupe, SQLite, queue |
+| X watcher LaunchAgent | 1 minute | none | Mentions, tracked conversation tails, dedupe, SQLite, queue |
 | Supervisor LaunchAgent | 1 minute | none | Doctor, repair allowlist, durable incident |
 | Session janitor LaunchAgent | 1 minute | none | Archive service tasks, recover claims |
 | Event dispatcher LaunchAgent | 1 minute | none while idle | Gate, Desktop launch, managed shutdown |
@@ -101,6 +102,12 @@ Create ignored `config.json` from the example and set:
   "session_janitor_interval_seconds": 60,
   "session_janitor_minimum_age_seconds": 60,
   "commenter_memory_limit": 12,
+  "conversation_tail_enabled": true,
+  "conversation_tail_poll_interval_seconds": 60,
+  "conversation_tail_watch_hours": 24,
+  "conversation_tail_initial_lookback_hours": 2,
+  "conversation_tail_overlap_seconds": 120,
+  "conversation_tail_max_conversations": 80,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }

@@ -87,6 +87,12 @@ class Config:
     keychain_account: str
     queue_direct_replies_only: bool
     mandatory_response_mode: bool
+    conversation_tail_enabled: bool
+    conversation_tail_poll_interval_seconds: int
+    conversation_tail_watch_hours: int
+    conversation_tail_initial_lookback_hours: int
+    conversation_tail_overlap_seconds: int
+    conversation_tail_max_conversations: int
     commenter_memory_limit: int
     notifications_enabled: bool
 
@@ -120,6 +126,24 @@ def load_config(path: Path) -> Config:
         keychain_account=str(raw.get("keychain_account", "")).strip(),
         queue_direct_replies_only=bool(raw.get("queue_direct_replies_only", True)),
         mandatory_response_mode=bool(raw.get("mandatory_response_mode", False)),
+        conversation_tail_enabled=bool(
+            raw.get("conversation_tail_enabled", False)
+        ),
+        conversation_tail_poll_interval_seconds=int(
+            raw.get("conversation_tail_poll_interval_seconds", 60)
+        ),
+        conversation_tail_watch_hours=int(
+            raw.get("conversation_tail_watch_hours", 24)
+        ),
+        conversation_tail_initial_lookback_hours=int(
+            raw.get("conversation_tail_initial_lookback_hours", 3)
+        ),
+        conversation_tail_overlap_seconds=int(
+            raw.get("conversation_tail_overlap_seconds", 120)
+        ),
+        conversation_tail_max_conversations=int(
+            raw.get("conversation_tail_max_conversations", 80)
+        ),
         commenter_memory_limit=int(raw.get("commenter_memory_limit", 12)),
         notifications_enabled=bool(raw.get("notifications_enabled", True)),
     )
@@ -131,6 +155,19 @@ def load_config(path: Path) -> Config:
         "watchdog_interval_seconds": config.watchdog_interval_seconds,
         "request_timeout_seconds": config.request_timeout_seconds,
         "max_pages_per_poll": config.max_pages_per_poll,
+        "conversation_tail_poll_interval_seconds": (
+            config.conversation_tail_poll_interval_seconds
+        ),
+        "conversation_tail_watch_hours": config.conversation_tail_watch_hours,
+        "conversation_tail_initial_lookback_hours": (
+            config.conversation_tail_initial_lookback_hours
+        ),
+        "conversation_tail_overlap_seconds": (
+            config.conversation_tail_overlap_seconds
+        ),
+        "conversation_tail_max_conversations": (
+            config.conversation_tail_max_conversations
+        ),
         "commenter_memory_limit": config.commenter_memory_limit,
     }
     invalid = [name for name, value in positive_values.items() if value <= 0]
@@ -998,16 +1035,23 @@ def ingest_response(
                 elif delivery_state == "self_authored":
                     observed_self_authored_ids.append(event_id)
 
-        previous_cursor = get_meta(connection, "since_id")
-        newest_id = numeric_max(
-            [
-                previous_cursor,
-                response.get("meta", {}).get("newest_id"),
-                *seen_ids,
-            ]
-        )
-        if newest_id:
-            set_meta(connection, "since_id", newest_id)
+        if source != "x_api_conversation_tail":
+            previous_cursor = get_meta(connection, "since_id")
+            newest_id = numeric_max(
+                [
+                    previous_cursor,
+                    response.get("meta", {}).get("newest_id"),
+                    *seen_ids,
+                ]
+            )
+            if newest_id:
+                set_meta(connection, "since_id", newest_id)
+        if source == "x_api_conversation_tail":
+            set_meta(
+                connection,
+                "conversation_tail_last_success_at",
+                observed_at,
+            )
         if get_meta(connection, "first_success_at") is None:
             set_meta(connection, "first_success_at", observed_at)
         if live_bootstrap and get_meta(connection, "initial_audit_started_at") is None:
@@ -4046,6 +4090,203 @@ def request_json(url: str, token: str, timeout_seconds: int = 30) -> dict[str, A
         raise RuntimeError(f"X API HTTP {error.code}{suffix}") from error
 
 
+def active_conversation_ids(
+    config: Config,
+    connection: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
+) -> list[str]:
+    current = now or utc_now()
+    cutoff = isoformat(
+        current - timedelta(hours=config.conversation_tail_watch_hours)
+    )
+    rows = connection.execute(
+        """
+        SELECT chain_id, MAX(COALESCE(posted_at, observed_at)) AS latest_alex_at
+        FROM conversation_turns
+        WHERE actor = 'alex'
+          AND COALESCE(posted_at, observed_at) >= ?
+        GROUP BY chain_id
+        ORDER BY latest_alex_at DESC, chain_id DESC
+        LIMIT ?
+        """,
+        (cutoff, config.conversation_tail_max_conversations),
+    ).fetchall()
+    return [str(row["chain_id"]) for row in rows]
+
+
+def conversation_tail_query_chunks(
+    conversation_ids: Iterable[str],
+    *,
+    account_handle: str,
+    max_query_length: int = 3800,
+) -> list[str]:
+    suffix = " is:reply"
+    handle = account_handle.strip().lstrip("@")
+    if handle:
+        suffix += f" -from:{handle}"
+    chunks: list[str] = []
+    current: list[str] = []
+    for conversation_id in conversation_ids:
+        if not str(conversation_id).isdigit():
+            raise ValueError("Conversation tail contains a non-numeric ID")
+        clause = f"conversation_id:{conversation_id}"
+        candidate = f"({' OR '.join([*current, clause])}){suffix}"
+        if current and len(candidate) > max_query_length:
+            chunks.append(f"({' OR '.join(current)}){suffix}")
+            current = [clause]
+        else:
+            current.append(clause)
+    if current:
+        chunks.append(f"({' OR '.join(current)}){suffix}")
+    return chunks
+
+
+def poll_conversation_tails(
+    config: Config,
+    connection: sqlite3.Connection,
+    *,
+    token: str,
+    fetch: Callable[[str, str, int], dict[str, Any]] = request_json,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or utc_now()
+    last_success = parse_time(
+        get_meta(connection, "conversation_tail_last_success_at")
+    )
+    if last_success is not None:
+        age = (current - last_success).total_seconds()
+        if age < config.conversation_tail_poll_interval_seconds:
+            return {
+                "source": "x_api_conversation_tail",
+                "status": "not_due",
+                "new_count": 0,
+                "new_event_ids": [],
+            }
+
+    conversation_ids = active_conversation_ids(
+        config,
+        connection,
+        now=current,
+    )
+    if not conversation_ids:
+        with connection:
+            set_meta(
+                connection,
+                "conversation_tail_last_success_at",
+                isoformat(current),
+            )
+        return {
+            "source": "x_api_conversation_tail",
+            "status": "no_active_conversations",
+            "tracked_conversation_count": 0,
+            "new_count": 0,
+            "new_event_ids": [],
+        }
+
+    if last_success is None:
+        start_time = current - timedelta(
+            hours=config.conversation_tail_initial_lookback_hours
+        )
+    else:
+        start_time = last_success - timedelta(
+            seconds=config.conversation_tail_overlap_seconds
+        )
+    watch_cutoff = current - timedelta(hours=config.conversation_tail_watch_hours)
+    start_time = max(start_time, watch_cutoff)
+    queries = conversation_tail_query_chunks(
+        conversation_ids,
+        account_handle=config.keychain_account,
+    )
+
+    all_data: list[dict[str, Any]] = []
+    all_users: dict[str, dict[str, Any]] = {}
+    all_media: dict[str, dict[str, Any]] = {}
+    newest_ids: list[str | None] = []
+    page_count = 0
+    for query in queries:
+        pagination_token: str | None = None
+        seen_pagination_tokens: set[str] = set()
+        while True:
+            page_count += 1
+            if page_count > config.max_pages_per_poll:
+                raise RuntimeError(
+                    "X conversation tail pagination exceeded configured page limit"
+                )
+            params: dict[str, str] = {
+                "query": query,
+                "start_time": isoformat(start_time),
+                "max_results": "100",
+                "sort_order": "recency",
+                "tweet.fields": (
+                    "author_id,created_at,conversation_id,in_reply_to_user_id,"
+                    "referenced_tweets,attachments"
+                ),
+                "expansions": "author_id,attachments.media_keys",
+                "user.fields": "username",
+                "media.fields": (
+                    "media_key,type,url,preview_image_url,alt_text,"
+                    "width,height,duration_ms"
+                ),
+            }
+            if pagination_token:
+                params["pagination_token"] = pagination_token
+            url = (
+                f"{config.api_base}/tweets/search/recent?"
+                f"{urllib.parse.urlencode(params)}"
+            )
+            page = fetch(url, token, config.request_timeout_seconds)
+            if not isinstance(page, dict):
+                raise RuntimeError(
+                    "X conversation tail returned a non-object JSON response"
+                )
+            if page.get("errors"):
+                raise RuntimeError(
+                    "X conversation tail returned errors: "
+                    + json.dumps(page["errors"], ensure_ascii=False)[:1000]
+                )
+            all_data.extend(page.get("data", []) or [])
+            for user in page.get("includes", {}).get("users", []) or []:
+                if user.get("id"):
+                    all_users[str(user["id"])] = user
+            for item in page.get("includes", {}).get("media", []) or []:
+                if item.get("media_key"):
+                    all_media[str(item["media_key"])] = item
+            meta = page.get("meta", {}) or {}
+            newest_ids.append(meta.get("newest_id"))
+            pagination_token = meta.get("next_token")
+            if not pagination_token:
+                break
+            if pagination_token in seen_pagination_tokens:
+                raise RuntimeError(
+                    "X conversation tail returned a repeated pagination token"
+                )
+            seen_pagination_tokens.add(pagination_token)
+
+    merged = {
+        "data": all_data,
+        "includes": {
+            "users": list(all_users.values()),
+            "media": list(all_media.values()),
+        },
+        "meta": {"newest_id": numeric_max(newest_ids)},
+    }
+    result = ingest_response(
+        config,
+        connection,
+        merged,
+        source="x_api_conversation_tail",
+        started_at=isoformat(current),
+    )
+    return {
+        **result,
+        "status": "success",
+        "tracked_conversation_count": len(conversation_ids),
+        "query_count": len(queries),
+        "start_time": isoformat(start_time),
+    }
+
+
 def poll_live(
     config: Config,
     connection: sqlite3.Connection,
@@ -4053,6 +4294,7 @@ def poll_live(
     fetch: Callable[[str, str, int], dict[str, Any]] = request_json,
 ) -> dict[str, Any]:
     started_at = isoformat()
+    failure_source = "x_api"
     try:
         if (
             not config.user_id
@@ -4127,19 +4369,59 @@ def poll_live(
             },
             "meta": {"newest_id": numeric_max(newest_ids)},
         }
-        return ingest_response(
+        mention_result = ingest_response(
             config,
             connection,
             merged,
             source="x_api",
             started_at=started_at,
         )
+        if not config.conversation_tail_enabled:
+            return mention_result
+
+        failure_source = "x_api_conversation_tail"
+        tail_result = poll_conversation_tails(
+            config,
+            connection,
+            token=token,
+            fetch=fetch,
+        )
+        combined_new_ids = sorted(
+            set(mention_result["new_event_ids"])
+            | set(tail_result["new_event_ids"]),
+            key=int,
+        )
+        combined_self_authored_ids = sorted(
+            set(mention_result["self_authored_event_ids"])
+            | set(tail_result.get("self_authored_event_ids", [])),
+            key=int,
+        )
+        return {
+            **mention_result,
+            "observed_count": (
+                mention_result["observed_count"]
+                + int(tail_result.get("observed_count", 0))
+            ),
+            "new_count": len(combined_new_ids),
+            "new_event_ids": combined_new_ids,
+            "self_authored_event_ids": combined_self_authored_ids,
+            "pending_count": int(
+                tail_result.get(
+                    "pending_count",
+                    mention_result["pending_count"],
+                )
+            ),
+            "health": str(
+                tail_result.get("health", mention_result["health"])
+            ),
+            "conversation_tail": tail_result,
+        }
     except Exception as error:
         record_failure(
             config,
             connection,
             error,
-            source="x_api",
+            source=failure_source,
             started_at=started_at,
         )
         raise

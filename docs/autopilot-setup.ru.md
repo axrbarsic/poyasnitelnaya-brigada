@@ -6,8 +6,9 @@
 
 Система разделяет бесплатную механику и содержательную работу:
 
-1. X watcher раз в минуту получает упоминания через официальный X API,
-   дедуплицирует их и обновляет SQLite с очередью.
+1. X watcher раз в минуту получает упоминания через официальный X API и
+   проверяет хвост недавних conversation ID с точным ходом Alex. Затем он
+   дедуплицирует события и обновляет SQLite с очередью.
 2. Token-free supervisor контролирует свежесть poll, системный контракт и
    ошибки API. Однозначную stale-poll поломку он один раз ремонтирует сам.
 3. Python dispatcher раз в минуту сначала выполняет repair gate, затем X gate.
@@ -53,7 +54,7 @@ Browser всегда принадлежит постоянной owner-сесс�
 
 | Компонент | Частота | Модель | Ответственность |
 | --- | --- | --- | --- |
-| X watcher LaunchAgent | 1 минута | нет | API, дедупликация, SQLite, очередь |
+| X watcher LaunchAgent | 1 минута | нет | Упоминания, хвост разговоров, дедупликация, SQLite, очередь |
 | Supervisor LaunchAgent | 1 минута | нет | Doctor, allowlist ремонта, durable incident |
 | Session janitor LaunchAgent | 1 минута | нет | Архив служебных задач, recovery claim |
 | Event dispatcher LaunchAgent | 1 минута | нет при idle | Gate, запуск и managed shutdown Desktop |
@@ -104,6 +105,12 @@ trust_level = "trusted"
   "session_janitor_interval_seconds": 60,
   "session_janitor_minimum_age_seconds": 60,
   "commenter_memory_limit": 12,
+  "conversation_tail_enabled": true,
+  "conversation_tail_poll_interval_seconds": 60,
+  "conversation_tail_watch_hours": 24,
+  "conversation_tail_initial_lookback_hours": 2,
+  "conversation_tail_overlap_seconds": 120,
+  "conversation_tail_max_conversations": 80,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }

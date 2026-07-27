@@ -135,7 +135,7 @@ Watcher и dispatcher сами никогда ничего не публикую
 ## Быстрый старт
 
 Требуются macOS, Python 3.9 или новее, Codex Desktop с встроенным Browser,
-X Developer App и Bearer Token с доступом к user mentions.
+X Developer App и Bearer Token с доступом к user mentions и recent search.
 
 ```bash
 cp config.example.json config.json
@@ -169,6 +169,13 @@ python3 -m unittest discover -s tests -v
 python3 xmention_watcher.py --config config.json poll
 python3 xmention_watcher.py --config config.json status
 ```
+
+При включенном `conversation_tail_enabled` тот же безмодельный poll проверяет
+только недавние conversation ID, где уже сохранен точный ход Alex. Поэтому
+боковой ответ другому участнику не теряется даже без повторного
+`@axrbarsic`. У mentions и conversation tail разные курсоры. Первый tail
+проход ограничен `conversation_tail_initial_lookback_hours`, обычные проходы
+используют короткое перекрытие и дедупликацию по неизменяемому X ID.
 
 После этого установите пять LaunchAgent, один in-app Luna relay heartbeat и
 одну закрепленную сессию Sol High
