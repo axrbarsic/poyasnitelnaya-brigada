@@ -14,8 +14,9 @@ The system separates token-free mechanics from content decisions:
    a new Codex task.
 5. A ready queue starts Codex Desktop in the canonical workspace when the app
    is closed. Failure keeps the queue intact, retries later, and alerts Alex.
-6. One existing in-app Luna Low heartbeat runs `reserve-handoff`, then makes
-   exactly one `send_message_to_thread` call.
+6. One existing in-app Luna Low heartbeat runs `reserve-handoff`, reads the
+   canonical owner thread, then makes exactly one `send_message_to_thread` call
+   only when that thread is inactive.
 7. The pinned Sol High task claims atomically, restores the live thread,
    publishes, and stores exact history.
 8. The supervisor may later stop only a Desktop process it launched itself.
@@ -78,6 +79,7 @@ Create ignored `config.json` from the example and set:
 {
   "browser_owner_cwd": ".",
   "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
+  "command_center_idle_grace_seconds": 60,
   "desktop_relay_mode": "in_app_heartbeat",
   "desktop_auto_quit_after_work": true,
   "desktop_auto_quit_grace_seconds": 180,
@@ -102,7 +104,14 @@ Create ignored `config.json` from the example and set:
 `browser_owner_thread_id` identifies one pinned Sol High owner. `x-relay` is a
 heartbeat attached to one existing Luna Low thread, not a standalone
 automation. `reserve-handoff` does not claim X events, but prevents duplicate
-wake delivery for 180 seconds. A successful owner claim clears the reservation.
+wake delivery for 180 seconds. Before creating a reservation, it reads the
+owner's durable rollout, requires the latest task to be terminal, and enforces
+`command_center_idle_grace_seconds`. The relay then reads the live owner thread
+and sends only when `status.type=idle` or `status.type=notLoaded`. On a live
+read failure or delivery failure, it runs `release-handoff` with the exact
+reservation token. A successful owner claim changes the reservation to
+`claimed`. The restorable heartbeat prompt is tracked in
+[`macos/x-relay.prompt.txt`](../macos/x-relay.prompt.txt).
 
 A reply posted manually by Alex is an `alex` turn. If somebody answers it, the
 Browser owner restores the exact live branch, stores any previously unseen
@@ -146,14 +155,20 @@ dispatcher, then delete it through the official `automation_update` API.
    without app-server.
 4. On `ready`, the supervisor starts `codex app CANONICAL_ROOT` if Desktop is
    absent.
-5. The in-app heartbeat atomically runs `reserve-handoff`.
-6. The winning relay sends one message to the exact Browser owner with a Sol
-   High override. An adjacent heartbeat receives `handoff_reserved`.
-7. The Browser owner runs `claim`, then `started`.
-8. The owner loads `x-twitter-operator`, opens the minimum tabs, performs double
+5. The in-app heartbeat runs `reserve-handoff`. The command returns
+   `owner_thread_active` or `owner_thread_cooldown` without a reservation while
+   the canonical command center is active or inside its quiet period.
+6. The winning relay reads the exact live Browser owner thread. It sends one message
+   with a Sol High override only when `status.type=idle` or
+   `status.type=notLoaded`.
+7. If the owner thread is active, cannot be read, or delivery fails, the relay
+   runs `release-handoff` with its exact reservation token and exits. The queue
+   remains pending. An adjacent heartbeat receives `handoff_reserved`.
+8. The Browser owner runs `claim`, then `started`.
+9. The owner loads `x-twitter-operator`, opens the minimum tabs, performs double
    dedupe, and executes the publication transaction.
-9. After exact history and durable resolution, the owner runs `completed`.
-10. If Desktop was supervisor-launched, an empty queue and cleared owner lease
+10. After exact history and durable resolution, the owner runs `completed`.
+11. If Desktop was supervisor-launched, an empty queue and cleared owner lease
     start a grace timer before that exact managed PID is stopped.
 
 ## Memory and quality contracts
@@ -170,6 +185,10 @@ dispatcher, then delete it through the official `automation_update` API.
   read-only Browser preflight and continues when `iab` is available.
 - The handoff reservation and global owner lease prevent overlapping relay and
   Browser-owner runs.
+- The relay never wakes an active canonical owner thread. Mobile Remote, local
+  Desktop, and automated Browser work use that durable thread serially. Because
+  the thread status read and message delivery are separate Codex operations,
+  interactive sends from two clients must also be serialized.
 - The janitor never terminates the current Browser owner or an ambiguous
   process.
 

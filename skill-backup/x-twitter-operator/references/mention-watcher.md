@@ -282,48 +282,54 @@ authority for queued eligible replies.
    minute.
 3. Let the event dispatcher run `autopilot_bridge gate` without a model.
 4. Only for `dispatch=true`, launch Codex Desktop when it is absent. One
-   existing in-app Luna Low heartbeat atomically reserves the handoff and sends
-   one direct `send_message_to_thread` call to the pinned Sol High owner.
-5. Let the pinned owner atomically claim the queue with
+   existing in-app Luna Low heartbeat calls `reserve-handoff`. Before creating
+   a reservation, its model-free guard requires the latest canonical owner task
+   to be terminal plus the configured quiet period. The relay then reads the
+   pinned Sol High owner thread. It sends one direct `send_message_to_thread`
+   call only when `status.type=idle` or `status.type=notLoaded`.
+5. If the owner thread is active, cannot be read, or delivery fails, run
+   `scripts/autopilot_bridge.py release-handoff` with the exact reservation
+   token and finish without Browser. Leave the durable queue pending.
+6. Let the pinned owner atomically claim the queue with
    `scripts/autopilot_bridge.py claim`.
-6. Run the mechanical claim before loading X skills and references. If the
+7. Run the mechanical claim before loading X skills and references. If the
    queue is empty, another global owner is active, or memory is deferred, use
    no Browser, no `list_threads`, and no task archival. Finish normally before
    opening Browser. Never self-archive the current active run.
-7. For eligible IDs, atomically record one global 30-minute owner lease before
+8. For eligible IDs, atomically record one global 30-minute owner lease before
    Browser work. A newly arriving event must wait for this owner.
-8. Include only eligible event IDs, canonical URLs, local state paths, and the
+9. Include only eligible event IDs, canonical URLs, local state paths, and the
    standing workflow contract. The owner must read exact history from
    SQLite, the ledger, and recorded ChatGPT conversation URLs.
-9. Mark the claim `started`, execute the returned prompt in the same Sol turn,
+10. Mark the claim `started`, execute the returned prompt in the same Sol turn,
    and remove the lease only if work fails before durable resolution.
-10. Use one X tab for short work. Open one ChatGPT tab only for a proven Pro
+11. Use one X tab for short work. Open one ChatGPT tab only for a proven Pro
    route. Never run more than one active Pro conversation on Alex's 8 GB iMac.
-11. Never let the watcher, dispatcher, or relay publish. Sol High must perform
+12. Never let the watcher, dispatcher, or relay publish. Sol High must perform
     live context inspection, fact checking, duplicate prevention, routing,
     composer validation, publication, URL verification, history storage, and
     durable resolution.
-12. Treat the lease as crash recovery, not permission to post twice. Every Sol
+13. Treat the lease as crash recovery, not permission to post twice. Every Sol
     turn still runs live X and ledger duplicate checks before composer fill.
-13. Never perform Browser work in Codex CLI or the external app-server
+14. Never perform Browser work in Codex CLI or the external app-server
     fallback. The in-app relay's cross-thread message is only a wakeup. Browser
     belongs to the pinned Codex Desktop owner.
-14. After durable history and resolution remove every claimed ID from the wake
+15. After durable history and resolution remove every claimed ID from the wake
     queue, mark `completed`. If a later API poll cannot read Keychain, mark
     `completed_with_warning`; do not release or republish resolved events.
-15. Keep the owner turn free of a final X poll. The one-minute
+16. Keep the owner turn free of a final X poll. The one-minute
     LaunchAgent owns token-free polling.
-16. Close all task-owned Browser tabs and finish normally for every terminal
+17. Close all task-owned Browser tabs and finish normally for every terminal
     outcome. The model-free janitor archives old exact service tasks through
     the local Codex app-server.
-17. After a Codex restart, a changed runtime ID may immediately reclaim an old
+18. After a Codex restart, a changed runtime ID may immediately reclaim an old
     owner. After a stream disconnect in the same runtime, the janitor releases
     the claim only when its related task is inactive and stale. A fresh
     `notLoaded` status is not sufficient.
-18. When the queue becomes empty, close only the exact Desktop PID launched by
+19. When the queue becomes empty, close only the exact Desktop PID launched by
     the supervisor after its configured grace period. Never close a
     user-started Desktop instance.
-19. A locked display is not a Browser blocker while macOS is awake. Active
+20. A locked display is not a Browser blocker while macOS is awake. Active
     voice or system sleep defers Browser work and leaves every event durable.
 
 Do not retire the paused fallback automation until the installed dispatcher

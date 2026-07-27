@@ -50,9 +50,14 @@ content decisions:
 - Only a ready queue checks Codex Desktop. The terminal supervisor starts the
   canonical workspace when Desktop is closed. Launch failure keeps every event
   pending and raises a throttled local alert.
-- One existing in-app Luna Low heartbeat atomically reserves the handoff and
-  sends one message to the persistent Sol High owner. A TTL reservation blocks
-  adjacent heartbeat runs from sending the same wake twice.
+- One existing in-app Luna Low heartbeat calls `reserve-handoff`. Python first
+  checks the canonical owner's durable rollout and requires its latest turn to
+  be terminal plus a one-minute quiet period. The relay then requires live
+  `status.type=idle` or `status.type=notLoaded` before sending one message. An
+  active interactive turn creates no reservation. A live thread read failure
+  or delivery failure releases the exact reservation with `release-handoff`,
+  so the queue waits instead of creating a parallel branch. A TTL reservation
+  blocks adjacent heartbeat runs from sending the same wake twice.
 - A model-free LaunchAgent archives completed service runs and recovers stale
   owner claims without creating another Codex task.
 - The supervisor may stop only a Desktop process that it launched itself, and
@@ -109,8 +114,12 @@ It does not:
 When Alex explicitly grants standing autopilot authority, a model-free
 LaunchAgent checks the durable queue. Only a ready queue starts Desktop when
 needed. One existing in-app Luna Low heartbeat sends a reserved wake to the
-persistent Sol High Browser owner through the Codex app thread API. Sol High
-remains the only publication brain.
+persistent Sol High Browser owner through the Codex app thread API only while
+that canonical thread is inactive. Mobile Remote, local Desktop, and the
+automated Browser owner therefore take turns on one durable thread. The status
+read and message delivery are not one atomic Codex operation, so interactive
+messages from two screens must also be sent serially. Sol High remains the only
+publication brain.
 
 With `mandatory_response_mode=true`, every eligible available event inside the
 requested lookback receives exactly one reply. Support, sarcasm, jokes, insults,

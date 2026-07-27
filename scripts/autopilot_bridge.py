@@ -5,11 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sqlite3
 import sys
 import uuid
 from contextlib import closing
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -55,6 +56,175 @@ def handoff_reservation_path(config_path: Path) -> Path:
     )
 
 
+def codex_state_database_candidates(config: dict[str, Any]) -> list[Path]:
+    explicit = str(config.get("codex_state_database", "")).strip()
+    if explicit:
+        return [Path(explicit).expanduser()]
+    codex_home = Path(
+        os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
+    ).expanduser()
+    return sorted(
+        codex_home.glob("state_*.sqlite"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def browser_owner_rollout_path(
+    config: dict[str, Any],
+    *,
+    thread_id: str,
+) -> Path | None:
+    for database_path in codex_state_database_candidates(config):
+        if not database_path.is_file():
+            continue
+        try:
+            database_uri = f"{database_path.resolve().as_uri()}?mode=ro"
+            with closing(
+                sqlite3.connect(database_uri, uri=True)
+            ) as connection:
+                row = connection.execute(
+                    "SELECT rollout_path FROM threads WHERE id = ?",
+                    (thread_id,),
+                ).fetchone()
+        except (OSError, sqlite3.Error):
+            continue
+        if row is None or not isinstance(row[0], str) or not row[0]:
+            continue
+        rollout_path = Path(row[0]).expanduser()
+        if not rollout_path.is_absolute():
+            rollout_path = database_path.parent / rollout_path
+        return rollout_path.resolve()
+    return None
+
+
+def browser_owner_activity(
+    config_path: Path,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Read the durable owner rollout without loading or waking the thread."""
+
+    config = autopilot_dispatch.read_json(config_path)
+    thread_id = str(config.get("browser_owner_thread_id", "")).strip()
+    if not thread_id:
+        return {"enabled": False, "defer": False, "status": "not_configured"}
+    grace_seconds = int(
+        config.get("command_center_idle_grace_seconds", 60)
+    )
+    if grace_seconds < 0:
+        raise ValueError("command center idle grace seconds must not be negative")
+    rollout_path = browser_owner_rollout_path(
+        config,
+        thread_id=thread_id,
+    )
+    if rollout_path is None or not rollout_path.is_file():
+        return {
+            "enabled": True,
+            "defer": True,
+            "status": "owner_thread_status_unavailable",
+            "thread_id": thread_id,
+        }
+
+    latest_turn_id: str | None = None
+    latest_turn_started_at = None
+    latest_turn_terminal = False
+    last_activity_at = None
+    try:
+        with rollout_path.open(encoding="utf-8") as stream:
+            for line in stream:
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    return {
+                        "enabled": True,
+                        "defer": True,
+                        "status": "owner_thread_status_unavailable",
+                        "thread_id": thread_id,
+                    }
+                if not isinstance(record, dict):
+                    continue
+                timestamp = autopilot_dispatch.parse_time(
+                    str(record.get("timestamp", ""))
+                )
+                if timestamp is not None:
+                    last_activity_at = timestamp
+                if record.get("type") != "event_msg":
+                    continue
+                payload = record.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                event_type = str(payload.get("type", ""))
+                turn_id = str(
+                    payload.get("turn_id")
+                    or payload.get("turnId")
+                    or payload.get("id")
+                    or ""
+                )
+                if event_type == "task_started" and turn_id:
+                    latest_turn_id = turn_id
+                    latest_turn_started_at = timestamp
+                    latest_turn_terminal = False
+                elif (
+                    event_type in {"task_complete", "turn_aborted"}
+                    and turn_id
+                    and turn_id == latest_turn_id
+                ):
+                    latest_turn_terminal = True
+    except OSError:
+        return {
+            "enabled": True,
+            "defer": True,
+            "status": "owner_thread_status_unavailable",
+            "thread_id": thread_id,
+        }
+
+    if latest_turn_id is None or latest_turn_started_at is None:
+        return {
+            "enabled": True,
+            "defer": True,
+            "status": "owner_thread_status_unavailable",
+            "thread_id": thread_id,
+        }
+    if not latest_turn_terminal:
+        return {
+            "enabled": True,
+            "defer": True,
+            "status": "owner_thread_active",
+            "thread_id": thread_id,
+            "turn_id": latest_turn_id,
+            "turn_started_at": autopilot_dispatch.isoformat(
+                latest_turn_started_at
+            ),
+        }
+
+    current = now or autopilot_dispatch.utc_now()
+    activity_age = (
+        max(0.0, (current - last_activity_at).total_seconds())
+        if last_activity_at is not None
+        else 0.0
+    )
+    if activity_age < grace_seconds:
+        return {
+            "enabled": True,
+            "defer": True,
+            "status": "owner_thread_cooldown",
+            "thread_id": thread_id,
+            "turn_id": latest_turn_id,
+            "activity_age_seconds": round(activity_age, 1),
+            "grace_seconds": grace_seconds,
+        }
+    return {
+        "enabled": True,
+        "defer": False,
+        "status": "owner_thread_idle",
+        "thread_id": thread_id,
+        "turn_id": latest_turn_id,
+        "activity_age_seconds": round(activity_age, 1),
+        "grace_seconds": grace_seconds,
+    }
+
+
 def reserve_handoff(
     config_path: Path,
     *,
@@ -65,6 +235,14 @@ def reserve_handoff(
     ready = gate(config_path, lease_seconds=lease_seconds)
     if not ready.get("dispatch"):
         return ready
+    owner_activity = browser_owner_activity(config_path)
+    if owner_activity.get("defer"):
+        return {
+            **ready,
+            "dispatch": False,
+            "status": owner_activity["status"],
+            "owner_activity": owner_activity,
+        }
     config = autopilot_dispatch.read_json(config_path)
     reservation_seconds = int(
         config.get("relay_handoff_reservation_seconds", 180)
@@ -134,6 +312,60 @@ def clear_handoff_reservation(
                 "cleared_at": autopilot_dispatch.isoformat(),
             },
         )
+
+
+def release_handoff_reservation(
+    config_path: Path,
+    *,
+    reservation_token: str,
+    reason: str,
+) -> dict[str, Any]:
+    """Release only the relay reservation identified by the exact token."""
+
+    token = reservation_token.strip()
+    release_reason = reason.strip()
+    if not token:
+        raise ValueError("reservation token must not be empty")
+    if not release_reason:
+        raise ValueError("handoff release reason must not be empty")
+
+    path = handoff_reservation_path(config_path)
+    with autopilot_dispatch.locked_state(path):
+        previous = (
+            autopilot_dispatch.read_json(path) if path.exists() else {}
+        )
+        status = str(previous.get("status", "missing"))
+        previous_token = str(previous.get("reservation_token", ""))
+        if status != "reserved":
+            return {
+                "status": "handoff_not_released",
+                "released": False,
+                "reservation_status": status,
+                "reservation_token": previous.get("reservation_token"),
+                "event_ids": list(previous.get("event_ids", [])),
+            }
+        if previous_token != token:
+            raise ValueError("reservation token does not match active handoff")
+
+        payload = {
+            "version": 1,
+            "status": "released",
+            "reservation_token": token,
+            "event_ids": list(previous.get("event_ids", [])),
+            "reserved_at": previous.get("reserved_at"),
+            "expires_at": previous.get("expires_at"),
+            "released_at": autopilot_dispatch.isoformat(),
+            "release_reason": release_reason,
+        }
+        autopilot_dispatch.atomic_write_json(path, payload)
+
+    return {
+        "status": "handoff_released",
+        "released": True,
+        "reservation_token": token,
+        "event_ids": payload["event_ids"],
+        "reason": release_reason,
+    }
 
 
 def write_health(
@@ -512,6 +744,9 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers = parser.add_subparsers(dest="command", required=True)
     subparsers.add_parser("gate")
     subparsers.add_parser("reserve-handoff")
+    release_handoff = subparsers.add_parser("release-handoff")
+    release_handoff.add_argument("--reservation-token", required=True)
+    release_handoff.add_argument("--reason", required=True)
     subparsers.add_parser("claim")
     started = subparsers.add_parser("started")
     started.add_argument("--claim-token", required=True)
@@ -538,6 +773,12 @@ def main(argv: list[str] | None = None) -> int:
         result = reserve_handoff(
             arguments.config,
             lease_seconds=arguments.lease_seconds,
+        )
+    elif arguments.command == "release-handoff":
+        result = release_handoff_reservation(
+            arguments.config,
+            reservation_token=arguments.reservation_token,
+            reason=arguments.reason,
         )
     elif arguments.command == "claim":
         result = claim(

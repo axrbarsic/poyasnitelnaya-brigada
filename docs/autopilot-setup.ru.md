@@ -16,7 +16,8 @@
    приложение закрыто. При неудаче очередь сохраняется, запуск повторяется, а
    Alex получает локальное уведомление.
 6. Одна существующая in-app heartbeat-сессия на Luna Low выполняет
-   `reserve-handoff` и только затем один `send_message_to_thread`.
+   `reserve-handoff`, читает канонический owner thread и делает один
+   `send_message_to_thread` только при неактивном thread.
 7. Закрепленная сессия Sol High атомарно делает `claim`, восстанавливает живую
    ветку, публикует и сохраняет точную историю.
 8. После завершения supervisor может закрыть только тот Desktop, который
@@ -81,6 +82,7 @@ trust_level = "trusted"
 {
   "browser_owner_cwd": ".",
   "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
+  "command_center_idle_grace_seconds": 60,
   "desktop_relay_mode": "in_app_heartbeat",
   "desktop_auto_quit_after_work": true,
   "desktop_auto_quit_grace_seconds": 180,
@@ -105,7 +107,14 @@ trust_level = "trusted"
 `browser_owner_thread_id` принадлежит одной закрепленной owner-сессии на Sol
 High. `x-relay` является heartbeat одной существующей Luna Low сессии, а не
 standalone automation. `reserve-handoff` не claim события, но атомарно блокирует
-повторную отправку wake на 180 секунд. Успешный owner claim очищает reservation.
+повторную отправку wake на 180 секунд. До создания reservation команда читает
+durable rollout owner, требует terminal-состояние последней задачи и выдерживает
+`command_center_idle_grace_seconds`. Затем relay читает live owner thread и
+отправляет wake только при `status.type=idle` или `status.type=notLoaded`. При
+ошибке live-чтения или доставки он выполняет `release-handoff` с точным
+reservation token. Успешный owner claim переводит reservation в состояние
+`claimed`. Восстановимый prompt heartbeat хранится в
+[`macos/x-relay.prompt.txt`](../macos/x-relay.prompt.txt).
 
 Ручной ответ Alex считается ходом `alex`. Если на него отвечают, Browser owner
 поднимает точную живую ветку, сохраняет ранее не импортированный ручной ответ и
@@ -151,14 +160,20 @@ scheduled run создает отдельную задачу и может ос�
    завершаются без app-server.
 4. При `ready` supervisor проверяет main process Codex Desktop и запускает
    `codex app CANONICAL_ROOT`, если процесс отсутствует.
-5. In-app heartbeat выполняет атомарный `reserve-handoff`.
-6. Победивший relay делает один `send_message_to_thread` в точный Browser owner
-   с override Sol High. Соседний heartbeat получает `handoff_reserved`.
-7. Browser owner выполняет `claim`, затем `started`.
-8. Owner загружает `x-twitter-operator`, открывает минимум вкладок, выполняет
+5. In-app heartbeat выполняет `reserve-handoff`. Пока канонический командный
+   центр активен или находится внутри quiet period, команда возвращает
+   `owner_thread_active` или `owner_thread_cooldown` без reservation.
+6. Победивший relay читает точный live Browser owner thread и делает один
+   `send_message_to_thread` с override Sol High только при `status.type=idle`
+   или `status.type=notLoaded`.
+7. При активном thread, ошибке чтения или ошибке доставки relay выполняет
+   `release-handoff` со своим точным reservation token и завершается. Очередь
+   остается pending. Соседний heartbeat получает `handoff_reserved`.
+8. Browser owner выполняет `claim`, затем `started`.
+9. Owner загружает `x-twitter-operator`, открывает минимум вкладок, выполняет
    double dedupe и publication transaction.
-9. После exact history и durable resolution owner выполняет `completed`.
-10. Если Desktop был запущен supervisor, пустая очередь и owner=null запускают
+10. После exact history и durable resolution owner выполняет `completed`.
+11. Если Desktop был запущен supervisor, пустая очередь и owner=null запускают
     grace timer, после которого завершается только сохраненный managed PID.
 
 ## Контракты памяти и качества
@@ -174,6 +189,11 @@ scheduled run создает отдельную задачу и может ос�
   read-only Browser preflight и продолжает, если `iab` доступен.
 - `reserve-handoff` и глобальный owner lease предотвращают перекрывающиеся
   relay и Browser-owner запуски.
+- Relay никогда не будит активный канонический owner thread. Mobile Remote,
+  локальный Desktop и автоматический Browser owner используют один durable
+  thread последовательно. Поскольку чтение статуса и доставка сообщения
+  являются разными операциями Codex, интерактивные сообщения с двух клиентов
+  также нельзя отправлять одновременно.
 - Janitor не должен убивать текущий Browser owner или неоднозначный процесс.
 
 ## Живой canary

@@ -34,6 +34,24 @@
 - Treat helper results as evidence. Sol High performs the final live-context
   decision and publication transaction.
 
+## Managed personality
+
+- Keep the versioned baseline voice in `personality/policy.json`.
+- Store immediate operator adjustments in
+  `var/personality-overrides.json`. They apply to the next Browser-owner claim.
+- Interpret an Alex instruction such as "be bolder", "be softer", or "use
+  this voice in this thread" as authority to create a bounded runtime override
+  with `scripts/personality_policy.py`.
+- Use scope `conversation` for one X thread, `topic` for one tracked topic,
+  `author` for one public author, and `global` only for an explicitly global
+  request.
+- Never promote a runtime override into Git before a live canary. After a
+  successful verified publication and Alex approval, move the rule into the
+  tracked policy and disable the temporary override.
+- Personality controls directness, humor, sharpness, and explanatory style. It
+  never overrides factual accuracy, safety, duplicate prevention, publication
+  boundaries, or durable resolution.
+
 ## Data boundary
 
 - Never commit `config.json`, credentials, SQLite, WAL, SHM, official X

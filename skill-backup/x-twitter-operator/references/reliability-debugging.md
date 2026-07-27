@@ -83,7 +83,7 @@ After fixing a weak link:
    the same hours and exact `as-of`.
 6. Do not pass the reported event ID to the requeue command, automation prompt
    or Browser owner.
-7. Let the ordinary one-minute watcher and five-minute Luna gate discover the
+7. Let the ordinary one-minute watcher and in-app heartbeat relay discover the
    event and wake the pinned Sol owner through the direct Codex app tool.
 8. Observe without manually claiming, drafting or publishing.
 9. Verify the live direct reply, exact history, durable resolution, empty queue

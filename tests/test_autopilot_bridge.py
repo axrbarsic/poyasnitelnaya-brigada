@@ -5,6 +5,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import xmention_watcher as watcher
@@ -69,6 +70,58 @@ class AutopilotBridgeTests(unittest.TestCase):
             "is_reply": True,
         }
 
+    def configure_owner_rollout(
+        self,
+        records: list[dict],
+        *,
+        grace_seconds: int | None = 300,
+    ) -> Path:
+        state_database = self.root / "state.sqlite"
+        rollout = self.root / "owner-rollout.jsonl"
+        rollout.write_text(
+            "".join(
+                json.dumps(record, ensure_ascii=False) + "\n"
+                for record in records
+            ),
+            encoding="utf-8",
+        )
+        with closing(sqlite3.connect(state_database)) as connection:
+            connection.execute(
+                "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT)"
+            )
+            connection.execute(
+                "INSERT INTO threads (id, rollout_path) VALUES (?, ?)",
+                ("owner-thread", str(rollout)),
+            )
+            connection.commit()
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config.update(
+            {
+                "browser_owner_thread_id": "owner-thread",
+                "codex_state_database": str(state_database),
+            }
+        )
+        if grace_seconds is not None:
+            config["command_center_idle_grace_seconds"] = grace_seconds
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        return rollout
+
+    @staticmethod
+    def rollout_event(
+        timestamp: datetime,
+        event_type: str,
+        *,
+        turn_id: str | None = None,
+    ) -> dict:
+        payload = {"type": event_type}
+        if turn_id is not None:
+            payload["turn_id"] = turn_id
+        return {
+            "timestamp": timestamp.isoformat().replace("+00:00", "Z"),
+            "type": "event_msg",
+            "payload": payload,
+        }
+
     def test_empty_queue_is_token_free_idle(self) -> None:
         result = autopilot_bridge.claim(self.config, lease_seconds=1800)
 
@@ -126,6 +179,221 @@ class AutopilotBridgeTests(unittest.TestCase):
             first["reservation_token"],
         )
 
+    def test_relay_defers_while_latest_owner_turn_is_active(self) -> None:
+        self.write_events([self.event()])
+        started_at = datetime.now(timezone.utc) - timedelta(minutes=2)
+        self.configure_owner_rollout(
+            [
+                self.rollout_event(
+                    started_at,
+                    "task_started",
+                    turn_id="active-turn",
+                )
+            ]
+        )
+
+        result = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        self.assertFalse(result["dispatch"])
+        self.assertEqual(result["status"], "owner_thread_active")
+        self.assertEqual(
+            result["owner_activity"]["turn_id"],
+            "active-turn",
+        )
+        self.assertFalse((self.root / "var/relay-handoff.json").exists())
+
+    def test_relay_holds_a_quiet_period_after_owner_completion(self) -> None:
+        self.write_events([self.event()])
+        started_at = datetime.now(timezone.utc) - timedelta(seconds=30)
+        completed_at = datetime.now(timezone.utc) - timedelta(seconds=5)
+        self.configure_owner_rollout(
+            [
+                self.rollout_event(
+                    started_at,
+                    "task_started",
+                    turn_id="completed-turn",
+                ),
+                self.rollout_event(
+                    completed_at,
+                    "task_complete",
+                    turn_id="completed-turn",
+                ),
+            ],
+            grace_seconds=300,
+        )
+
+        result = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        self.assertFalse(result["dispatch"])
+        self.assertEqual(result["status"], "owner_thread_cooldown")
+        self.assertFalse((self.root / "var/relay-handoff.json").exists())
+
+    def test_relay_default_quiet_period_is_one_minute(self) -> None:
+        self.write_events([self.event()])
+        started_at = datetime.now(timezone.utc) - timedelta(minutes=3)
+        completed_at = datetime.now(timezone.utc) - timedelta(seconds=90)
+        self.configure_owner_rollout(
+            [
+                self.rollout_event(
+                    started_at,
+                    "task_started",
+                    turn_id="completed-turn",
+                ),
+                self.rollout_event(
+                    completed_at,
+                    "task_complete",
+                    turn_id="completed-turn",
+                ),
+            ],
+            grace_seconds=None,
+        )
+
+        owner_activity = autopilot_bridge.browser_owner_activity(self.config)
+        result = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        self.assertFalse(owner_activity["defer"])
+        self.assertEqual(owner_activity["grace_seconds"], 60)
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["status"], "handoff_reserved_ready")
+
+    def test_relay_prompt_accepts_only_known_inactive_live_states(self) -> None:
+        prompt = (
+            Path(__file__).resolve().parents[1]
+            / "macos"
+            / "x-relay.prompt.txt"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn(
+            "`thread.status.type` дословно равен `idle` или `notLoaded`",
+            prompt,
+        )
+        self.assertIn(
+            "При `active`, любом другом статусе или ошибке чтения",
+            prompt,
+        )
+
+    def test_relay_fails_closed_for_partial_owner_rollout(self) -> None:
+        self.write_events([self.event()])
+        rollout = self.configure_owner_rollout(
+            [
+                self.rollout_event(
+                    datetime.now(timezone.utc) - timedelta(minutes=10),
+                    "task_started",
+                    turn_id="completed-turn",
+                ),
+                self.rollout_event(
+                    datetime.now(timezone.utc) - timedelta(minutes=9),
+                    "task_complete",
+                    turn_id="completed-turn",
+                ),
+            ]
+        )
+        with rollout.open("a", encoding="utf-8") as stream:
+            stream.write('{"timestamp":')
+
+        result = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        self.assertFalse(result["dispatch"])
+        self.assertEqual(
+            result["status"],
+            "owner_thread_status_unavailable",
+        )
+        self.assertFalse((self.root / "var/relay-handoff.json").exists())
+
+    def test_relay_runs_after_owner_completion_and_quiet_period(self) -> None:
+        self.write_events([self.event()])
+        started_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+        completed_at = datetime.now(timezone.utc) - timedelta(minutes=9)
+        self.configure_owner_rollout(
+            [
+                self.rollout_event(
+                    started_at,
+                    "task_started",
+                    turn_id="completed-turn",
+                ),
+                self.rollout_event(
+                    completed_at,
+                    "task_complete",
+                    turn_id="completed-turn",
+                ),
+            ],
+            grace_seconds=300,
+        )
+
+        result = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["status"], "handoff_reserved_ready")
+
+    def test_latest_terminal_turn_supersedes_old_orphan_marker(self) -> None:
+        self.write_events([self.event()])
+        orphan_started = datetime.now(timezone.utc) - timedelta(hours=2)
+        latest_started = datetime.now(timezone.utc) - timedelta(minutes=10)
+        latest_completed = datetime.now(timezone.utc) - timedelta(minutes=9)
+        self.configure_owner_rollout(
+            [
+                self.rollout_event(
+                    orphan_started,
+                    "task_started",
+                    turn_id="orphan-turn",
+                ),
+                self.rollout_event(
+                    latest_started,
+                    "task_started",
+                    turn_id="latest-turn",
+                ),
+                self.rollout_event(
+                    latest_completed,
+                    "task_complete",
+                    turn_id="latest-turn",
+                ),
+            ],
+            grace_seconds=300,
+        )
+
+        result = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["status"], "handoff_reserved_ready")
+
+    def test_owner_claim_is_not_blocked_by_its_own_active_turn(self) -> None:
+        self.write_events([self.event()])
+        self.configure_owner_rollout(
+            [
+                self.rollout_event(
+                    datetime.now(timezone.utc),
+                    "task_started",
+                    turn_id="owner-turn",
+                )
+            ]
+        )
+
+        result = autopilot_bridge.claim(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        self.assertTrue(result["dispatch"])
+        self.assertIsInstance(result["claim_token"], str)
+
     def test_owner_claim_clears_relay_handoff_reservation(self) -> None:
         self.write_events([self.event()])
         reservation = autopilot_bridge.reserve_handoff(
@@ -147,6 +415,88 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertTrue(claimed["dispatch"])
         self.assertEqual(state["status"], "claimed")
         self.assertEqual(state["claim_token"], claimed["claim_token"])
+
+    def test_relay_can_release_only_its_exact_handoff_reservation(self) -> None:
+        self.write_events([self.event()])
+        reservation = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        released = autopilot_bridge.release_handoff_reservation(
+            self.config,
+            reservation_token=reservation["reservation_token"],
+            reason="owner_thread_active",
+        )
+        retried = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        self.assertTrue(released["released"])
+        self.assertEqual(released["status"], "handoff_released")
+        self.assertTrue(retried["dispatch"])
+        self.assertNotEqual(
+            retried["reservation_token"],
+            reservation["reservation_token"],
+        )
+
+    def test_relay_release_rejects_a_different_reservation_token(self) -> None:
+        self.write_events([self.event()])
+        reservation = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "does not match active handoff",
+        ):
+            autopilot_bridge.release_handoff_reservation(
+                self.config,
+                reservation_token="different-token",
+                reason="owner_thread_active",
+            )
+
+        state = json.loads(
+            (self.root / "var/relay-handoff.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(state["status"], "reserved")
+        self.assertEqual(
+            state["reservation_token"],
+            reservation["reservation_token"],
+        )
+
+    def test_relay_release_never_clears_a_claimed_handoff(self) -> None:
+        self.write_events([self.event()])
+        reservation = autopilot_bridge.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+        )
+        claimed = autopilot_bridge.claim(
+            self.config,
+            lease_seconds=1800,
+        )
+
+        released = autopilot_bridge.release_handoff_reservation(
+            self.config,
+            reservation_token=reservation["reservation_token"],
+            reason="late_delivery_failure",
+        )
+
+        self.assertFalse(released["released"])
+        self.assertEqual(released["reservation_status"], "claimed")
+        state = json.loads(
+            (self.root / "var/autopilot-dispatch.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            state["owner"]["claim_token"],
+            claimed["claim_token"],
+        )
 
     def test_claim_returns_exact_desktop_handoff(self) -> None:
         self.write_events([self.event()])
