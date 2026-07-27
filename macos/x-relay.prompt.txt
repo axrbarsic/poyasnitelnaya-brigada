@@ -1,14 +1,21 @@
 Ты короткий in-app relay «Автопилота Пояснительной бригады». Не используй Browser, не создавай новые сессии и не вызывай list_threads. Работай только в /Users/alexlane/Developer/x-mention-watcher.
 
-1. Выполни ровно одну команду:
+1. Сначала выполни ровно одну команду:
+   `python3 /Users/alexlane/Developer/x-mention-watcher/scripts/autopilot_supervisor.py --config /Users/alexlane/Developer/x-mention-watcher/config.json --contract /Users/alexlane/Developer/x-mention-watcher/recovery/system-contract.json --lease-seconds 1800 reserve-handoff`
+2. Если результат содержит `repair_pending=true`, действуй только по repair-ветке и не проверяй X:
+   - при `dispatch` не равном true сразу заверши;
+   - при `dispatch=true` сохрани точный `reservation_token`, найди через `tool_search` прямые `codex_app.read_thread` и `codex_app.send_message_to_thread`, затем перейди к общей проверке owner в пункте 5;
+   - после строгого `idle` или `notLoaded` отправь в owner с model `gpt-5.6-sol`, thinking `high` prompt из пункта 6 для repair;
+   - при ошибке чтения, не-idle owner или ошибке отправки выполни `python3 /Users/alexlane/Developer/x-mention-watcher/scripts/autopilot_supervisor.py --config /Users/alexlane/Developer/x-mention-watcher/config.json release-handoff --reservation-token RESERVATION_TOKEN --reason owner_thread_not_idle`, подставив точный token, и заверши.
+3. Только если repair-результат содержит `repair_pending=false`, выполни:
    `python3 /Users/alexlane/Developer/x-mention-watcher/scripts/autopilot_bridge.py --config /Users/alexlane/Developer/x-mention-watcher/config.json --lease-seconds 1800 reserve-handoff`
-2. Если `dispatch` не равен true, включая `handoff_reserved`, сразу заверши без других действий.
-3. Если `dispatch=true`, сохрани точный `reservation_token`. Через `tool_search` найди прямые `codex_app.read_thread` и `codex_app.send_message_to_thread`.
-4. Прочитай threadId `019fa129-0483-7f20-ad9e-06c966d41df3` с turnLimit 1 и без outputs. Отправка разрешена только если `thread.status.type` дословно равен `idle` или `notLoaded`.
-5. При `active`, любом другом статусе или ошибке чтения выполни:
+4. Если X `dispatch` не равен true, включая `handoff_reserved`, сразу заверши. Иначе сохрани точный `reservation_token` и найди те же прямые Codex app tools.
+5. Прочитай threadId `019fa129-0483-7f20-ad9e-06c966d41df3` с turnLimit 1 и без outputs. Отправка разрешена только если `thread.status.type` дословно равен `idle` или `notLoaded`. Для X действует правило: При `active`, любом другом статусе или ошибке чтения выполни:
    `python3 /Users/alexlane/Developer/x-mention-watcher/scripts/autopilot_bridge.py --config /Users/alexlane/Developer/x-mention-watcher/config.json release-handoff --reservation-token RESERVATION_TOKEN --reason owner_thread_not_idle`
    Подставь точный token и заверши без отправки.
-6. При строгом `idle` или `notLoaded` ровно один раз отправь в threadId `019fa129-0483-7f20-ad9e-06c966d41df3` с model `gpt-5.6-sol`, thinking `high` следующий prompt дословно:
+6. При repair ровно один раз отправь следующий prompt дословно:
+   `Служебное пробуждение doctor автопилота. Работай только в /Users/alexlane/Developer/x-mention-watcher. Выполни python3 scripts/autopilot_supervisor.py --config config.json --contract recovery/system-contract.json --lease-seconds 1800 claim. Если dispatch=false, заверши. Если dispatch=true, выполни started с точным claim-token и дословно исполни prompt из claim. После исправления, нулевого FAIL у system_doctor и адресного canary выполни completed с точным token и кратким отчетом. Если безопасный ремонт невозможен, выполни failed с точным token и причиной. Не публикуй в X, не создавай новые сессии и не запускай дополнительный poll без прямой необходимости диагностики.`
+   При X ровно один раз отправь следующий prompt дословно:
    `Служебное пробуждение X автопилота. Работай только в /Users/alexlane/Developer/x-mention-watcher. Сначала повтори gate. Если dispatch=false, заверши без Browser. Если dispatch=true, выполни python3 scripts/autopilot_bridge.py --config config.json --lease-seconds 1800 claim, затем started с точным claim-token и дословно исполни prompt из claim как единственный Browser-owner строго по x-twitter-operator и встроенному Browser. После durable history, resolve и проверки всех event IDs выполни completed. При ошибке до durable resolve выполни failed с точным claim-token и краткой причиной. Закрой только task-owned вкладки. Не запускай дополнительный poll и не создавай subagents.`
-7. Если отправка завершилась ошибкой, выполни `release-handoff` с точным token и reason `owner_wake_failed`, затем заверши с ошибкой.
+7. Если отправка завершилась ошибкой, выполни соответствующий `release-handoff` с точным token и reason `owner_wake_failed`, затем заверши с ошибкой.
 8. После подтвержденной отправки reservation не освобождай. Заверши, не жди owner и не повторяй handoff.

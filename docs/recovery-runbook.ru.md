@@ -37,6 +37,76 @@ automation, LaunchAgent, SQLite или Keychain. Он сверяет:
 - установленный `x-twitter-operator` с Git-копией;
 - матрицу характера и runtime overrides.
 
+## Автоматический supervisor
+
+`scripts/autopilot_supervisor.py` запускается вместо старого пассивного
+watchdog тем же минутным LaunchAgent. Это обычный Python без модели, Browser и
+токенов. В зеленом состоянии он только обновляет
+`var/autopilot-supervisor.json` и никого не будит.
+
+Одноразовая проверка:
+
+```bash
+python3 scripts/autopilot_supervisor.py \
+  --config config.json \
+  --contract recovery/system-contract.json \
+  run
+```
+
+Supervisor применяет только заранее разрешенный ремонт. В первой версии это
+один `launchctl kickstart` poll LaunchAgent при stale или failing poll. После
+cooldown он повторяет read-only диагностику. Если поломка осталась, либо
+проверка относится к SQLite, очереди, Codex role, automation, skill или другому
+неоднозначному ресурсу, создается один durable incident.
+
+Dispatcher видит incident без модели, поднимает Codex Desktop штатным путем, а
+существующая Luna relay-сессия передает его существующей Sol High owner-сессии.
+Одинаковый fingerprint не создает повторные incident каждую минуту.
+Reservation, claim token, started, completed и failed защищают ремонт от двух
+одновременных владельцев. `completed` для настоящей аварии принимается только
+после повторного doctor с нулем FAIL и обязательного текстового отчета.
+Протухшие reservation и owner lease автоматически возвращают тот же incident
+в `escalation_pending`. Изменение набора FAIL во время активного ремонта
+обновляет диагностику, но не заменяет owner и не сбрасывает его claim token.
+
+Текущее состояние:
+
+```bash
+python3 scripts/autopilot_supervisor.py --config config.json status
+```
+
+Ручной repair-canary разрешен только когда нет открытой аварии:
+
+```bash
+python3 scripts/autopilot_supervisor.py --config config.json canary
+```
+
+Canary проверяет реальный dispatcher, Luna handoff и Sol claim, но не считается
+проверкой X watcher. Финальный X canary всегда слепой: watcher сам обнаруживает
+органический неотвеченный event, без передачи модели ID, ссылки, ручного
+добавления в очередь или заранее созданного resolution.
+
+### Приемочный прогон 27 июля 2026 года
+
+- Token-free self-repair обнаружил искусственно состаренный poll health,
+  выполнил ровно один allowlisted kickstart и сам закрыл incident после
+  восстановления poll.
+- Repair handoff прошел через production dispatcher, Luna relay, claim,
+  started, doctor с нулем FAIL и completed с обязательным отчетом.
+- Отдельный production canary намеренно протухшего owner lease вернул тот же
+  incident в `escalation_pending`, выдал новый claim и завершился при FAIL 0.
+- Blind X-canary естественно обнаружил два органических ответа:
+  `2081816608046285048` и `2081813598079213621`.
+- Sol High опубликовал ровно по одному прямому ответу:
+  [2081821580779286645](https://x.com/axrbarsic/status/2081821580779286645)
+  и
+  [2081821803262156955](https://x.com/axrbarsic/status/2081821803262156955).
+- Один штатный `browser-handoff-sync` импортировал четыре точных хода,
+  создал self-audited manifest, разрешил оба event и оставил pending queue
+  равной нулю.
+- В эксперименте не использовались ручное добавление event ID, готовый ответ,
+  прямой `resolve`, дополнительный poll или второй Browser owner.
+
 ## Порядок восстановления
 
 ### 1. Сохранить живое состояние

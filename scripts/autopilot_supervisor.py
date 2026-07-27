@@ -1,0 +1,903 @@
+#!/usr/bin/env python3
+"""Token-free supervisor and durable repair bridge for the X autopilot."""
+
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import os
+import subprocess
+import uuid
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from typing import Any, Callable, Iterable
+
+try:
+    from scripts import autopilot_bridge, autopilot_dispatch, system_doctor
+except ModuleNotFoundError:
+    import autopilot_bridge  # type: ignore[no-redef]
+    import autopilot_dispatch  # type: ignore[no-redef]
+    import system_doctor  # type: ignore[no-redef]
+
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_CONFIG = PROJECT_ROOT / "config.json"
+DEFAULT_CONTRACT = PROJECT_ROOT / "recovery" / "system-contract.json"
+STATE_VERSION = 1
+POLL_LABEL = "com.axrbarsic.xmention.poll"
+OPEN_STATUSES = {
+    "repair_observing",
+    "escalation_pending",
+    "handoff_pending",
+    "claimed",
+    "work_in_progress",
+    "failed",
+}
+TERMINAL_STATUSES = {"resolved"}
+REPAIRABLE_POLL_STATUSES = {
+    "stale",
+    "failing",
+    "never_started",
+    "never_succeeded",
+}
+
+
+def utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def isoformat(value: datetime | None = None) -> str:
+    return (value or utc_now()).isoformat().replace("+00:00", "Z")
+
+
+def parse_time(value: Any) -> datetime | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).astimezone(
+            timezone.utc
+        )
+    except ValueError:
+        return None
+
+
+def read_config(config_path: Path) -> dict[str, Any]:
+    return autopilot_dispatch.read_json(config_path.expanduser().resolve())
+
+
+def resolve_path(config_path: Path, value: str) -> Path:
+    return autopilot_dispatch.resolve_path(config_path, value)
+
+
+def state_path(config_path: Path) -> Path:
+    config = read_config(config_path)
+    return resolve_path(
+        config_path,
+        str(
+            config.get(
+                "autopilot_supervisor_state_file",
+                "var/autopilot-supervisor.json",
+            )
+        ),
+    )
+
+
+def default_state() -> dict[str, Any]:
+    return {
+        "version": STATE_VERSION,
+        "last_checked_at": None,
+        "last_healthy_at": None,
+        "incident": None,
+        "last_incident": None,
+    }
+
+
+def load_state(path: Path) -> dict[str, Any]:
+    if not path.is_file():
+        return default_state()
+    payload = autopilot_dispatch.read_json(path)
+    if payload.get("version") != STATE_VERSION:
+        raise ValueError("unsupported autopilot supervisor state version")
+    incident = payload.get("incident")
+    if incident is not None and not isinstance(incident, dict):
+        raise ValueError("supervisor incident must be an object or null")
+    payload.setdefault("last_checked_at", None)
+    payload.setdefault("last_healthy_at", None)
+    payload.setdefault("last_incident", None)
+    return payload
+
+
+def save_state(path: Path, state: dict[str, Any]) -> None:
+    autopilot_dispatch.atomic_write_json(path, state)
+
+
+def check_payload(check: system_doctor.Check) -> dict[str, Any]:
+    return {
+        "identifier": check.identifier,
+        "status": check.status,
+        "summary": check.summary,
+        "repair": check.repair,
+        "details": check.details,
+    }
+
+
+def collect_checks(
+    config_path: Path,
+    contract_path: Path,
+) -> list[system_doctor.Check]:
+    root = config_path.expanduser().resolve().parent
+    contract = system_doctor.read_json(contract_path.expanduser().resolve())
+    return system_doctor.check_contract(
+        root,
+        Path.home().resolve(),
+        contract,
+        config_path.expanduser().resolve(),
+    )
+
+
+def failure_fingerprint(checks: Iterable[system_doctor.Check]) -> str:
+    identifiers = sorted(
+        check.identifier for check in checks if check.status == "fail"
+    )
+    encoded = json.dumps(
+        identifiers,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def new_incident(
+    failures: list[system_doctor.Check],
+    *,
+    now: datetime,
+    canary: bool = False,
+) -> dict[str, Any]:
+    return {
+        "id": str(uuid.uuid4()),
+        "fingerprint": failure_fingerprint(failures),
+        "status": "escalation_pending",
+        "canary": canary,
+        "detected_at": isoformat(now),
+        "last_seen_at": isoformat(now),
+        "checks": [check_payload(check) for check in failures],
+        "repair_attempts": [],
+        "handoff": None,
+        "owner": None,
+        "wake_count": 0,
+        "last_wake_at": None,
+        "resolution": None,
+    }
+
+
+def poll_failure_is_repairable(
+    failures: list[system_doctor.Check],
+) -> bool:
+    if [check.identifier for check in failures] != ["runtime.poll_health"]:
+        return False
+    details = failures[0].details or {}
+    age = details.get("age_seconds")
+    max_age = details.get("max_age_seconds")
+    stale_by_age = (
+        isinstance(age, (int, float))
+        and isinstance(max_age, (int, float))
+        and age > max_age
+    )
+    return (
+        str(details.get("health_status", "")) in REPAIRABLE_POLL_STATUSES
+        or stale_by_age
+    )
+
+
+def kickstart_poll() -> dict[str, Any]:
+    target = f"gui/{os.getuid()}/{POLL_LABEL}"
+    completed = subprocess.run(
+        ["/bin/launchctl", "kickstart", "-k", target],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    return {
+        "action": "kickstart_poll_launchagent",
+        "target": target,
+        "success": completed.returncode == 0,
+        "returncode": completed.returncode,
+        "stderr": completed.stderr.strip()[-500:],
+    }
+
+
+def _repair_cooldown(config: dict[str, Any]) -> int:
+    value = int(
+        config.get("autopilot_supervisor_repair_cooldown_seconds", 90)
+    )
+    if value < 1:
+        raise ValueError("supervisor repair cooldown must be positive")
+    return value
+
+
+def _escalation_retry(config: dict[str, Any]) -> int:
+    value = int(
+        config.get("autopilot_supervisor_escalation_retry_seconds", 1800)
+    )
+    if value < 60:
+        raise ValueError(
+            "supervisor escalation retry must be at least 60 seconds"
+        )
+    return value
+
+
+def recover_expired_coordination(
+    incident: dict[str, Any],
+    *,
+    now: datetime,
+) -> bool:
+    status = str(incident.get("status", ""))
+    if status == "handoff_pending":
+        handoff = incident.get("handoff")
+        expires_at = (
+            parse_time(handoff.get("expires_at"))
+            if isinstance(handoff, dict)
+            else None
+        )
+        if expires_at is None or expires_at <= now:
+            incident["last_expired_handoff"] = {
+                "reserved_at": (
+                    handoff.get("reserved_at")
+                    if isinstance(handoff, dict)
+                    else None
+                ),
+                "expires_at": (
+                    handoff.get("expires_at")
+                    if isinstance(handoff, dict)
+                    else None
+                ),
+                "recovered_at": isoformat(now),
+            }
+            incident["status"] = "escalation_pending"
+            incident["handoff"] = None
+            return True
+    if status in {"claimed", "work_in_progress"}:
+        owner = incident.get("owner")
+        expires_at = (
+            parse_time(owner.get("lease_expires_at"))
+            if isinstance(owner, dict)
+            else None
+        )
+        if expires_at is None or expires_at <= now:
+            incident["last_expired_owner"] = {
+                "claimed_at": (
+                    owner.get("claimed_at")
+                    if isinstance(owner, dict)
+                    else None
+                ),
+                "started_at": (
+                    owner.get("started_at")
+                    if isinstance(owner, dict)
+                    else None
+                ),
+                "lease_expires_at": (
+                    owner.get("lease_expires_at")
+                    if isinstance(owner, dict)
+                    else None
+                ),
+                "recovered_at": isoformat(now),
+            }
+            incident["status"] = "escalation_pending"
+            incident["handoff"] = None
+            incident["owner"] = None
+            return True
+    return False
+
+
+def run_once(
+    config_path: Path,
+    contract_path: Path = DEFAULT_CONTRACT,
+    *,
+    now: datetime | None = None,
+    checks: list[system_doctor.Check] | None = None,
+    repair_runner: Callable[[], dict[str, Any]] = kickstart_poll,
+) -> dict[str, Any]:
+    current = now or utc_now()
+    config_path = config_path.expanduser().resolve()
+    config = read_config(config_path)
+    path = state_path(config_path)
+    observed = (
+        checks
+        if checks is not None
+        else collect_checks(config_path, contract_path)
+    )
+    failures = [check for check in observed if check.status == "fail"]
+    warnings = [check for check in observed if check.status == "warn"]
+
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        state["last_checked_at"] = isoformat(current)
+        incident = state.get("incident")
+        if isinstance(incident, dict):
+            recover_expired_coordination(incident, now=current)
+        if not failures:
+            state["last_healthy_at"] = isoformat(current)
+            if (
+                isinstance(incident, dict)
+                and incident.get("status") in {
+                    "repair_observing",
+                    "escalation_pending",
+                    "handoff_pending",
+                    "failed",
+                }
+                and not incident.get("canary")
+                and not incident.get("owner")
+            ):
+                incident["status"] = "resolved"
+                incident["resolution"] = {
+                    "kind": "automatic_recovery",
+                    "completed_at": isoformat(current),
+                    "report": "Повторная диагностика не обнаружила FAIL.",
+                }
+                state["last_incident"] = incident
+                state["incident"] = None
+            save_state(path, state)
+            return {
+                "status": "healthy",
+                "healthy": True,
+                "model_wake_required": False,
+                "failures": [],
+                "warnings": [check.identifier for check in warnings],
+            }
+
+        fingerprint = failure_fingerprint(failures)
+        incident_is_open = (
+            isinstance(incident, dict)
+            and incident.get("status") in OPEN_STATUSES
+        )
+        if not incident_is_open:
+            if isinstance(incident, dict):
+                state["last_incident"] = incident
+            incident = new_incident(failures, now=current)
+            state["incident"] = incident
+        else:
+            incident["last_seen_at"] = isoformat(current)
+            incident["checks"] = [
+                check_payload(check) for check in failures
+            ]
+            current_fingerprint = incident.get(
+                "active_fingerprint",
+                incident.get("fingerprint"),
+            )
+            if current_fingerprint != fingerprint:
+                incident["active_fingerprint"] = fingerprint
+                incident.setdefault("failure_history", []).append(
+                    {
+                        "fingerprint": fingerprint,
+                        "observed_at": isoformat(current),
+                        "failure_ids": [
+                            check.identifier for check in failures
+                        ],
+                    }
+                )
+
+        attempts = incident.setdefault("repair_attempts", [])
+        coordination_active = incident.get("status") in {
+            "handoff_pending",
+            "claimed",
+            "work_in_progress",
+            "failed",
+        }
+        if poll_failure_is_repairable(failures) and not coordination_active:
+            cooldown = _repair_cooldown(config)
+            last_attempt_at = (
+                parse_time(attempts[-1].get("attempted_at"))
+                if attempts
+                else None
+            )
+            if not attempts:
+                result = repair_runner()
+                attempt = {
+                    **result,
+                    "attempted_at": isoformat(current),
+                }
+                attempts.append(attempt)
+                incident["status"] = (
+                    "repair_observing"
+                    if result.get("success") is True
+                    else "escalation_pending"
+                )
+            elif (
+                incident.get("status") == "repair_observing"
+                and last_attempt_at is not None
+                and (current - last_attempt_at).total_seconds() >= cooldown
+            ):
+                incident["status"] = "escalation_pending"
+        elif not poll_failure_is_repairable(
+            failures
+        ) and incident.get("status") not in {
+            "handoff_pending",
+            "claimed",
+            "work_in_progress",
+            "failed",
+        }:
+            incident["status"] = "escalation_pending"
+
+        save_state(path, state)
+        return {
+            "status": str(incident["status"]),
+            "healthy": False,
+            "model_wake_required": incident["status"] == "escalation_pending",
+            "incident_id": incident["id"],
+            "failures": [check.identifier for check in failures],
+            "warnings": [check.identifier for check in warnings],
+            "repair_attempts": len(attempts),
+        }
+
+
+def gate(
+    config_path: Path,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or utc_now()
+    config_path = config_path.expanduser().resolve()
+    config = read_config(config_path)
+    path = state_path(config_path)
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        incident = state.get("incident")
+        if not isinstance(incident, dict):
+            return {
+                "status": "idle",
+                "dispatch": False,
+                "repair_pending": False,
+            }
+        coordination_recovered = recover_expired_coordination(
+            incident,
+            now=current,
+        )
+        status = str(incident.get("status", ""))
+        if status == "failed":
+            owner = incident.get("owner") or {}
+            failed_at = parse_time(owner.get("failed_at"))
+            retry = _escalation_retry(config)
+            if (
+                failed_at is not None
+                and (current - failed_at).total_seconds() >= retry
+            ):
+                incident["status"] = "escalation_pending"
+                incident["owner"] = None
+                status = "escalation_pending"
+                save_state(path, state)
+        elif coordination_recovered:
+            save_state(path, state)
+        return {
+            "status": status,
+            "dispatch": status == "escalation_pending",
+            "repair_pending": status in OPEN_STATUSES,
+            "incident_id": incident.get("id"),
+            "failures": [
+                check.get("identifier")
+                for check in incident.get("checks", [])
+                if isinstance(check, dict)
+            ],
+        }
+
+
+def reserve_handoff(
+    config_path: Path,
+    *,
+    lease_seconds: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    if lease_seconds <= 0:
+        raise ValueError("handoff lease must be positive")
+    current = now or utc_now()
+    config_path = config_path.expanduser().resolve()
+    path = state_path(config_path)
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        incident = state.get("incident")
+        if not isinstance(incident, dict):
+            return {
+                "status": "idle",
+                "dispatch": False,
+                "repair_pending": False,
+            }
+        status = str(incident.get("status", ""))
+        handoff = incident.get("handoff")
+        expires_at = (
+            parse_time(handoff.get("expires_at"))
+            if isinstance(handoff, dict)
+            else None
+        )
+        if (
+            status == "handoff_pending"
+            and expires_at is not None
+            and expires_at > current
+        ):
+            return {
+                "status": "repair_handoff_reserved",
+                "dispatch": False,
+                "repair_pending": True,
+                "incident_id": incident["id"],
+            }
+        if status == "handoff_pending":
+            incident["status"] = "escalation_pending"
+            incident["handoff"] = None
+            status = "escalation_pending"
+        if status != "escalation_pending":
+            return {
+                "status": status,
+                "dispatch": False,
+                "repair_pending": status in OPEN_STATUSES,
+                "incident_id": incident["id"],
+            }
+
+        owner_activity = autopilot_bridge.browser_owner_activity(config_path)
+        if owner_activity.get("defer"):
+            return {
+                "status": str(owner_activity["status"]),
+                "dispatch": False,
+                "repair_pending": True,
+                "incident_id": incident["id"],
+                "owner_activity": owner_activity,
+            }
+        token = str(uuid.uuid4())
+        incident["status"] = "handoff_pending"
+        incident["handoff"] = {
+            "reservation_token": token,
+            "reserved_at": isoformat(current),
+            "expires_at": isoformat(
+                current + timedelta(seconds=lease_seconds)
+            ),
+        }
+        save_state(path, state)
+        return {
+            "status": "repair_handoff_pending",
+            "dispatch": True,
+            "repair_pending": True,
+            "incident_id": incident["id"],
+            "reservation_token": token,
+        }
+
+
+def release_handoff(
+    config_path: Path,
+    *,
+    reservation_token: str,
+    reason: str,
+) -> dict[str, Any]:
+    path = state_path(config_path.expanduser().resolve())
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        incident = state.get("incident")
+        if not isinstance(incident, dict):
+            raise ValueError("no active repair incident")
+        handoff = incident.get("handoff")
+        if (
+            not isinstance(handoff, dict)
+            or handoff.get("reservation_token") != reservation_token
+        ):
+            raise ValueError("repair reservation token mismatch")
+        incident["status"] = "escalation_pending"
+        incident["handoff"] = None
+        incident["last_release_reason"] = reason
+        save_state(path, state)
+        return {
+            "status": "repair_handoff_released",
+            "incident_id": incident["id"],
+        }
+
+
+def claim(
+    config_path: Path,
+    *,
+    lease_seconds: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    if lease_seconds <= 0:
+        raise ValueError("owner lease must be positive")
+    current = now or utc_now()
+    path = state_path(config_path.expanduser().resolve())
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        incident = state.get("incident")
+        if not isinstance(incident, dict):
+            return {"status": "idle", "dispatch": False}
+        if incident.get("status") not in {
+            "handoff_pending",
+            "escalation_pending",
+        }:
+            return {
+                "status": str(incident.get("status")),
+                "dispatch": False,
+                "incident_id": incident["id"],
+            }
+        claim_token = str(uuid.uuid4())
+        incident["status"] = "claimed"
+        incident["handoff"] = None
+        incident["owner"] = {
+            "claim_token": claim_token,
+            "claimed_at": isoformat(current),
+            "lease_expires_at": isoformat(
+                current + timedelta(seconds=lease_seconds)
+            ),
+        }
+        incident["wake_count"] = int(incident.get("wake_count", 0)) + 1
+        incident["last_wake_at"] = isoformat(current)
+        save_state(path, state)
+        return {
+            "status": "claimed",
+            "dispatch": True,
+            "incident_id": incident["id"],
+            "claim_token": claim_token,
+            "prompt": repair_prompt(incident),
+        }
+
+
+def repair_prompt(incident: dict[str, Any]) -> str:
+    checks = "\n".join(
+        (
+            f"- {check.get('identifier')}: {check.get('summary')} "
+            f"Рекомендация: {check.get('repair')}"
+        )
+        for check in incident.get("checks", [])
+        if isinstance(check, dict)
+    )
+    attempts = "\n".join(
+        (
+            f"- {attempt.get('action')}: success={attempt.get('success')}, "
+            f"returncode={attempt.get('returncode')}"
+        )
+        for attempt in incident.get("repair_attempts", [])
+        if isinstance(attempt, dict)
+    ) or "- автоматические попытки не выполнялись"
+    return (
+        "Исправь системный incident автопилота только в каноническом "
+        "workspace. Не публикуй в X и не открывай Browser, если проверка "
+        "прямо этого не требует.\n\n"
+        f"Incident: {incident['id']}\n"
+        "Проваленные проверки:\n"
+        f"{checks}\n"
+        "Уже выполненные безопасные попытки:\n"
+        f"{attempts}\n\n"
+        "Сначала выполни started с точным claim token. Найди первопричину, "
+        "исправь минимально, повтори system_doctor и адресный canary. После "
+        "нулевого FAIL выполни completed с точным token и кратким отчетом. "
+        "Если безопасный ремонт невозможен, выполни failed с точной причиной."
+    )
+
+
+def _require_owner(
+    incident: dict[str, Any],
+    claim_token: str,
+) -> dict[str, Any]:
+    owner = incident.get("owner")
+    if (
+        not isinstance(owner, dict)
+        or owner.get("claim_token") != claim_token
+    ):
+        raise ValueError("repair claim token mismatch")
+    return owner
+
+
+def started(
+    config_path: Path,
+    *,
+    claim_token: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or utc_now()
+    path = state_path(config_path.expanduser().resolve())
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        incident = state.get("incident")
+        if not isinstance(incident, dict):
+            raise ValueError("no active repair incident")
+        owner = _require_owner(incident, claim_token)
+        if incident.get("status") != "claimed":
+            raise ValueError("repair incident is not claimed")
+        incident["status"] = "work_in_progress"
+        owner["started_at"] = isoformat(current)
+        save_state(path, state)
+        return {
+            "status": "work_in_progress",
+            "incident_id": incident["id"],
+        }
+
+
+def completed(
+    config_path: Path,
+    contract_path: Path,
+    *,
+    claim_token: str,
+    report: str,
+    now: datetime | None = None,
+    checks: list[system_doctor.Check] | None = None,
+) -> dict[str, Any]:
+    if not report.strip():
+        raise ValueError("repair completion report is required")
+    current = now or utc_now()
+    config_path = config_path.expanduser().resolve()
+    path = state_path(config_path)
+    observed = (
+        checks
+        if checks is not None
+        else collect_checks(config_path, contract_path)
+    )
+    failures = [check for check in observed if check.status == "fail"]
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        incident = state.get("incident")
+        if not isinstance(incident, dict):
+            raise ValueError("no active repair incident")
+        _require_owner(incident, claim_token)
+        if incident.get("status") != "work_in_progress":
+            raise ValueError("repair incident has not been started")
+        if failures and not incident.get("canary"):
+            raise ValueError(
+                "system doctor still has FAIL: "
+                + ", ".join(check.identifier for check in failures)
+            )
+        incident["status"] = "resolved"
+        incident["resolution"] = {
+            "kind": (
+                "canary_completed"
+                if incident.get("canary")
+                else "sol_repair_completed"
+            ),
+            "completed_at": isoformat(current),
+            "report": report.strip(),
+            "remaining_warnings": [
+                check.identifier
+                for check in observed
+                if check.status == "warn"
+            ],
+        }
+        incident["owner"]["completed_at"] = isoformat(current)
+        state["last_incident"] = incident
+        state["incident"] = None
+        state["last_healthy_at"] = isoformat(current)
+        state["last_checked_at"] = isoformat(current)
+        save_state(path, state)
+        return {
+            "status": "completed",
+            "incident_id": incident["id"],
+            "report": report.strip(),
+        }
+
+
+def failed(
+    config_path: Path,
+    *,
+    claim_token: str,
+    error: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    if not error.strip():
+        raise ValueError("repair failure reason is required")
+    current = now or utc_now()
+    path = state_path(config_path.expanduser().resolve())
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        incident = state.get("incident")
+        if not isinstance(incident, dict):
+            raise ValueError("no active repair incident")
+        owner = _require_owner(incident, claim_token)
+        incident["status"] = "failed"
+        owner["failed_at"] = isoformat(current)
+        owner["error"] = error.strip()
+        save_state(path, state)
+        return {
+            "status": "failed",
+            "incident_id": incident["id"],
+            "error": error.strip(),
+        }
+
+
+def create_canary(
+    config_path: Path,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or utc_now()
+    path = state_path(config_path.expanduser().resolve())
+    canary_check = system_doctor.Check(
+        "canary.supervisor_handoff",
+        "fail",
+        "Контролируемая проверка Sol handoff ожидает закрытия.",
+        "Claim, started и completed должны пройти в существующей Sol сессии.",
+        {"canary": True},
+    )
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        incident = state.get("incident")
+        if (
+            isinstance(incident, dict)
+            and incident.get("status") in OPEN_STATUSES
+        ):
+            raise ValueError("cannot start canary while an incident is open")
+        created = new_incident([canary_check], now=current, canary=True)
+        state["incident"] = created
+        state["last_checked_at"] = isoformat(current)
+        save_state(path, state)
+        return {
+            "status": "escalation_pending",
+            "incident_id": created["id"],
+            "canary": True,
+        }
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--config", type=Path, default=DEFAULT_CONFIG)
+    parser.add_argument("--contract", type=Path, default=DEFAULT_CONTRACT)
+    parser.add_argument("--lease-seconds", type=int, default=1800)
+    commands = parser.add_subparsers(dest="command", required=True)
+    commands.add_parser("run")
+    commands.add_parser("gate")
+    commands.add_parser("reserve-handoff")
+    release = commands.add_parser("release-handoff")
+    release.add_argument("--reservation-token", required=True)
+    release.add_argument("--reason", required=True)
+    commands.add_parser("claim")
+    begin = commands.add_parser("started")
+    begin.add_argument("--claim-token", required=True)
+    done = commands.add_parser("completed")
+    done.add_argument("--claim-token", required=True)
+    done.add_argument("--report", required=True)
+    fail = commands.add_parser("failed")
+    fail.add_argument("--claim-token", required=True)
+    fail.add_argument("--error", required=True)
+    commands.add_parser("canary")
+    commands.add_parser("status")
+    return parser
+
+
+def main() -> int:
+    args = build_parser().parse_args()
+    config = args.config.expanduser().resolve()
+    contract = args.contract.expanduser().resolve()
+    if args.command == "run":
+        result = run_once(config, contract)
+    elif args.command == "gate":
+        result = gate(config)
+    elif args.command == "reserve-handoff":
+        result = reserve_handoff(config, lease_seconds=args.lease_seconds)
+    elif args.command == "release-handoff":
+        result = release_handoff(
+            config,
+            reservation_token=args.reservation_token,
+            reason=args.reason,
+        )
+    elif args.command == "claim":
+        result = claim(config, lease_seconds=args.lease_seconds)
+    elif args.command == "started":
+        result = started(config, claim_token=args.claim_token)
+    elif args.command == "completed":
+        result = completed(
+            config,
+            contract,
+            claim_token=args.claim_token,
+            report=args.report,
+        )
+    elif args.command == "failed":
+        result = failed(
+            config,
+            claim_token=args.claim_token,
+            error=args.error,
+        )
+    elif args.command == "canary":
+        result = create_canary(config)
+    elif args.command == "status":
+        result = gate(config)
+    else:
+        raise AssertionError(args.command)
+    print(json.dumps(result, ensure_ascii=False, sort_keys=True))
+    if args.command == "run" and result.get("healthy") is False:
+        return 2
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

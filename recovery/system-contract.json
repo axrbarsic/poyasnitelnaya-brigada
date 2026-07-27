@@ -10,6 +10,7 @@
     "xmention_watcher.py",
     "scripts/autopilot_bridge.py",
     "scripts/autopilot_contract.py",
+    "scripts/autopilot_supervisor.py",
     "scripts/personality_policy.py",
     "personality/policy.json",
     "skill-backup/x-twitter-operator/SKILL.md",
@@ -37,7 +38,8 @@
       "kind": "heartbeat",
       "status": "ACTIVE",
       "rrule": "FREQ=MINUTELY;INTERVAL=1",
-      "target_thread_id": "019f9d46-67b0-72c1-aca6-406af579d5fa"
+      "target_thread_id": "019f9d46-67b0-72c1-aca6-406af579d5fa",
+      "prompt_source": "macos/x-relay.prompt.txt"
     },
     "retired_dispatcher": {
       "id": "x",
@@ -51,12 +53,22 @@
     "com.axrbarsic.xmention.dispatch",
     "com.axrbarsic.xmention.codex-update"
   ],
+  "launch_agent_programs": {
+    "com.axrbarsic.xmention.poll": "xmention_watcher.py",
+    "com.axrbarsic.xmention.watchdog": "scripts/autopilot_supervisor.py",
+    "com.axrbarsic.xmention.janitor": "scripts/session_janitor.py",
+    "com.axrbarsic.xmention.dispatch": "scripts/app_server_dispatch.py",
+    "com.axrbarsic.xmention.codex-update": "scripts/codex_cli_updater.py"
+  },
   "runtime": {
     "database": "var/watcher.sqlite3",
     "wake_file": "var/wake-request.json",
     "keychain_helper": "var/keychain-helper",
     "health_file": "var/health.json",
+    "dispatch_state_file": "var/app-server-dispatch.json",
+    "autopilot_state_file": "var/autopilot-dispatch.json",
     "max_poll_age_seconds": 180,
+    "max_dispatch_age_seconds": 180,
     "healthy_statuses": [
       "healthy",
       "healthy_silence_review"

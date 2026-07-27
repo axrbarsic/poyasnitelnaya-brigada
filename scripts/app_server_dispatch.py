@@ -17,10 +17,16 @@ from pathlib import Path
 from typing import Any, Iterator
 
 try:
-    from scripts import autopilot_bridge, autopilot_dispatch, resource_guard
+    from scripts import (
+        autopilot_bridge,
+        autopilot_dispatch,
+        autopilot_supervisor,
+        resource_guard,
+    )
 except ModuleNotFoundError:
     import autopilot_bridge  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
+    import autopilot_supervisor  # type: ignore[no-redef]
     import resource_guard  # type: ignore[no-redef]
 
 
@@ -554,10 +560,21 @@ def desktop_supervisor_dispatch(
 ) -> dict[str, Any]:
     """Keep empty cycles model-free and launch Desktop only for real work."""
 
-    gate = autopilot_bridge.gate(
-        config_path,
-        lease_seconds=lease_seconds,
-    )
+    repair_gate = autopilot_supervisor.gate(config_path)
+    if repair_gate.get("repair_pending"):
+        gate = {
+            "status": str(repair_gate.get("status", "repair_pending")),
+            "dispatch": bool(repair_gate.get("dispatch")),
+            "event_ids": [],
+            "pending_count": 0,
+        }
+        work_kind = "repair"
+    else:
+        gate = autopilot_bridge.gate(
+            config_path,
+            lease_seconds=lease_seconds,
+        )
+        work_kind = "x"
     state_path = dispatch_state_path(config_path, config)
     previous = (
         autopilot_dispatch.read_json(state_path)
@@ -639,7 +656,10 @@ def desktop_supervisor_dispatch(
             "desktop_closed": closed,
             "event_ids": event_ids,
             "pending_count": pending_count,
+            "work_kind": work_kind,
         }
+        if repair_gate.get("incident_id"):
+            result["repair_incident_id"] = repair_gate["incident_id"]
         if managed and not closed:
             result["managed_by_supervisor"] = True
             result["managed_desktop_pid"] = managed_pid
@@ -709,7 +729,7 @@ def desktop_supervisor_dispatch(
             alert_sent = (
                 notify_desktop_failure(
                     "Не удалось запустить Codex Desktop. "
-                    "Очередь X сохранена, автопилот повторит попытку."
+                    "Работа сохранена, автопилот повторит попытку."
                 )
                 if should_alert
                 else False
@@ -723,8 +743,11 @@ def desktop_supervisor_dispatch(
                 "owner_thread_id": owner_thread_id,
                 "event_ids": event_ids,
                 "pending_count": pending_count,
+                "work_kind": work_kind,
                 "error": str(error),
             }
+            if repair_gate.get("incident_id"):
+                result["repair_incident_id"] = repair_gate["incident_id"]
             if alert_sent:
                 result["last_alert_at"] = autopilot_dispatch.isoformat()
             elif previous.get("last_alert_at"):
@@ -745,7 +768,10 @@ def desktop_supervisor_dispatch(
         "owner_thread_id": owner_thread_id,
         "event_ids": event_ids,
         "pending_count": pending_count,
+        "work_kind": work_kind,
     }
+    if repair_gate.get("incident_id"):
+        result["repair_incident_id"] = repair_gate["incident_id"]
     if launched:
         result["managed_by_supervisor"] = True
         result["managed_desktop_pid"] = processes[0]

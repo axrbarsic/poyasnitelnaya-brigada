@@ -12,6 +12,7 @@ import plistlib
 import re
 import sqlite3
 import subprocess
+import sys
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -140,6 +141,19 @@ def git_origin(root: Path) -> str:
         timeout=10,
     )
     return result.stdout.strip()
+
+
+def launchagent_loaded(label: str) -> tuple[bool, str]:
+    target = f"gui/{os.getuid()}/{label}"
+    completed = subprocess.run(
+        ["/bin/launchctl", "print", target],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    detail = completed.stderr.strip() or completed.stdout.strip()
+    return completed.returncode == 0, detail[-500:]
 
 
 def check_contract(
@@ -340,11 +354,33 @@ def check_contract(
             )
             continue
         actual = parse_simple_toml(automation_path)
+        metadata_keys = {"prompt_source"}
         mismatches = {
             key: {"actual": actual.get(key), "expected": value}
             for key, value in expected.items()
-            if actual.get(key) != value
+            if key not in metadata_keys and actual.get(key) != value
         }
+        prompt_source = str(expected.get("prompt_source", "")).strip()
+        if prompt_source:
+            try:
+                expected_prompt = resolve_project_path(
+                    root, prompt_source
+                ).read_text(encoding="utf-8").rstrip("\n")
+            except OSError:
+                expected_prompt = None
+            if actual.get("prompt") != expected_prompt:
+                mismatches["prompt"] = {
+                    "actual_sha256": hashlib.sha256(
+                        str(actual.get("prompt", "")).encode("utf-8")
+                    ).hexdigest(),
+                    "expected_sha256": (
+                        hashlib.sha256(
+                            expected_prompt.encode("utf-8")
+                        ).hexdigest()
+                        if expected_prompt is not None
+                        else None
+                    ),
+                }
         checks.append(
             Check(
                 f"automation.{name}",
@@ -359,6 +395,7 @@ def check_contract(
             )
         )
 
+    expected_programs = contract.get("launch_agent_programs", {})
     for label in contract.get("launch_agents", []):
         installed = home / "Library" / "LaunchAgents" / f"{label}.plist"
         if not installed.is_file():
@@ -376,18 +413,57 @@ def check_contract(
             payload = plistlib.loads(installed.read_bytes())
         except (OSError, plistlib.InvalidFileException):
             payload = {}
+        expected_program = str(expected_programs.get(label, "")).strip()
+        arguments = payload.get("ProgramArguments", [])
+        program_ok = (
+            not expected_program
+            or (
+                isinstance(arguments, list)
+                and any(
+                    str(argument).endswith(expected_program)
+                    for argument in arguments
+                )
+            )
+        )
+        installed_ok = payload.get("Label") == label and program_ok
         checks.append(
             Check(
                 f"launchagent.{label}",
-                "pass" if payload.get("Label") == label else "fail",
+                "pass" if installed_ok else "fail",
                 (
                     f"LaunchAgent {label} установлен."
-                    if payload.get("Label") == label
-                    else f"LaunchAgent {label} повреждён."
+                    if installed_ok
+                    else f"LaunchAgent {label} повреждён или устарел."
                 ),
                 "Перерендери и переустанови только этот LaunchAgent.",
+                (
+                    {
+                        "expected_program": expected_program,
+                        "program_arguments": arguments,
+                    }
+                    if not program_ok
+                    else None
+                ),
             )
         )
+        if sys.platform == "darwin" and home == Path.home().resolve():
+            try:
+                loaded, detail = launchagent_loaded(label)
+            except (OSError, subprocess.SubprocessError):
+                loaded, detail = False, ""
+            checks.append(
+                Check(
+                    f"launchagent.{label}.loaded",
+                    "pass" if loaded else "fail",
+                    (
+                        f"LaunchAgent {label} загружен в launchd."
+                        if loaded
+                        else f"LaunchAgent {label} не загружен."
+                    ),
+                    "Выполни bootstrap проверенного plist, затем kickstart.",
+                    {"launchctl": detail} if not loaded and detail else None,
+                )
+            )
 
     runtime = contract.get("runtime", {})
     live_database = resolve_project_path(root, str(runtime["database"]))
@@ -458,6 +534,90 @@ def check_contract(
         )
     )
 
+    dispatch_value = str(runtime.get("dispatch_state_file", "")).strip()
+    if dispatch_value:
+        dispatch_path = resolve_project_path(root, dispatch_value)
+        dispatch_max_age = int(
+            runtime.get("max_dispatch_age_seconds", 180)
+        )
+        try:
+            dispatch_state = read_json(dispatch_path)
+            dispatch_checked = parse_timestamp(
+                dispatch_state.get("checked_at")
+            )
+            dispatch_age = (
+                (datetime.now(timezone.utc) - dispatch_checked).total_seconds()
+                if dispatch_checked is not None
+                else float("inf")
+            )
+            dispatch_ok = 0 <= dispatch_age <= dispatch_max_age
+        except (OSError, ValueError, TypeError, AttributeError):
+            dispatch_ok = False
+            dispatch_age = float("inf")
+        checks.append(
+            Check(
+                "runtime.dispatch_health",
+                "pass" if dispatch_ok else "fail",
+                (
+                    f"Dispatcher свежий, age={round(dispatch_age, 1)}s."
+                    if dispatch_ok
+                    else "Dispatcher не обновляет durable state."
+                ),
+                "Проверь loaded dispatch LaunchAgent и выполни его kickstart.",
+                {
+                    "age_seconds": (
+                        round(dispatch_age, 1)
+                        if dispatch_age != float("inf")
+                        else None
+                    ),
+                    "max_age_seconds": dispatch_max_age,
+                },
+            )
+        )
+
+    owner_state_value = str(
+        runtime.get("autopilot_state_file", "")
+    ).strip()
+    if owner_state_value:
+        owner_state_path = resolve_project_path(root, owner_state_value)
+        try:
+            owner_state = read_json(owner_state_path)
+            owner = owner_state.get("owner")
+            if owner is None:
+                owner_lease_ok = True
+                owner_details = {"owner": None}
+            elif isinstance(owner, dict):
+                lease_expires = parse_timestamp(
+                    owner.get("lease_expires_at")
+                )
+                owner_lease_ok = (
+                    lease_expires is not None
+                    and lease_expires >= datetime.now(timezone.utc)
+                )
+                owner_details = {
+                    "event_ids": owner.get("event_ids", []),
+                    "lease_expires_at": owner.get("lease_expires_at"),
+                }
+            else:
+                owner_lease_ok = False
+                owner_details = {"owner_type": type(owner).__name__}
+        except (OSError, ValueError, TypeError, AttributeError):
+            owner_lease_ok = False
+            owner_details = {"state": "unreadable"}
+        checks.append(
+            Check(
+                "runtime.owner_lease",
+                "pass" if owner_lease_ok else "fail",
+                (
+                    "Browser owner lease согласован."
+                    if owner_lease_ok
+                    else "Browser owner lease протух или повреждён."
+                ),
+                "Запусти штатный session janitor recovery, не удаляй очередь.",
+                owner_details,
+            )
+        )
+
     helper = resolve_project_path(root, str(runtime["keychain_helper"]))
     helper_ok = helper.is_file() and os.access(helper, os.X_OK)
     checks.append(
@@ -493,10 +653,16 @@ def check_contract(
             and int(health.get("consecutive_failures", 0)) == 0
             and 0 <= age_seconds <= max_age
         )
+        health_status = str(health.get("status", ""))
+        last_error_class = health.get("last_error_class")
+        last_error_message = health.get("last_error_message")
     except (OSError, ValueError, TypeError, AttributeError):
         health_ok = False
         age_seconds = float("inf")
         max_age = int(runtime.get("max_poll_age_seconds", 180))
+        health_status = "unreadable"
+        last_error_class = None
+        last_error_message = None
     checks.append(
         Check(
             "runtime.poll_health",
@@ -515,6 +681,9 @@ def check_contract(
                     else None
                 ),
                 "max_age_seconds": max_age,
+                "health_status": health_status,
+                "last_error_class": last_error_class,
+                "last_error_message": last_error_message,
             },
         )
     )

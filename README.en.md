@@ -101,8 +101,10 @@ one manifested evidence tree. Its CLI always writes to the canonical
 
 The watcher uses the official X API user mentions endpoint with `since_id`. It
 stores immutable event IDs in SQLite, writes a durable pending queue, and
-maintains a health file. A separate watchdog detects stale polling and repeated
-failures. The official X API still requires an X API Bearer Token.
+maintains a health file. A token-free supervisor detects stale polling and
+contract failures. It performs one allowlisted poll kickstart, then creates one
+deduplicated durable incident for the existing Sol High owner if the failure
+persists. The official X API still requires an X API Bearer Token.
 
 It does not:
 
@@ -154,7 +156,7 @@ post or official X API record is append-only verified.
 
 ## Current checkpoint
 
-Polling, watchdog, janitor, and event dispatcher LaunchAgents run every minute
+Polling, supervisor, janitor, and event dispatcher LaunchAgents run every minute
 for `@axrbarsic`. The dispatcher checks the compact queue without a model and
 starts Luna only for ready work. A complete initial
 review remains a separate gate and must finish before an empty incremental
@@ -606,26 +608,26 @@ Sol classification, such as `supportive_confirmation`,
 The broad field accepts only `supportive`, `opposing`, `neutral`, or
 `ambiguous`; labels such as `corrective` belong in `stance-detail`.
 
-## Watchdog
+## Supervisor
 
-One-shot health check:
-
-```bash
-python3 xmention_watcher.py --config config.json watchdog
-```
-
-Continuous shadow watchdog:
+One-shot token-free system check:
 
 ```bash
-python3 xmention_watcher.py --config config.json watchdog --loop
+python3 scripts/autopilot_supervisor.py \
+  --config config.json \
+  --contract recovery/system-contract.json \
+  run
 ```
 
-The watchdog is intentionally separate from the poller. If the poller dies, it
-cannot report its own death. The watchdog detects an old `last_success_at`,
-repeated failures, and a long period with no new events that deserves a manual
-cross-check. On macOS it sends a local notification only when health status
-changes. New queued X events also produce one local notification per successful
-poll that finds new IDs.
+The supervisor remains silent while healthy. A stale or failing poll receives
+one allowlisted LaunchAgent kickstart. A persistent or nonrepairable failure
+becomes one durable incident. Dispatcher and the existing Luna relay deliver
+that incident to the existing Sol High owner. Reservation, claim, cooldown,
+and a required completion report prevent duplicate wakes and false success.
+
+```bash
+python3 scripts/autopilot_supervisor.py --config config.json status
+```
 
 The poller uses a process lock, rejects repeated or excessive pagination, and
 never advances `since_id` when a request fails. Background stdout and stderr go
@@ -672,7 +674,7 @@ and applies the correction atomically, so append-only history remains intact.
 ## Background service
 
 The `macos/` directory contains five LaunchAgent templates whose intervals come
-from `config.json`: poll, watchdog, session janitor, event dispatcher, and
+from `config.json`: poll, supervisor, session janitor, event dispatcher, and
 Codex CLI updater. The idle terminal path is entirely model-free. A ready queue
 starts Codex Desktop when needed, then the existing in-app Luna relay wakes the
 pinned Sol High Browser owner. The janitor archives historical service tasks

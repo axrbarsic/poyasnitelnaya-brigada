@@ -8,16 +8,18 @@
 
 1. X watcher раз в минуту получает упоминания через официальный X API,
    дедуплицирует их и обновляет SQLite с очередью.
-2. Watchdog контролирует свежесть poll и ошибки API.
-3. Python dispatcher раз в минуту выполняет model-free `gate`.
+2. Token-free supervisor контролирует свежесть poll, системный контракт и
+   ошибки API. Однозначную stale-poll поломку он один раз ремонтирует сам.
+3. Python dispatcher раз в минуту сначала выполняет repair gate, затем X gate.
 4. Пустая, занятая или отложенная очередь завершается без модели, Browser и
    новой задачи Codex.
 5. Готовая очередь запускает Codex Desktop в каноническом workspace, если
    приложение закрыто. При неудаче очередь сохраняется, запуск повторяется, а
    Alex получает локальное уведомление.
-6. Одна существующая in-app heartbeat-сессия на Luna Low выполняет
-   `reserve-handoff`, читает канонический owner thread и делает один
-   `send_message_to_thread` только при неактивном thread.
+6. Одна существующая in-app heartbeat-сессия на Luna Low сначала проверяет
+   durable repair incident, затем X queue. Она выполняет `reserve-handoff`,
+   читает канонический owner thread и делает один `send_message_to_thread`
+   только при неактивном thread.
 7. Закрепленная сессия Sol High атомарно делает `claim`, восстанавливает живую
    ветку, публикует и сохраняет точную историю.
 8. После завершения supervisor может закрыть только тот Desktop, который
@@ -52,7 +54,7 @@ Browser всегда принадлежит постоянной owner-сесс�
 | Компонент | Частота | Модель | Ответственность |
 | --- | --- | --- | --- |
 | X watcher LaunchAgent | 1 минута | нет | API, дедупликация, SQLite, очередь |
-| Watchdog LaunchAgent | 1 минута | нет | Контроль poll и API |
+| Supervisor LaunchAgent | 1 минута | нет | Doctor, allowlist ремонта, durable incident |
 | Session janitor LaunchAgent | 1 минута | нет | Архив служебных задач, recovery claim |
 | Event dispatcher LaunchAgent | 1 минута | нет при idle | Gate, запуск и managed shutdown Desktop |
 | In-app relay heartbeat | пока Desktop открыт | Luna Low | Reservation и одно сообщение owner |
@@ -90,6 +92,9 @@ trust_level = "trusted"
   "app_server_dispatch_interval_seconds": 60,
   "app_server_dispatch_state_file": "var/app-server-dispatch.json",
   "app_server_dispatch_lock_file": "var/app-server-dispatch.lock",
+  "autopilot_supervisor_state_file": "var/autopilot-supervisor.json",
+  "autopilot_supervisor_repair_cooldown_seconds": 90,
+  "autopilot_supervisor_escalation_retry_seconds": 1800,
   "codex_cli_update_channel": "preview",
   "codex_cli_update_interval_seconds": 21600,
   "resource_mode": "auto",
@@ -154,26 +159,31 @@ scheduled run создает отдельную задачу и может ос�
 
 ## Машина состояний
 
-1. LaunchAgent вызывает `scripts/app_server_dispatch.py`.
-2. Python выполняет model-free `gate`.
-3. `idle`, `work_in_progress` и `deferred_resources` записываются в state и
+1. Supervisor LaunchAgent выполняет doctor и при необходимости один
+   allowlisted ремонт без модели.
+2. LaunchAgent вызывает `scripts/app_server_dispatch.py`.
+3. Python сначала выполняет model-free repair gate, затем X gate.
+4. `idle`, `work_in_progress` и `deferred_resources` записываются в state и
    завершаются без app-server.
-4. При `ready` supervisor проверяет main process Codex Desktop и запускает
+5. При `ready` supervisor проверяет main process Codex Desktop и запускает
    `codex app CANONICAL_ROOT`, если процесс отсутствует.
-5. In-app heartbeat выполняет `reserve-handoff`. Пока канонический командный
+6. In-app heartbeat сначала резервирует repair incident. Только при его
+   отсутствии он выполняет X `reserve-handoff`. Пока канонический командный
    центр активен или находится внутри quiet period, команда возвращает
    `owner_thread_active` или `owner_thread_cooldown` без reservation.
-6. Победивший relay читает точный live Browser owner thread и делает один
+7. Победивший relay читает точный live Browser owner thread и делает один
    `send_message_to_thread` с override Sol High только при `status.type=idle`
    или `status.type=notLoaded`.
-7. При активном thread, ошибке чтения или ошибке доставки relay выполняет
+8. При активном thread, ошибке чтения или ошибке доставки relay выполняет
    `release-handoff` со своим точным reservation token и завершается. Очередь
    остается pending. Соседний heartbeat получает `handoff_reserved`.
-8. Browser owner выполняет `claim`, затем `started`.
-9. Owner загружает `x-twitter-operator`, открывает минимум вкладок, выполняет
+9. Repair owner выполняет doctor claim и started, чинит минимально и закрывает
+   incident только после нулевого FAIL и отчета. X owner выполняет X claim и
+   started.
+10. X owner загружает `x-twitter-operator`, открывает минимум вкладок, выполняет
    double dedupe и publication transaction.
-10. После exact history и durable resolution owner выполняет `completed`.
-11. Если Desktop был запущен supervisor, пустая очередь и owner=null запускают
+11. После exact history и durable resolution owner выполняет `completed`.
+12. Если Desktop был запущен supervisor, пустая очередь и owner=null запускают
     grace timer, после которого завершается только сохраненный managed PID.
 
 ## Контракты памяти и качества
@@ -210,3 +220,5 @@ scheduled run создает отдельную задачу и может ос�
 
 Успех нельзя имитировать прямой вставкой resolution. Любая проверка после
 перезапуска должна начинаться с живого состояния очереди и точной ветки X.
+Event ID, ссылку и готовый ответ модели заранее не передавать. Watcher обязан
+сам обнаружить органическое неотвеченное событие.

@@ -8,15 +8,17 @@ The system separates token-free mechanics from content decisions:
 
 1. The X watcher polls the official mentions endpoint every minute, deduplicates
    events, and updates SQLite plus the durable queue.
-2. The watchdog checks polling freshness and API failures.
-3. A Python dispatcher runs the model-free `gate` every minute.
+2. The token-free supervisor checks polling freshness, the recovery contract,
+   and API failures. It attempts one allowlisted stale-poll repair.
+3. A Python dispatcher runs the model-free repair gate, then the X gate.
 4. Empty, busy, or resource-deferred queues exit without a model, Browser, or
    a new Codex task.
 5. A ready queue starts Codex Desktop in the canonical workspace when the app
    is closed. Failure keeps the queue intact, retries later, and alerts Alex.
-6. One existing in-app Luna Low heartbeat runs `reserve-handoff`, reads the
-   canonical owner thread, then makes exactly one `send_message_to_thread` call
-   only when that thread is inactive.
+6. One existing in-app Luna Low heartbeat checks a durable repair incident
+   before the X queue, runs the matching `reserve-handoff`, reads the canonical
+   owner thread, then makes exactly one `send_message_to_thread` call only when
+   that thread is inactive.
 7. The pinned Sol High task claims atomically, restores the live thread,
    publishes, and stores exact history.
 8. The supervisor may later stop only a Desktop process it launched itself.
@@ -50,7 +52,7 @@ Official architecture references:
 | Component | Frequency | Model | Responsibility |
 | --- | --- | --- | --- |
 | X watcher LaunchAgent | 1 minute | none | API, dedupe, SQLite, queue |
-| Watchdog LaunchAgent | 1 minute | none | Poll and API health |
+| Supervisor LaunchAgent | 1 minute | none | Doctor, repair allowlist, durable incident |
 | Session janitor LaunchAgent | 1 minute | none | Archive service tasks, recover claims |
 | Event dispatcher LaunchAgent | 1 minute | none while idle | Gate, Desktop launch, managed shutdown |
 | In-app relay heartbeat | while Desktop is open | Luna Low | Reservation and one owner message |
@@ -87,6 +89,9 @@ Create ignored `config.json` from the example and set:
   "app_server_dispatch_interval_seconds": 60,
   "app_server_dispatch_state_file": "var/app-server-dispatch.json",
   "app_server_dispatch_lock_file": "var/app-server-dispatch.lock",
+  "autopilot_supervisor_state_file": "var/autopilot-supervisor.json",
+  "autopilot_supervisor_repair_cooldown_seconds": 90,
+  "autopilot_supervisor_escalation_retry_seconds": 1800,
   "codex_cli_update_channel": "preview",
   "codex_cli_update_interval_seconds": 21600,
   "resource_mode": "auto",

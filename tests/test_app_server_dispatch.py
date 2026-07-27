@@ -226,6 +226,47 @@ class AppServerDispatchTests(unittest.TestCase):
             self.assertEqual(result["desktop_pids"], [42])
             self.assertFalse(result["desktop_launched"])
 
+    def test_desktop_supervisor_prioritizes_repair_over_x_queue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self.make_config(root)
+            payload = json.loads(config.read_text(encoding="utf-8"))
+            payload["desktop_relay_mode"] = "in_app_heartbeat"
+            config.write_text(json.dumps(payload), encoding="utf-8")
+            with (
+                mock.patch.object(
+                    app_server_dispatch.autopilot_supervisor,
+                    "gate",
+                    return_value={
+                        "status": "escalation_pending",
+                        "dispatch": True,
+                        "repair_pending": True,
+                        "incident_id": "incident-1",
+                    },
+                ),
+                mock.patch.object(
+                    app_server_dispatch.autopilot_bridge,
+                    "gate",
+                    side_effect=AssertionError("X gate must wait"),
+                ),
+                mock.patch.object(
+                    app_server_dispatch,
+                    "desktop_processes",
+                    return_value=[42],
+                ),
+            ):
+                result = app_server_dispatch.dispatch(
+                    config,
+                    lease_seconds=1800,
+                )
+
+            self.assertEqual(result["work_kind"], "repair")
+            self.assertEqual(result["repair_incident_id"], "incident-1")
+            self.assertEqual(
+                result["status"],
+                "desktop_ready_waiting_relay",
+            )
+
     def test_idle_closes_only_supervisor_managed_desktop_after_grace(
         self,
     ) -> None:

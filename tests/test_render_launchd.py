@@ -52,6 +52,20 @@ class RenderLaunchdTests(unittest.TestCase):
                 dispatch_payload["StartInterval"],
                 45,
             )
+            watchdog_path = next(
+                path
+                for path in rendered
+                if path.name == "com.axrbarsic.xmention.watchdog.plist"
+            )
+            watchdog_payload = plistlib.loads(
+                watchdog_path.read_bytes()
+            )
+            watchdog_arguments = watchdog_payload["ProgramArguments"]
+            self.assertIn(
+                "scripts/autopilot_supervisor.py",
+                watchdog_arguments[1],
+            )
+            self.assertEqual(watchdog_arguments[-1], "run")
 
     def test_janitor_minimum_age_rejects_unsafe_value(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
