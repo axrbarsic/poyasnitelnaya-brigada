@@ -29,6 +29,16 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = PROJECT_ROOT / "recovery" / "system-contract.json"
 DEFAULT_CONFIG = PROJECT_ROOT / "config.json"
 VALID_STATUSES = {"pass", "warn", "fail"}
+REASONING_EFFORT_ORDER = (
+    "none",
+    "minimal",
+    "low",
+    "medium",
+    "high",
+    "xhigh",
+    "max",
+    "ultra",
+)
 
 
 @dataclass(frozen=True)
@@ -114,6 +124,18 @@ def parse_timestamp(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def reasoning_effort_meets_minimum(
+    actual: Any,
+    minimum: Any,
+) -> bool:
+    try:
+        actual_rank = REASONING_EFFORT_ORDER.index(str(actual))
+        minimum_rank = REASONING_EFFORT_ORDER.index(str(minimum))
+    except ValueError:
+        return False
+    return actual_rank >= minimum_rank
 
 
 def thread_row(database: Path, thread_id: str) -> dict[str, Any] | None:
@@ -293,12 +315,32 @@ def check_contract(
                 )
                 continue
             mismatches: dict[str, Any] = {}
-            for field in ("model", "reasoning_effort", "cwd"):
+            for field in ("model", "cwd"):
                 expected_value = expected.get(field)
                 if expected_value is not None and row.get(field) != expected_value:
                     mismatches[field] = {
                         "actual": row.get(field),
                         "expected": expected_value,
+                    }
+            minimum_effort = expected.get("minimum_reasoning_effort")
+            if minimum_effort is not None:
+                if not reasoning_effort_meets_minimum(
+                    row.get("reasoning_effort"),
+                    minimum_effort,
+                ):
+                    mismatches["reasoning_effort"] = {
+                        "actual": row.get("reasoning_effort"),
+                        "minimum": minimum_effort,
+                    }
+            else:
+                expected_effort = expected.get("reasoning_effort")
+                if (
+                    expected_effort is not None
+                    and row.get("reasoning_effort") != expected_effort
+                ):
+                    mismatches["reasoning_effort"] = {
+                        "actual": row.get("reasoning_effort"),
+                        "expected": expected_effort,
                     }
             if expected.get("must_be_unarchived") and int(row["archived"]) != 0:
                 mismatches["archived"] = {

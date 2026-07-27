@@ -10,6 +10,8 @@
     "xmention_watcher.py",
     "scripts/autopilot_bridge.py",
     "scripts/autopilot_contract.py",
+    "scripts/autopilot_emulator.py",
+    "scripts/autopilot_state_model.py",
     "scripts/autopilot_supervisor.py",
     "scripts/personality_policy.py",
     "personality/policy.json",
@@ -20,7 +22,7 @@
     "browser_owner": {
       "id": "019fa129-0483-7f20-ad9e-06c966d41df3",
       "model": "gpt-5.6-sol",
-      "reasoning_effort": "high",
+      "minimum_reasoning_effort": "high",
       "cwd": "/Users/alexlane/Developer/x-mention-watcher",
       "must_be_unarchived": true,
       "pin_recommended": true

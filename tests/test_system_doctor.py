@@ -136,7 +136,7 @@ class SystemDoctorTests(unittest.TestCase):
                 "browser_owner": {
                     "id": "owner",
                     "model": "sol",
-                    "reasoning_effort": "high",
+                    "minimum_reasoning_effort": "high",
                     "cwd": str(self.root),
                     "must_be_unarchived": True,
                     "pin_recommended": True,
@@ -216,6 +216,68 @@ class SystemDoctorTests(unittest.TestCase):
         )
         self.assertEqual(owner.status, "fail")
         self.assertIn("archived", owner.details)
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_owner_effort_above_minimum_passes(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        state = self.home / ".codex" / "state_1.sqlite"
+        with closing(sqlite3.connect(state)) as connection:
+            connection.execute(
+                "UPDATE threads SET reasoning_effort = 'max' "
+                "WHERE id = 'owner'"
+            )
+            connection.commit()
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        owner = next(
+            check
+            for check in checks
+            if check.identifier == "thread.browser_owner"
+        )
+        self.assertEqual(owner.status, "pass")
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_owner_effort_below_minimum_fails(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        state = self.home / ".codex" / "state_1.sqlite"
+        with closing(sqlite3.connect(state)) as connection:
+            connection.execute(
+                "UPDATE threads SET reasoning_effort = 'medium' "
+                "WHERE id = 'owner'"
+            )
+            connection.commit()
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        owner = next(
+            check
+            for check in checks
+            if check.identifier == "thread.browser_owner"
+        )
+        self.assertEqual(owner.status, "fail")
+        self.assertEqual(
+            owner.details["reasoning_effort"],
+            {"actual": "medium", "minimum": "high"},
+        )
 
     @mock.patch(
         "scripts.system_doctor.git_origin",
