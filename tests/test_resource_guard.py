@@ -426,6 +426,96 @@ class ResourceGuardTests(unittest.TestCase):
         self.assertTrue(any("node_repl_count" in reason for reason in reasons))
         self.assertTrue(any("swap_used_mb" in reason for reason in reasons))
 
+    def test_high_free_policy_also_applies_to_hard_caps(self) -> None:
+        sample = resource_guard.ResourceSample(
+            codex_rss_mb=2256,
+            renderer_count=4,
+            node_repl_count=13,
+            mcp_process_count=11,
+            free_percent=46,
+            swap_used_mb=971,
+            node_repl_rss_mb=84,
+            mcp_process_rss_mb=68,
+        )
+        config = {
+            "memory_guard_profiles": {
+                "efficiency": {
+                    "memory_guard_max_codex_rss_mb": 2200,
+                    "memory_guard_max_renderer_count": 5,
+                    "memory_guard_max_node_repl_count": 6,
+                    "memory_guard_max_mcp_process_count": 12,
+                    "memory_guard_min_free_percent": 20,
+                    "memory_guard_max_swap_used_mb": 896,
+                }
+            },
+            "memory_guard_hard_caps": {
+                "memory_guard_max_codex_rss_mb": 2700,
+                "memory_guard_max_renderer_count": 8,
+                "memory_guard_max_node_repl_count": 10,
+                "memory_guard_max_mcp_process_count": 20,
+                "memory_guard_min_free_percent": 10,
+                "memory_guard_max_swap_used_mb": 1280,
+            },
+            "memory_guard_high_free_recovery_percent": 40,
+            "memory_guard_high_free_recovery_codex_rss_mb": 2700,
+            "memory_guard_high_free_recovery_renderer_count": 5,
+            "memory_guard_high_free_recovery_helper_rss_mb": 512,
+        }
+
+        reasons = resource_guard.assess(
+            sample,
+            config,
+            mode="efficiency",
+        )
+
+        self.assertEqual(reasons, [])
+
+    def test_high_free_policy_does_not_recover_below_threshold(self) -> None:
+        sample = resource_guard.ResourceSample(
+            codex_rss_mb=2256,
+            renderer_count=4,
+            node_repl_count=13,
+            mcp_process_count=11,
+            free_percent=39,
+            swap_used_mb=971,
+            node_repl_rss_mb=84,
+            mcp_process_rss_mb=68,
+        )
+        config = {
+            "memory_guard_profiles": {
+                "efficiency": {
+                    "memory_guard_max_codex_rss_mb": 2200,
+                    "memory_guard_max_renderer_count": 5,
+                    "memory_guard_max_node_repl_count": 6,
+                    "memory_guard_max_mcp_process_count": 12,
+                    "memory_guard_min_free_percent": 20,
+                    "memory_guard_max_swap_used_mb": 896,
+                }
+            },
+            "memory_guard_hard_caps": {
+                "memory_guard_max_codex_rss_mb": 2700,
+                "memory_guard_max_renderer_count": 8,
+                "memory_guard_max_node_repl_count": 10,
+                "memory_guard_max_mcp_process_count": 20,
+                "memory_guard_min_free_percent": 10,
+                "memory_guard_max_swap_used_mb": 1280,
+            },
+            "memory_guard_high_free_recovery_percent": 40,
+            "memory_guard_high_free_recovery_codex_rss_mb": 2700,
+            "memory_guard_high_free_recovery_renderer_count": 5,
+            "memory_guard_high_free_recovery_helper_rss_mb": 512,
+        }
+
+        reasons = resource_guard.assess(
+            sample,
+            config,
+            mode="efficiency",
+        )
+
+        self.assertTrue(any("codex_rss_mb" in reason for reason in reasons))
+        self.assertTrue(any("node_repl_count" in reason for reason in reasons))
+        self.assertTrue(any("swap_used_mb" in reason for reason in reasons))
+
     def test_idle_mode_needs_safe_free_memory_for_performance(self) -> None:
         sample = resource_guard.ResourceSample(
             codex_rss_mb=1000,

@@ -636,7 +636,7 @@ def high_free_dispatch_envelope_is_healthy(
     return (
         sample.free_percent is not None
         and sample.free_percent
-        >= int(config.get("memory_guard_high_free_recovery_percent", 50))
+        >= int(config.get("memory_guard_high_free_recovery_percent", 40))
         and sample.codex_rss_mb
         <= float(
             config.get(
@@ -669,13 +669,31 @@ def assess(
     *,
     mode: str | None = None,
 ) -> list[str]:
-    reasons: list[str] = []
     limits_config = profile_limits(config, mode) if mode else config
-    historical_swap = swap_is_historical(sample, config)
-    helpers_recovered = helper_envelope_is_healthy(sample, config)
+    reasons = _assess_limits(sample, limits_config, config)
+    hard_caps = config.get("memory_guard_hard_caps")
+    if isinstance(hard_caps, dict) and hard_caps is not limits_config:
+        for reason in _assess_limits(sample, hard_caps, config):
+            hard_reason = "hard_cap: " + reason
+            if hard_reason not in reasons:
+                reasons.append(hard_reason)
+    return reasons
+
+
+def _assess_limits(
+    sample: ResourceSample,
+    limits_config: dict[str, Any],
+    policy_config: dict[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    historical_swap = swap_is_historical(sample, policy_config)
+    helpers_recovered = helper_envelope_is_healthy(
+        sample,
+        policy_config,
+    )
     high_free_recovered = high_free_dispatch_envelope_is_healthy(
         sample,
-        config,
+        policy_config,
     )
     limits = (
         ("codex_rss_mb", sample.codex_rss_mb, float),
@@ -711,12 +729,6 @@ def assess(
             reasons.append(
                 f"swap_used_mb={sample.swap_used_mb} exceeds {maximum_swap}"
             )
-    hard_caps = config.get("memory_guard_hard_caps")
-    if isinstance(hard_caps, dict) and hard_caps is not limits_config:
-        for reason in assess(sample, hard_caps):
-            hard_reason = "hard_cap: " + reason
-            if hard_reason not in reasons:
-                reasons.append(hard_reason)
     return reasons
 
 

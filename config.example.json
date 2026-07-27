@@ -23,7 +23,7 @@
   "memory_guard_helper_recovery_free_percent": 25,
   "memory_guard_helper_recovery_codex_rss_mb": 2000,
   "memory_guard_helper_recovery_total_rss_mb": 512,
-  "memory_guard_high_free_recovery_percent": 50,
+  "memory_guard_high_free_recovery_percent": 40,
   "memory_guard_high_free_recovery_codex_rss_mb": 2700,
   "memory_guard_high_free_recovery_renderer_count": 5,
   "memory_guard_high_free_recovery_helper_rss_mb": 512,
