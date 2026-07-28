@@ -190,6 +190,141 @@ class SystemDoctorTests(unittest.TestCase):
         failures = [check for check in checks if check.status == "fail"]
         self.assertEqual(failures, [])
 
+    def prepare_degraded_poll(
+        self,
+        *,
+        source: str = "x_api_conversation_tail",
+        tail_success_at: str | None = None,
+    ) -> None:
+        now = (
+            datetime.now(timezone.utc)
+            .isoformat()
+            .replace("+00:00", "Z")
+        )
+        (self.root / "var" / "health.json").write_text(
+            json.dumps(
+                {
+                    "status": "degraded",
+                    "consecutive_failures": 1,
+                    "last_success_at": now,
+                    "last_error_class": "timeout",
+                    "last_error_message": "The read operation timed out",
+                }
+            ),
+            encoding="utf-8",
+        )
+        database = self.root / "var" / "watcher.sqlite3"
+        with closing(sqlite3.connect(database)) as connection:
+            connection.execute(
+                """
+                CREATE TABLE poll_runs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    started_at TEXT NOT NULL,
+                    completed_at TEXT NOT NULL,
+                    source TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    new_count INTEGER NOT NULL,
+                    error_class TEXT,
+                    error_message TEXT
+                )
+                """
+            )
+            connection.execute(
+                "CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL)"
+            )
+            connection.execute(
+                """
+                INSERT INTO poll_runs(
+                    started_at, completed_at, source, status, new_count,
+                    error_class, error_message
+                ) VALUES (?, ?, ?, 'failure', 0, 'timeout', ?)
+                """,
+                (now, now, source, "The read operation timed out"),
+            )
+            connection.execute(
+                "INSERT INTO meta(key, value) VALUES (?, ?)",
+                (
+                    "conversation_tail_last_success_at",
+                    tail_success_at or now,
+                ),
+            )
+            connection.commit()
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_recent_tail_timeout_warns_without_failing(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        self.prepare_degraded_poll()
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        poll = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.poll_health"
+        )
+        self.assertEqual(poll.status, "warn")
+        self.assertEqual(
+            poll.details["latest_source"],
+            "x_api_conversation_tail",
+        )
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_stale_tail_timeout_still_fails(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        self.prepare_degraded_poll(
+            tail_success_at="2020-01-01T00:00:00Z"
+        )
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        poll = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.poll_health"
+        )
+        self.assertEqual(poll.status, "fail")
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_primary_poll_timeout_still_fails(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        self.prepare_degraded_poll(source="x_api")
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        poll = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.poll_health"
+        )
+        self.assertEqual(poll.status, "fail")
+
     @mock.patch(
         "scripts.system_doctor.git_origin",
         return_value="https://example.test/repo.git",

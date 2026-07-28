@@ -126,6 +126,36 @@ def parse_timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
+def latest_poll_context(database: Path) -> dict[str, Any]:
+    uri = f"{database.resolve().as_uri()}?mode=ro"
+    try:
+        with closing(sqlite3.connect(uri, uri=True)) as connection:
+            row = connection.execute(
+                """
+                SELECT source, status, completed_at, error_class, error_message
+                FROM poll_runs
+                ORDER BY id DESC
+                LIMIT 1
+                """
+            ).fetchone()
+            tail_success = connection.execute(
+                "SELECT value FROM meta WHERE key = ?",
+                ("conversation_tail_last_success_at",),
+            ).fetchone()
+    except sqlite3.Error:
+        return {}
+    return {
+        "latest_source": row[0] if row else None,
+        "latest_status": row[1] if row else None,
+        "latest_completed_at": row[2] if row else None,
+        "latest_error_class": row[3] if row else None,
+        "latest_error_message": row[4] if row else None,
+        "conversation_tail_last_success_at": (
+            tail_success[0] if tail_success else None
+        ),
+    }
+
+
 def reasoning_effort_meets_minimum(
     actual: Any,
     minimum: Any,
@@ -678,11 +708,10 @@ def check_contract(
     health_path = resolve_project_path(root, str(runtime["health_file"]))
     try:
         health = read_json(health_path)
+        current = datetime.now(timezone.utc)
         last_success = parse_timestamp(health.get("last_success_at"))
         age_seconds = (
-            (
-                datetime.now(timezone.utc) - last_success
-            ).total_seconds()
+            (current - last_success).total_seconds()
             if last_success is not None
             else float("inf")
         )
@@ -696,24 +725,57 @@ def check_contract(
             and 0 <= age_seconds <= max_age
         )
         health_status = str(health.get("status", ""))
+        consecutive_failures = int(health.get("consecutive_failures", 0))
         last_error_class = health.get("last_error_class")
         last_error_message = health.get("last_error_message")
+        poll_context = latest_poll_context(live_database)
+        tail_success_at = parse_timestamp(
+            poll_context.get("conversation_tail_last_success_at")
+        )
+        tail_age_seconds = (
+            (current - tail_success_at).total_seconds()
+            if tail_success_at is not None
+            else float("inf")
+        )
+        transient_tail_error = (
+            health_status == "degraded"
+            and consecutive_failures == 1
+            and 0 <= age_seconds <= max_age
+            and poll_context.get("latest_source")
+            == "x_api_conversation_tail"
+            and poll_context.get("latest_status") == "failure"
+            and str(last_error_class)
+            in {"timeout", "TimeoutError", "URLError"}
+            and 0 <= tail_age_seconds <= max_age
+        )
     except (OSError, ValueError, TypeError, AttributeError):
         health_ok = False
+        transient_tail_error = False
         age_seconds = float("inf")
+        tail_age_seconds = float("inf")
         max_age = int(runtime.get("max_poll_age_seconds", 180))
         health_status = "unreadable"
+        consecutive_failures = 0
         last_error_class = None
         last_error_message = None
+        poll_context = {}
+    if health_ok:
+        poll_status = "pass"
+        poll_summary = f"Watcher poll свежий, age={round(age_seconds, 1)}s."
+    elif transient_tail_error:
+        poll_status = "warn"
+        poll_summary = (
+            "Основной poll свежий, conversation tail переживает одиночный "
+            f"сетевой timeout, tail age={round(tail_age_seconds, 1)}s."
+        )
+    else:
+        poll_status = "fail"
+        poll_summary = "Watcher poll не обновляется или находится в ошибке."
     checks.append(
         Check(
             "runtime.poll_health",
-            "pass" if health_ok else "fail",
-            (
-                f"Watcher poll свежий, age={round(age_seconds, 1)}s."
-                if health_ok
-                else "Watcher poll не обновляется или находится в ошибке."
-            ),
+            poll_status,
+            poll_summary,
             "Проверь loaded LaunchAgent poll, Keychain token и последний "
             "health error. Не запускай Browser вместо сломанного API poll.",
             {
@@ -724,8 +786,16 @@ def check_contract(
                 ),
                 "max_age_seconds": max_age,
                 "health_status": health_status,
+                "consecutive_failures": consecutive_failures,
                 "last_error_class": last_error_class,
                 "last_error_message": last_error_message,
+                "latest_source": poll_context.get("latest_source"),
+                "latest_status": poll_context.get("latest_status"),
+                "conversation_tail_age_seconds": (
+                    round(tail_age_seconds, 1)
+                    if tail_age_seconds != float("inf")
+                    else None
+                ),
             },
         )
     )
