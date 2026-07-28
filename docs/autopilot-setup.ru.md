@@ -17,10 +17,10 @@
 5. Готовая очередь запускает Codex Desktop в каноническом workspace, если
    приложение закрыто. При неудаче очередь сохраняется, запуск повторяется, а
    Alex получает локальное уведомление.
-6. Одна существующая in-app heartbeat-сессия на Luna Low сначала проверяет
-   durable repair incident, затем X queue. Она выполняет `reserve-handoff`,
-   читает канонический owner thread и делает один `send_message_to_thread`
-   только при неактивном thread.
+6. Одна существующая in-app heartbeat-сессия на Luna Low выполняет один
+   `relay-reserve-handoff`. Python сам проверяет durable repair incident, затем
+   X queue и возвращает единственный маршрут. Luna читает канонический owner
+   thread и делает один `send_message_to_thread` только при неактивном thread.
 7. Закрепленная сессия Sol High атомарно делает `claim`, восстанавливает живую
    ветку, публикует и сохраняет точную историю.
 8. После завершения supervisor может закрыть только тот Desktop, который
@@ -174,8 +174,9 @@ scheduled run создает отдельную задачу и может ос�
    завершаются без app-server.
 5. При `ready` supervisor проверяет main process Codex Desktop и запускает
    `codex app CANONICAL_ROOT`, если процесс отсутствует.
-6. In-app heartbeat сначала резервирует repair incident. Только при его
-   отсутствии он выполняет X `reserve-handoff`. Пока канонический командный
+6. In-app heartbeat выполняет один `relay-reserve-handoff`. Python сам
+   резервирует repair incident либо, при его отсутствии, X queue и возвращает
+   единственный `dispatch` вместе с точным `route`. Пока канонический командный
    центр активен или находится внутри quiet period, команда возвращает
    `owner_thread_active` или `owner_thread_cooldown` без reservation.
 7. Победивший relay читает точный live Browser owner thread и делает один

@@ -29,11 +29,13 @@ an X reply.
    resource-deferred queues use no model and create no Codex task.
 9. A ready gate checks Codex Desktop. If Desktop is absent, the supervisor
    launches it in the canonical repository and records the exact PID it owns.
-10. One existing in-app Luna Low heartbeat calls `reserve-handoff`. Before
-    creating a reservation, Python reads the canonical owner's durable rollout,
-    requires the latest task to be terminal, and enforces a one-minute quiet
-    period. The relay then reads the pinned Sol High Browser-owner thread and
-    sends one `send_message_to_thread` call only when
+10. One existing in-app Luna Low heartbeat calls one deterministic
+    `relay-reserve-handoff`. Python selects either repair or X, creates at most
+    one reservation, and returns one unambiguous `dispatch` plus `route`.
+    Before creating a reservation, Python reads the canonical owner's durable
+    rollout, requires the latest task to be terminal, and enforces a one-minute
+    quiet period. The relay then reads the pinned Sol High Browser-owner thread
+    and sends one `send_message_to_thread` call only when
     `status.type=idle` or `status.type=notLoaded`. If the live thread cannot be
     read or delivery fails, the relay runs `release-handoff` with its exact
     reservation token and exits. The durable queue remains pending, and

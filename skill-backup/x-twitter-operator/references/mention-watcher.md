@@ -290,9 +290,11 @@ authority for queued eligible replies.
    minute.
 3. Let the event dispatcher run `autopilot_bridge gate` without a model.
 4. Only for `dispatch=true`, launch Codex Desktop when it is absent. One
-   existing in-app Luna Low heartbeat calls `reserve-handoff`. Before creating
-   a reservation, its model-free guard requires the latest canonical owner task
-   to be terminal plus the configured quiet period. The relay then reads the
+   existing in-app Luna Low heartbeat calls one `relay-reserve-handoff`.
+   Python chooses repair or X and returns one unambiguous `dispatch` plus
+   `route`. Before creating a reservation, its model-free guard requires the
+   latest canonical owner task to be terminal plus the configured quiet period.
+   The relay then reads the
    pinned Sol High owner thread. It sends one direct `send_message_to_thread`
    call only when `status.type=idle` or `status.type=notLoaded`.
 5. If the owner thread is active, cannot be read, or delivery fails, run

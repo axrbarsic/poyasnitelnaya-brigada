@@ -167,9 +167,11 @@ dispatcher, then delete it through the official `automation_update` API.
    without app-server.
 4. On `ready`, the supervisor starts `codex app CANONICAL_ROOT` if Desktop is
    absent.
-5. The in-app heartbeat runs `reserve-handoff`. The command returns
-   `owner_thread_active` or `owner_thread_cooldown` without a reservation while
-   the canonical command center is active or inside its quiet period.
+5. The in-app heartbeat runs one `relay-reserve-handoff`. Python selects
+   repair or X, creates at most one reservation, and returns one `dispatch`
+   with an exact `route`. It returns `owner_thread_active` or
+   `owner_thread_cooldown` without a reservation while the canonical command
+   center is active or inside its quiet period.
 6. The winning relay reads the exact live Browser owner thread. It sends one message
    with a Sol High override only when `status.type=idle` or
    `status.type=notLoaded`.

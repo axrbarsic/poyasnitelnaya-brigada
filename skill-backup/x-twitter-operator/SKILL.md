@@ -96,10 +96,12 @@ start, never the quality of Sol High reasoning or fact checking:
 - run `autopilot_bridge gate` in the model-free dispatcher before starting
   Desktop or any model;
 - on `dispatch=true`, launch Codex Desktop only when absent. One existing
-  in-app Luna Low heartbeat must call `reserve-handoff`. Its model-free rollout
-  guard requires the latest canonical owner task to be terminal plus a quiet
-  period before creating a reservation. The relay must then read the pinned Sol
-  High owner thread and invoke `send_message_to_thread` once only when
+  in-app Luna Low heartbeat must call one `relay-reserve-handoff`. Python
+  chooses repair or X and returns one unambiguous `dispatch` plus `route`. Its
+  model-free rollout guard requires the latest canonical owner task to be
+  terminal plus a quiet period before creating a reservation. The relay must
+  then read the pinned Sol High owner thread and invoke
+  `send_message_to_thread` once only when
   `status.type=idle` or `status.type=notLoaded`;
 - if the owner thread is active, cannot be read, or delivery fails, release only
   that exact reservation with `release-handoff` and leave the queue pending;
@@ -338,9 +340,10 @@ without supplying target IDs.
   the 8 GB iMac. Empty, leased, voice-paused, and resource-deferred checks stop
   without a model, Browser, or new Codex task.
 - When `dispatch=true`, the supervisor launches Desktop only if needed. The
-  existing in-app Luna heartbeat calls `reserve-handoff`. The command first
-  checks the durable owner rollout and quiet period without a model. After a
-  reservation, Luna verifies that the pinned owner thread has
+  existing in-app Luna heartbeat calls one `relay-reserve-handoff`. Python
+  chooses repair or X and returns one unambiguous `dispatch` plus `route`.
+  The command checks the durable owner rollout and quiet period without a
+  model. After a reservation, Luna verifies that the pinned owner thread has
   `status.type=idle` or `status.type=notLoaded` and calls the direct Codex app
   tool with `gpt-5.6-sol` and `high`. An unreadable live owner thread and a
   delivery failure release the exact reservation without touching the queue.

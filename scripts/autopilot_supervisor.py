@@ -561,6 +561,32 @@ def reserve_handoff(
         }
 
 
+def relay_reserve_handoff(
+    config_path: Path,
+    *,
+    lease_seconds: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return one unambiguous repair-or-X reservation decision."""
+
+    repair = reserve_handoff(
+        config_path,
+        lease_seconds=lease_seconds,
+        now=now,
+    )
+    if repair.get("repair_pending"):
+        return {**repair, "route": "repair"}
+    x_result = autopilot_bridge.reserve_handoff(
+        config_path,
+        lease_seconds=lease_seconds,
+    )
+    return {
+        **x_result,
+        "repair_pending": False,
+        "route": "x",
+    }
+
+
 def release_handoff(
     config_path: Path,
     *,
@@ -837,6 +863,7 @@ def build_parser() -> argparse.ArgumentParser:
     commands.add_parser("run")
     commands.add_parser("gate")
     commands.add_parser("reserve-handoff")
+    commands.add_parser("relay-reserve-handoff")
     release = commands.add_parser("release-handoff")
     release.add_argument("--reservation-token", required=True)
     release.add_argument("--reason", required=True)
@@ -864,6 +891,11 @@ def main() -> int:
         result = gate(config)
     elif args.command == "reserve-handoff":
         result = reserve_handoff(config, lease_seconds=args.lease_seconds)
+    elif args.command == "relay-reserve-handoff":
+        result = relay_reserve_handoff(
+            config,
+            lease_seconds=args.lease_seconds,
+        )
     elif args.command == "release-handoff":
         result = release_handoff(
             config,
