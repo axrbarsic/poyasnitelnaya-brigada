@@ -4119,7 +4119,7 @@ def conversation_tail_query_chunks(
     conversation_ids: Iterable[str],
     *,
     account_handle: str,
-    max_query_length: int = 3800,
+    max_query_length: int = 512,
 ) -> list[str]:
     suffix = " is:reply"
     handle = account_handle.strip().lstrip("@")

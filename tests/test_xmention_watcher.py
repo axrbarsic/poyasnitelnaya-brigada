@@ -384,6 +384,28 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(result["conversation_tail"]["status"], "not_due")
         self.assertEqual(result["new_count"], 0)
 
+    def test_conversation_tail_chunks_queries_at_x_api_limit(self) -> None:
+        conversation_ids = [
+            str(2_080_000_000_000_000_000 + index)
+            for index in range(13)
+        ]
+
+        queries = watcher.conversation_tail_query_chunks(
+            conversation_ids,
+            account_handle="axrbarsic",
+        )
+
+        self.assertEqual(len(queries), 2)
+        self.assertTrue(all(len(query) <= 512 for query in queries))
+        for conversation_id in conversation_ids:
+            self.assertEqual(
+                sum(
+                    f"conversation_id:{conversation_id}" in query
+                    for query in queries
+                ),
+                1,
+            )
+
     def test_record_failure_and_watchdog_threshold(self) -> None:
         watcher.ingest_response(
             self.config,
