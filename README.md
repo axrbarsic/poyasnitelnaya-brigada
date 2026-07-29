@@ -415,6 +415,18 @@ relay будит Sol owner. Известный event ID нельзя вручн�
 или prompt. Полный переносимый протокол находится в
 [`reliability-debugging.md`](skill-backup/x-twitter-operator/references/reliability-debugging.md).
 
+## Внешний read-only worker Lightpanda
+
+Опциональный Lightpanda worker читает разрешенные внешние HTTPS-источники,
+возвращает Markdown или accessibility tree и запускает проверенные PandaScript
+без LLM и runtime-токенов. Он не получает cookie X, не выполняет поиск X и не
+публикует. `partial`, login wall, robots block и ложный HTTP 200 автоматически
+требуют fallback во встроенный Browser.
+
+Архитектура, threat model, version pinning, команды и результаты живых canary
+описаны в
+[docs/lightpanda-integration.ru.md](docs/lightpanda-integration.ru.md).
+
 ## Состояние и восстановление
 
 ```bash

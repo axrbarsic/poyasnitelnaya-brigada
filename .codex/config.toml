@@ -42,3 +42,17 @@ enabled = true
 
 [mcp_servers.openaiDeveloperDocs]
 enabled = false
+
+[mcp_servers.lightpandaReadonly]
+command = "python3"
+args = ["/Users/alexlane/Developer/x-mention-watcher/scripts/lightpanda_mcp.py"]
+cwd = "/Users/alexlane/Developer/x-mention-watcher"
+enabled = true
+required = false
+enabled_tools = ["lightpanda_preflight", "lightpanda_public_fetch"]
+default_tools_approval_mode = "auto"
+startup_timeout_sec = 10
+tool_timeout_sec = 40
+
+[mcp_servers.lightpandaReadonly.env]
+PYTHONUTF8 = "1"

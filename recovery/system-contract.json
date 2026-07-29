@@ -23,6 +23,13 @@
     "macos/XMentionKeychainHelper.xcodeproj/xcshareddata/xcschemes/XMentionKeychainHelper.xcscheme",
     "scripts/personality_policy.py",
     "personality/policy.json",
+    "lightpanda/runtime-manifest.json",
+    "lightpanda/policy.json",
+    "lightpanda/canaries/public_read.js",
+    "scripts/lightpanda_contract.py",
+    "scripts/lightpanda_worker.py",
+    "scripts/lightpanda_mcp.py",
+    "docs/lightpanda-integration.ru.md",
     "skill-backup/x-twitter-operator/SKILL.md",
     "macos/x-relay.prompt.txt"
   ],
