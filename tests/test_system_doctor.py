@@ -178,6 +178,210 @@ class SystemDoctorTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_database_integrity_retries_transient_lock(self) -> None:
+        database = self.root / "var" / "watcher.sqlite3"
+        real_connect = sqlite3.connect
+        attempts = 0
+
+        def connect_once_locked(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise sqlite3.OperationalError("database is locked")
+            return real_connect(*args, **kwargs)
+
+        with (
+            mock.patch(
+                "scripts.system_doctor.sqlite3.connect",
+                side_effect=connect_once_locked,
+            ),
+            mock.patch("scripts.system_doctor.time.sleep") as sleep,
+        ):
+            healthy, details = system_doctor.database_integrity(database)
+
+        self.assertTrue(healthy)
+        self.assertIsNone(details)
+        self.assertEqual(attempts, 2)
+        sleep.assert_called_once_with(0.1)
+
+    def test_database_integrity_reports_persistent_error(self) -> None:
+        database = self.root / "var" / "watcher.sqlite3"
+        with mock.patch(
+            "scripts.system_doctor.sqlite3.connect",
+            side_effect=sqlite3.DatabaseError("database disk image is malformed"),
+        ):
+            healthy, details = system_doctor.database_integrity(database)
+
+        self.assertFalse(healthy)
+        self.assertEqual(details["attempts"], 1)
+        self.assertEqual(details["error_class"], "DatabaseError")
+        self.assertFalse(details["transient"])
+
+    def test_database_integrity_retries_one_open_failure(self) -> None:
+        database = self.root / "var" / "watcher.sqlite3"
+        real_connect = sqlite3.connect
+        attempts = 0
+
+        def connect_after_one_open_failure(*args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise sqlite3.OperationalError(
+                    "unable to open database file"
+                )
+            return real_connect(*args, **kwargs)
+
+        with (
+            mock.patch(
+                "scripts.system_doctor.sqlite3.connect",
+                side_effect=connect_after_one_open_failure,
+            ),
+            mock.patch("scripts.system_doctor.time.sleep") as sleep,
+        ):
+            healthy, details = system_doctor.database_integrity(database)
+
+        self.assertTrue(healthy)
+        self.assertIsNone(details)
+        self.assertEqual(attempts, 2)
+        sleep.assert_called_once_with(0.1)
+
+    def test_database_integrity_persistent_open_failure_is_fail(self) -> None:
+        database = self.root / "var" / "watcher.sqlite3"
+        with (
+            mock.patch(
+                "scripts.system_doctor.sqlite3.connect",
+                side_effect=sqlite3.OperationalError(
+                    "unable to open database file"
+                ),
+            ),
+            mock.patch("scripts.system_doctor.time.sleep") as sleep,
+        ):
+            healthy, details = system_doctor.database_integrity(database)
+
+        self.assertFalse(healthy)
+        self.assertEqual(details["attempts"], 3)
+        self.assertTrue(details["retryable"])
+        self.assertFalse(details["transient"])
+        self.assertEqual(sleep.call_count, 2)
+
+    def test_relay_progress_detects_unclaimed_stalled_queue(self) -> None:
+        now = datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc)
+        check = system_doctor.relay_progress_check(
+            pending_count=2,
+            dispatch_state={
+                "status": "desktop_ready_waiting_relay",
+                "waiting_since": "2026-07-29T14:56:59Z",
+            },
+            owner=None,
+            max_wait_seconds=180,
+            now=now,
+        )
+
+        self.assertEqual(check.status, "fail")
+        self.assertEqual(check.identifier, "runtime.relay_progress")
+        self.assertEqual(check.details["age_seconds"], 181.0)
+
+    def test_relay_progress_accepts_active_owner(self) -> None:
+        check = system_doctor.relay_progress_check(
+            pending_count=2,
+            dispatch_state={
+                "status": "desktop_ready_waiting_relay",
+                "waiting_since": "2026-07-29T14:00:00Z",
+            },
+            owner={"event_ids": ["1", "2"]},
+            max_wait_seconds=180,
+        )
+
+        self.assertEqual(check.status, "pass")
+        self.assertEqual(check.details["owner_event_ids"], ["1", "2"])
+
+    def test_relay_progress_ignores_resource_deferred_queue(self) -> None:
+        check = system_doctor.relay_progress_check(
+            pending_count=2,
+            dispatch_state={
+                "status": "deferred_resources",
+                "checked_at": "2026-07-29T14:00:00Z",
+            },
+            owner=None,
+            max_wait_seconds=180,
+        )
+
+        self.assertEqual(check.status, "pass")
+        self.assertEqual(
+            check.details["dispatch_status"],
+            "deferred_resources",
+        )
+
+    def test_contract_treats_persistent_busy_as_warning(self) -> None:
+        with (
+            mock.patch(
+                "scripts.system_doctor.git_origin",
+                return_value="https://example.test/repo.git",
+            ),
+            mock.patch(
+                "scripts.system_doctor.database_integrity",
+                return_value=(
+                    False,
+                    {
+                        "attempts": 3,
+                        "error_class": "OperationalError",
+                        "error_message": "database is locked",
+                        "transient": True,
+                    },
+                ),
+            ),
+        ):
+            checks = system_doctor.check_contract(
+                self.root,
+                self.home,
+                self.contract,
+                self.config,
+            )
+
+        database_check = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.database"
+        )
+        self.assertEqual(database_check.status, "warn")
+        self.assertIn("повреждение не подтверждено", database_check.summary)
+
+    def test_contract_treats_persistent_open_failure_as_warning(self) -> None:
+        with (
+            mock.patch(
+                "scripts.system_doctor.git_origin",
+                return_value="https://example.test/repo.git",
+            ),
+            mock.patch(
+                "scripts.system_doctor.database_integrity",
+                return_value=(
+                    False,
+                    {
+                        "attempts": 3,
+                        "error_class": "OperationalError",
+                        "error_message": "unable to open database file",
+                        "retryable": True,
+                        "transient": False,
+                    },
+                ),
+            ),
+        ):
+            checks = system_doctor.check_contract(
+                self.root,
+                self.home,
+                self.contract,
+                self.config,
+            )
+
+        database_check = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.database"
+        )
+        self.assertEqual(database_check.status, "warn")
+        self.assertIn("повреждение не подтверждено", database_check.summary)
+        self.assertIn("восстановления доступа", database_check.repair)
+
     @mock.patch(
         "scripts.system_doctor.git_origin",
         return_value="https://example.test/repo.git",
@@ -316,6 +520,9 @@ class SystemDoctorTests(unittest.TestCase):
         *,
         source: str = "x_api_conversation_tail",
         tail_success_at: str | None = None,
+        consecutive_failures: int = 1,
+        error_class: str = "timeout",
+        error_message: str = "The read operation timed out",
     ) -> None:
         now = (
             datetime.now(timezone.utc)
@@ -326,10 +533,10 @@ class SystemDoctorTests(unittest.TestCase):
             json.dumps(
                 {
                     "status": "degraded",
-                    "consecutive_failures": 1,
+                    "consecutive_failures": consecutive_failures,
                     "last_success_at": now,
-                    "last_error_class": "timeout",
-                    "last_error_message": "The read operation timed out",
+                    "last_error_class": error_class,
+                    "last_error_message": error_message,
                 }
             ),
             encoding="utf-8",
@@ -358,9 +565,9 @@ class SystemDoctorTests(unittest.TestCase):
                 INSERT INTO poll_runs(
                     started_at, completed_at, source, status, new_count,
                     error_class, error_message
-                ) VALUES (?, ?, ?, 'failure', 0, 'timeout', ?)
+                ) VALUES (?, ?, ?, 'failure', 0, ?, ?)
                 """,
-                (now, now, source, "The read operation timed out"),
+                (now, now, source, error_class, error_message),
             )
             connection.execute(
                 "INSERT INTO meta(key, value) VALUES (?, ?)",
@@ -427,10 +634,69 @@ class SystemDoctorTests(unittest.TestCase):
         "scripts.system_doctor.git_origin",
         return_value="https://example.test/repo.git",
     )
-    def test_primary_poll_timeout_still_fails(
+    def test_recent_primary_poll_timeout_warns_without_failing(
         self, _git_origin: mock.Mock
     ) -> None:
         self.prepare_degraded_poll(source="x_api")
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        poll = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.poll_health"
+        )
+        self.assertEqual(poll.status, "warn")
+        self.assertEqual(poll.details["latest_source"], "x_api")
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_recent_primary_tls_handshake_timeout_canary_warns(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        self.prepare_degraded_poll(
+            source="x_api",
+            error_class="URLError",
+            error_message=(
+                "<urlopen error _ssl.c:1112: "
+                "The handshake operation timed out>"
+            ),
+        )
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        poll = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.poll_health"
+        )
+        self.assertEqual(poll.status, "warn")
+        self.assertEqual(poll.details["consecutive_failures"], 1)
+        self.assertEqual(poll.details["last_error_class"], "URLError")
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_repeated_primary_poll_timeout_still_fails(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        self.prepare_degraded_poll(
+            source="x_api",
+            consecutive_failures=2,
+        )
 
         checks = system_doctor.check_contract(
             self.root,

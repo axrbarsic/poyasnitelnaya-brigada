@@ -146,6 +146,17 @@ def runtime_override_matches(
         return False
     scope = str(override.get("scope", "")).strip()
     selector = str(override.get("selector", "")).strip().casefold()
+    author_selector = str(
+        override.get("author_selector", "")
+    ).strip().lstrip("@").casefold()
+    if author_selector:
+        username = str(
+            event.get("username")
+            or event.get("author_username")
+            or ""
+        ).strip().lstrip("@").casefold()
+        if username != author_selector:
+            return False
     if scope == "global":
         return True
     if scope == "topic":
@@ -279,6 +290,7 @@ def add_override(
     selector: str,
     instruction: str,
     label: str = "",
+    author_selector: str = "",
 ) -> dict[str, Any]:
     if scope not in VALID_SCOPES:
         raise ValueError(f"unsupported scope: {scope}")
@@ -292,6 +304,7 @@ def add_override(
         "id": f"voice-{uuid.uuid4().hex[:12]}",
         "scope": scope,
         "selector": normalized_selector,
+        "author_selector": author_selector.strip().lstrip("@"),
         "label": label.strip(),
         "instructions": [clean_instruction],
         "enabled": True,
@@ -336,6 +349,7 @@ def parser() -> argparse.ArgumentParser:
     set_parser.add_argument("--selector", default="")
     set_parser.add_argument("--instruction", required=True)
     set_parser.add_argument("--label", default="")
+    set_parser.add_argument("--author-selector", default="")
 
     disable = subparsers.add_parser("disable")
     disable.add_argument("--id", required=True)
@@ -368,6 +382,7 @@ def main() -> int:
             selector=arguments.selector,
             instruction=arguments.instruction,
             label=arguments.label,
+            author_selector=arguments.author_selector,
         )
     elif arguments.command == "disable":
         payload = disable_override(runtime_path, arguments.id)

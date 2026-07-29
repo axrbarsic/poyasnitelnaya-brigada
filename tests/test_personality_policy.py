@@ -112,6 +112,45 @@ class PersonalityPolicyTests(unittest.TestCase):
         self.assertIn("Отвечай короче.", first["instructions"])
         self.assertNotIn("Отвечай короче.", second["instructions"])
 
+    def test_conversation_override_can_be_limited_to_one_author(self) -> None:
+        override = personality_policy.add_override(
+            self.runtime,
+            scope="conversation",
+            selector="conversation-1",
+            author_selector="@target_author",
+            instruction="Отвечай едко.",
+        )
+
+        target = personality_policy.resolve_event_policy(
+            {
+                "conversation_id": "conversation-1",
+                "username": "target_author",
+            },
+            policy_path=self.policy,
+            runtime_path=self.runtime,
+        )
+        neighbour = personality_policy.resolve_event_policy(
+            {
+                "conversation_id": "conversation-1",
+                "username": "other_author",
+            },
+            policy_path=self.policy,
+            runtime_path=self.runtime,
+        )
+        other_branch = personality_policy.resolve_event_policy(
+            {
+                "conversation_id": "conversation-2",
+                "username": "target_author",
+            },
+            policy_path=self.policy,
+            runtime_path=self.runtime,
+        )
+
+        self.assertEqual(override["author_selector"], "target_author")
+        self.assertIn("Отвечай едко.", target["instructions"])
+        self.assertNotIn("Отвечай едко.", neighbour["instructions"])
+        self.assertNotIn("Отвечай едко.", other_branch["instructions"])
+
     def test_disable_stops_runtime_override(self) -> None:
         override = personality_policy.add_override(
             self.runtime,

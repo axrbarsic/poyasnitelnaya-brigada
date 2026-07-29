@@ -1236,6 +1236,10 @@ class WatcherTests(unittest.TestCase):
             "record_type": "initial_audit_event_turn",
             "chain_id": "2080651494051737864",
             "conversation_root_id": "2080651494051737864",
+            "chatgpt_conversation_url": (
+                "https://chatgpt.com/g/example/c/flat-history"
+            ),
+            "ledger_reference": "claim-flat-history",
             "parent_status_id": "2080680475404742792",
             "status_id": "2080755430825861144",
             "actor": "user",
@@ -1293,6 +1297,11 @@ class WatcherTests(unittest.TestCase):
             stored["turns"][1]["parent_status_id"],
             "2080755430825861144",
         )
+        self.assertEqual(
+            stored["chatgpt_conversation_url"],
+            "https://chatgpt.com/g/example/c/flat-history",
+        )
+        self.assertEqual(stored["ledger_reference"], "claim-flat-history")
 
     def test_flat_audit_turn_inherits_existing_pro_chain_provenance(self) -> None:
         watcher.import_history_snapshot(
@@ -1937,6 +1946,327 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(
             result["blocker_code"],
             "missing_historical_pro_conversation",
+        )
+
+    def test_required_pro_model_blocker_requires_durable_proof(self) -> None:
+        watcher.ingest_response(
+            self.config,
+            self.connection,
+            self.fixture,
+            source="x_api",
+        )
+        event_id = "2080696811623190996"
+        event = self.connection.execute(
+            "SELECT * FROM events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        payload = json.loads(event["payload_json"])
+        parent_status_id = next(
+            reference["id"]
+            for reference in payload["referenced_tweets"]
+            if reference["type"] == "replied_to"
+        )
+        base_history = {
+            "chain_id": event["conversation_id"],
+            "root_status_id": event["conversation_id"],
+            "provenance": "pro",
+            "turns": [
+                {
+                    "status_id": event_id,
+                    "parent_status_id": parent_status_id,
+                    "actor": "user",
+                    "url": f"https://x.com/i/status/{event_id}",
+                    "exact_text": "Pro follow-up",
+                }
+            ],
+        }
+        watcher.import_history_snapshot(
+            self.connection,
+            base_history,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "exact ChatGPT conversation URL",
+        ):
+            watcher.resolve_event(
+                self.config,
+                self.connection,
+                event_id,
+                disposition="blocked",
+                reason="legacy Pro model is pinned",
+                reply_url=None,
+                blocker_code="required_pro_model_unavailable",
+            )
+
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                **base_history,
+                "chatgpt_conversation_url": (
+                    "https://chatgpt.com/g/example/c/pro-history"
+                ),
+            },
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "exact imported Pro-generated Alex parent",
+        ):
+            watcher.resolve_event(
+                self.config,
+                self.connection,
+                event_id,
+                disposition="blocked",
+                reason="legacy Pro model is pinned",
+                reply_url=None,
+                blocker_code="required_pro_model_unavailable",
+            )
+
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": event["conversation_id"],
+                "root_status_id": event["conversation_id"],
+                "provenance": "pro",
+                "chatgpt_conversation_url": (
+                    "https://chatgpt.com/g/example/c/pro-history"
+                ),
+                "turns": [
+                    {
+                        "status_id": parent_status_id,
+                        "actor": "alex",
+                        "url": (
+                            "https://x.com/axrbarsic/status/"
+                            f"{parent_status_id}"
+                        ),
+                        "exact_text": "Exact prior Pro answer",
+                        "provenance": "pro",
+                    }
+                ],
+            },
+        )
+        result = watcher.resolve_event(
+            self.config,
+            self.connection,
+            event_id,
+            disposition="blocked",
+            reason="legacy Pro model is pinned",
+            reply_url=None,
+            blocker_code="required_pro_model_unavailable",
+        )
+        self.assertEqual(
+            result["blocker_code"],
+            "required_pro_model_unavailable",
+        )
+
+    def test_chatgpt_branch_migration_preserves_exact_custom_gpt(self) -> None:
+        chain_id = "2078353040654938170"
+        parent_status_id = "2082479795108008300"
+        source_url = (
+            "https://chatgpt.com/g/g-example-poiasnitelnaia/"
+            "c/legacy-conversation"
+        )
+        target_url = (
+            "https://chatgpt.com/g/g-example-poiasnitelnaia/"
+            "c/pro-conversation"
+        )
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": chain_id,
+                "root_status_id": chain_id,
+                "provenance": "pro",
+                "chatgpt_conversation_url": source_url,
+                "turns": [
+                    {
+                        "status_id": parent_status_id,
+                        "actor": "alex",
+                        "url": (
+                            "https://x.com/axrbarsic/status/"
+                            f"{parent_status_id}"
+                        ),
+                        "exact_text": "Exact prior Pro answer",
+                        "provenance": "pro",
+                    }
+                ],
+            },
+        )
+        record = {
+            "snapshot_type": "chatgpt_conversation_migration",
+            "chain_id": chain_id,
+            "source_chatgpt_conversation_url": source_url,
+            "target_chatgpt_conversation_url": target_url,
+            "source_model": "GPT-5.5",
+            "target_model": "ChatGPT 5.6 Pro",
+            "branch_from_status_id": parent_status_id,
+            "method": "branch_in_new_chat",
+            "reason": "Legacy conversation is pinned to an older model",
+            "evidence": [
+                "source exact history visible",
+                "same custom GPT visible",
+                "target model label visible",
+            ],
+            "verified_at": "2026-07-29T16:00:00Z",
+        }
+        first = watcher.import_chatgpt_conversation_migration(
+            self.connection,
+            record,
+        )
+        second = watcher.import_chatgpt_conversation_migration(
+            self.connection,
+            record,
+        )
+        self.assertTrue(first["inserted"])
+        self.assertFalse(second["inserted"])
+        stored = watcher.history_chain_for_status(
+            self.connection,
+            chain_id,
+        )
+        self.assertEqual(stored["chatgpt_conversation_url"], target_url)
+        self.assertEqual(
+            stored["chatgpt_conversation_migrations"][0][
+                "source_chatgpt_conversation_url"
+            ],
+            source_url,
+        )
+        self.assertEqual(
+            stored["chatgpt_conversation_migrations"][0]["target_model"],
+            "ChatGPT 5.6 Pro",
+        )
+
+        invalid = {
+            **record,
+            "target_chatgpt_conversation_url": (
+                "https://chatgpt.com/g/g-other/c/pro-conversation"
+            ),
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "preserve the exact custom GPT identity",
+        ):
+            watcher.import_chatgpt_conversation_migration(
+                self.connection,
+                invalid,
+            )
+
+    def test_verified_pro_branch_requeues_model_blocker_without_event_id(
+        self,
+    ) -> None:
+        chain_id = "2078353040654938170"
+        parent_status_id = "2082479795108008300"
+        event_id = "2082484753454797103"
+        source_url = (
+            "https://chatgpt.com/g/g-example-poiasnitelnaia/"
+            "c/legacy-conversation"
+        )
+        target_url = (
+            "https://chatgpt.com/g/g-example-poiasnitelnaia/"
+            "c/pro-conversation"
+        )
+        pro_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+        self.insert_direct_event(
+            event_id=event_id,
+            created_at="2026-07-29T15:13:50.000Z",
+            conversation_id=chain_id,
+            parent_status_id=parent_status_id,
+            text="@axrbarsic Follow-up",
+        )
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": chain_id,
+                "root_status_id": chain_id,
+                "provenance": "pro",
+                "chatgpt_conversation_url": source_url,
+                "turns": [
+                    {
+                        "status_id": parent_status_id,
+                        "actor": "alex",
+                        "url": (
+                            "https://x.com/axrbarsic/status/"
+                            f"{parent_status_id}"
+                        ),
+                        "exact_text": "Exact prior Pro answer",
+                        "provenance": "pro",
+                    },
+                    {
+                        "status_id": event_id,
+                        "parent_status_id": parent_status_id,
+                        "actor": "user",
+                        "url": f"https://x.com/example/status/{event_id}",
+                        "exact_text": "@axrbarsic Follow-up",
+                        "provenance": "pro",
+                    },
+                ],
+            },
+        )
+        watcher.resolve_event(
+            pro_config,
+            self.connection,
+            event_id,
+            disposition="blocked",
+            reason="Legacy conversation is pinned to an older model",
+            reply_url=None,
+            blocker_code="required_pro_model_unavailable",
+        )
+        watcher.import_chatgpt_conversation_migration(
+            self.connection,
+            {
+                "snapshot_type": "chatgpt_conversation_migration",
+                "chain_id": chain_id,
+                "source_chatgpt_conversation_url": source_url,
+                "target_chatgpt_conversation_url": target_url,
+                "source_model": "GPT-5.5",
+                "target_model": "ChatGPT 5.6 Pro",
+                "branch_from_status_id": parent_status_id,
+                "method": "branch_in_new_chat",
+                "reason": "Legacy conversation is pinned to an older model",
+                "evidence": ["verified Browser branch"],
+                "verified_at": "2026-07-29T16:00:00Z",
+            },
+        )
+
+        preview = watcher.requeue_recovered_pro_model_blockers(
+            pro_config,
+            self.connection,
+            dry_run=True,
+        )
+        applied = watcher.requeue_recovered_pro_model_blockers(
+            pro_config,
+            self.connection,
+            dry_run=False,
+        )
+        self.assertEqual(preview["candidate_event_ids"], [event_id])
+        self.assertEqual(applied["candidate_event_ids"], [event_id])
+        stored = self.connection.execute(
+            """
+            SELECT e.delivery_state, r.disposition, r.blocker_code
+            FROM events e
+            JOIN event_resolutions r ON r.event_id = e.event_id
+            WHERE e.event_id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(stored["delivery_state"], "queued")
+        self.assertEqual(stored["disposition"], "blocked")
+        self.assertEqual(
+            stored["blocker_code"],
+            "required_pro_model_unavailable",
+        )
+        audit = self.connection.execute(
+            """
+            SELECT reason
+            FROM response_policy_requeues
+            WHERE event_id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(
+            audit["reason"],
+            "verified_chatgpt_5_6_pro_branch_recovery",
         )
 
     def test_legacy_blocked_resolution_requires_audited_code_revision(

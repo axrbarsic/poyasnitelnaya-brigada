@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest import mock
 
 from scripts import autopilot_dispatch
 
@@ -85,6 +86,11 @@ class AutopilotDispatchTests(unittest.TestCase):
         self.assertFalse(second["dispatch"])
         self.assertTrue(second["owner_busy"])
         self.assertEqual(second["leased_count"], 1)
+        state = autopilot_dispatch.read_json(self.state_file)
+        self.assertEqual(
+            state["owner"]["lease_expires_at"],
+            "2026-07-25T13:30:00Z",
+        )
 
     def test_new_event_waits_for_active_global_owner(self) -> None:
         first_event = self.event("2080998938828501439")
@@ -198,6 +204,57 @@ class AutopilotDispatchTests(unittest.TestCase):
             now=now + timedelta(minutes=31),
         )
         self.assertTrue(result["dispatch"])
+
+    def test_status_backfills_legacy_owner_expiration(self) -> None:
+        event = self.event()
+        self.write_events([event])
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.state_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "events": {
+                        event["event_id"]: {
+                            "claim_token": "legacy-token",
+                            "dispatch_count": 1,
+                            "last_dispatched_at": "2026-07-25T13:00:00Z",
+                        }
+                    },
+                    "owner": {
+                        "claim_token": "legacy-token",
+                        "claimed_at": "2026-07-25T13:00:00Z",
+                        "event_ids": [event["event_id"]],
+                        "runtime_id": "codex:101",
+                    },
+                    "updated_at": "2026-07-25T13:00:00Z",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with mock.patch(
+            "scripts.autopilot_dispatch.utc_now",
+            return_value=datetime(
+                2026,
+                7,
+                25,
+                13,
+                5,
+                tzinfo=timezone.utc,
+            ),
+        ):
+            status = autopilot_dispatch.status(
+                self.wake_file,
+                self.state_file,
+                lease_seconds=1800,
+            )
+
+        self.assertTrue(status["owner_busy"])
+        state = autopilot_dispatch.read_json(self.state_file)
+        self.assertEqual(
+            state["owner"]["lease_expires_at"],
+            "2026-07-25T13:30:00Z",
+        )
 
     def test_codex_restart_reclaims_owner_without_waiting_for_lease(self) -> None:
         self.write_events([self.event()])

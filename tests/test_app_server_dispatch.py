@@ -225,6 +225,57 @@ class AppServerDispatchTests(unittest.TestCase):
             )
             self.assertEqual(result["desktop_pids"], [42])
             self.assertFalse(result["desktop_launched"])
+            self.assertIn("waiting_since", result)
+
+    def test_desktop_supervisor_preserves_relay_waiting_since(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = self.make_config(root)
+            payload = json.loads(config.read_text(encoding="utf-8"))
+            payload["desktop_relay_mode"] = "in_app_heartbeat"
+            config.write_text(json.dumps(payload), encoding="utf-8")
+            state_path = root / "var/dispatch.json"
+            state_path.parent.mkdir(parents=True)
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "status": "desktop_launched_waiting_relay",
+                        "waiting_since": "2026-07-29T14:00:00Z",
+                        "work_kind": "x",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            with (
+                mock.patch.object(
+                    app_server_dispatch.autopilot_bridge,
+                    "gate",
+                    return_value={
+                        "status": "ready",
+                        "dispatch": True,
+                        "event_ids": ["123", "124"],
+                        "pending_count": 2,
+                    },
+                ),
+                mock.patch.object(
+                    app_server_dispatch,
+                    "desktop_processes",
+                    return_value=[42],
+                ),
+            ):
+                result = app_server_dispatch.dispatch(
+                    config,
+                    lease_seconds=1800,
+                )
+
+            self.assertEqual(
+                result["status"],
+                "desktop_ready_waiting_relay",
+            )
+            self.assertEqual(
+                result["waiting_since"],
+                "2026-07-29T14:00:00Z",
+            )
 
     def test_desktop_supervisor_prioritizes_repair_over_x_queue(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

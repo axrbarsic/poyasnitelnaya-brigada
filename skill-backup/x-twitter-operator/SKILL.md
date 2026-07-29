@@ -98,10 +98,10 @@ start, never the quality of Sol High reasoning or fact checking:
 - on `dispatch=true`, launch Codex Desktop only when absent. One existing
   in-app Luna Low heartbeat must call one `relay-reserve-handoff`. Python
   chooses repair or X and returns one unambiguous `dispatch` plus `route`. Its
-  model-free rollout guard requires the latest canonical owner task to be
-  terminal plus a quiet period before creating a reservation. The relay must
-  invoke `send_message_to_thread` exactly once without a separate live owner
-  status read. Codex queues or steers a follow-up when a turn is active;
+  atomic reservation suppresses adjacent heartbeat ticks. The relay must invoke
+  `send_message_to_thread` exactly once without reading owner status. Codex
+  queues or steers a follow-up when a turn is active, while the
+  global owner claim serializes Browser work;
 - if delivery fails, release only that exact reservation with
   `release-handoff` and leave the queue pending;
 - let the reservation suppress adjacent heartbeat ticks before the owner claim
@@ -193,6 +193,16 @@ The X display name is not provenance. An account named «Пояснительн�
 ChatGPT conversation URL. Never invent a historical Pro conversation from the
 display name.
 
+When Alex manually publishes a reply created in the custom GPT and the local
+parent turn has no proven provenance, never default it to `short`. Search the
+durable ledger first. If no mapping exists, search ChatGPT history using the
+exact published Alex text and original X target. Treat it as `pro` only after
+one exact conversation proves both the target screenshot and immutable output.
+Record that exact conversation URL and import the Alex parent with
+`provenance=pro` before routing the inbound follow-up. If no exact match exists,
+record the negative recovery check before classifying the parent as manual or
+Sol `short`.
+
 When practical, also search the account's replies using the target author or a distinctive phrase. Treat every prior bot-generated reply as an `@axrbarsic` reply.
 
 If any check is uncertain, do not publish until resolved. Never count a skipped duplicate as a completed reply.
@@ -265,12 +275,16 @@ Use the custom GPT only for `pro` targets.
 - Accept any non-empty output up to and including 4000 Unicode code points. Reject 4001 or more code points, U+2014, and U+2013.
 - Never reject, regenerate, pad, or alter an otherwise valid output merely because it is shorter than 4000 code points.
 - If a new-target output violates the contract, discard it and start a fresh conversation with the same screenshot-only submission. Do not send a correction request or explain the validation failure.
-- If a user replies to an existing bot-generated X answer, return to the exact ChatGPT conversation that produced that answer. Continue there so the bot retains the discussion history.
+- If a user replies to an existing bot-generated X answer, return to the exact canonical ChatGPT conversation for that chain. Continue there so the bot retains the discussion history.
 - For a follow-up, submit exactly one tightly cropped screenshot of the new reply in that historical conversation, with zero text code points.
 - If a follow-up output is invalid, keep the same historical conversation and resubmit only the same screenshot. Do not add correction instructions.
 - After a validated Pro reply is published and its X reply URL plus ChatGPT conversation URL are durably recorded, archive that ChatGPT conversation to remove sidebar clutter.
 - Keep conversations in `thinking` or `ready` state unarchived. Never archive while generation, validation, or publication verification is incomplete.
-- When a follow-up arrives, open the recorded historical conversation URL. If ChatGPT requires it, unarchive that exact conversation, verify that the prior exchange is present, and continue there. Never start a new conversation for a follow-up.
+- When a follow-up arrives, open the recorded canonical conversation URL. If ChatGPT requires it, unarchive that exact conversation, verify that the prior exchange is present, and continue there.
+- If the exact historical custom-GPT conversation is pinned to an older model, the only permitted new URL is an official `Branch in new chat` migration from the exact Pro-generated Alex answer. Accept it only after proving the same custom GPT identity, complete history through that answer, visible `ChatGPT 5.6 Pro`, and an append-only migration record. Never use a blank, copied, or manually recreated replacement conversation.
+- Before resolving `required_pro_model_unavailable`, durably record the exact
+  historical ChatGPT conversation URL and import the exact published Alex
+  parent with `provenance=pro`.
 - After the follow-up is validated and its X publication is verified, archive the same conversation again and update the ledger.
 - Never delete a «Пояснительная бригада» conversation. Archived history is required for later follow-ups.
 - If a clean target-only screenshot cannot be attached with an empty composer, mark the Pro target `blocked`. Never fall back to pasted text.
@@ -341,11 +355,11 @@ without supplying target IDs.
 - When `dispatch=true`, the supervisor launches Desktop only if needed. The
   existing in-app Luna heartbeat calls one `relay-reserve-handoff`. Python
   chooses repair or X and returns one unambiguous `dispatch` plus `route`.
-  The command checks the durable owner rollout and quiet period without a
-  model. After a reservation, Luna calls the direct Codex app tool exactly once
-  with `gpt-5.6-sol` and `high`, without a separate live status read. A
-  delivery failure releases the exact reservation without touching the queue.
-  The pinned Sol owner atomically claims the batch and executes the queued or
+  The command atomically reserves one handoff without a model. After a
+  reservation, Luna calls the direct Codex app tool exactly once with
+  `gpt-5.6-sol` and `high`, without reading owner status. A delivery failure
+  releases the exact reservation without touching the queue. The
+  pinned Sol owner atomically claims the batch and executes the queued or
   steered wake prompt.
 - In normal unattended idle, supervisor-owned Desktop is closed and Luna does
   not run. If Alex intentionally keeps Desktop open, the heartbeat still

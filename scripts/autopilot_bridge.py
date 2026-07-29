@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sqlite3
 import sys
 import uuid
@@ -56,175 +55,6 @@ def handoff_reservation_path(config_path: Path) -> Path:
     )
 
 
-def codex_state_database_candidates(config: dict[str, Any]) -> list[Path]:
-    explicit = str(config.get("codex_state_database", "")).strip()
-    if explicit:
-        return [Path(explicit).expanduser()]
-    codex_home = Path(
-        os.environ.get("CODEX_HOME", str(Path.home() / ".codex"))
-    ).expanduser()
-    return sorted(
-        codex_home.glob("state_*.sqlite"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-
-
-def browser_owner_rollout_path(
-    config: dict[str, Any],
-    *,
-    thread_id: str,
-) -> Path | None:
-    for database_path in codex_state_database_candidates(config):
-        if not database_path.is_file():
-            continue
-        try:
-            database_uri = f"{database_path.resolve().as_uri()}?mode=ro"
-            with closing(
-                sqlite3.connect(database_uri, uri=True)
-            ) as connection:
-                row = connection.execute(
-                    "SELECT rollout_path FROM threads WHERE id = ?",
-                    (thread_id,),
-                ).fetchone()
-        except (OSError, sqlite3.Error):
-            continue
-        if row is None or not isinstance(row[0], str) or not row[0]:
-            continue
-        rollout_path = Path(row[0]).expanduser()
-        if not rollout_path.is_absolute():
-            rollout_path = database_path.parent / rollout_path
-        return rollout_path.resolve()
-    return None
-
-
-def browser_owner_activity(
-    config_path: Path,
-    *,
-    now: datetime | None = None,
-) -> dict[str, Any]:
-    """Read the durable owner rollout without loading or waking the thread."""
-
-    config = autopilot_dispatch.read_json(config_path)
-    thread_id = str(config.get("browser_owner_thread_id", "")).strip()
-    if not thread_id:
-        return {"enabled": False, "defer": False, "status": "not_configured"}
-    grace_seconds = int(
-        config.get("command_center_idle_grace_seconds", 60)
-    )
-    if grace_seconds < 0:
-        raise ValueError("command center idle grace seconds must not be negative")
-    rollout_path = browser_owner_rollout_path(
-        config,
-        thread_id=thread_id,
-    )
-    if rollout_path is None or not rollout_path.is_file():
-        return {
-            "enabled": True,
-            "defer": True,
-            "status": "owner_thread_status_unavailable",
-            "thread_id": thread_id,
-        }
-
-    latest_turn_id: str | None = None
-    latest_turn_started_at = None
-    latest_turn_terminal = False
-    last_activity_at = None
-    try:
-        with rollout_path.open(encoding="utf-8") as stream:
-            for line in stream:
-                try:
-                    record = json.loads(line)
-                except json.JSONDecodeError:
-                    return {
-                        "enabled": True,
-                        "defer": True,
-                        "status": "owner_thread_status_unavailable",
-                        "thread_id": thread_id,
-                    }
-                if not isinstance(record, dict):
-                    continue
-                timestamp = autopilot_dispatch.parse_time(
-                    str(record.get("timestamp", ""))
-                )
-                if timestamp is not None:
-                    last_activity_at = timestamp
-                if record.get("type") != "event_msg":
-                    continue
-                payload = record.get("payload")
-                if not isinstance(payload, dict):
-                    continue
-                event_type = str(payload.get("type", ""))
-                turn_id = str(
-                    payload.get("turn_id")
-                    or payload.get("turnId")
-                    or payload.get("id")
-                    or ""
-                )
-                if event_type == "task_started" and turn_id:
-                    latest_turn_id = turn_id
-                    latest_turn_started_at = timestamp
-                    latest_turn_terminal = False
-                elif (
-                    event_type in {"task_complete", "turn_aborted"}
-                    and turn_id
-                    and turn_id == latest_turn_id
-                ):
-                    latest_turn_terminal = True
-    except OSError:
-        return {
-            "enabled": True,
-            "defer": True,
-            "status": "owner_thread_status_unavailable",
-            "thread_id": thread_id,
-        }
-
-    if latest_turn_id is None or latest_turn_started_at is None:
-        return {
-            "enabled": True,
-            "defer": True,
-            "status": "owner_thread_status_unavailable",
-            "thread_id": thread_id,
-        }
-    if not latest_turn_terminal:
-        return {
-            "enabled": True,
-            "defer": True,
-            "status": "owner_thread_active",
-            "thread_id": thread_id,
-            "turn_id": latest_turn_id,
-            "turn_started_at": autopilot_dispatch.isoformat(
-                latest_turn_started_at
-            ),
-        }
-
-    current = now or autopilot_dispatch.utc_now()
-    activity_age = (
-        max(0.0, (current - last_activity_at).total_seconds())
-        if last_activity_at is not None
-        else 0.0
-    )
-    if activity_age < grace_seconds:
-        return {
-            "enabled": True,
-            "defer": True,
-            "status": "owner_thread_cooldown",
-            "thread_id": thread_id,
-            "turn_id": latest_turn_id,
-            "activity_age_seconds": round(activity_age, 1),
-            "grace_seconds": grace_seconds,
-        }
-    return {
-        "enabled": True,
-        "defer": False,
-        "status": "owner_thread_idle",
-        "thread_id": thread_id,
-        "turn_id": latest_turn_id,
-        "activity_age_seconds": round(activity_age, 1),
-        "grace_seconds": grace_seconds,
-    }
-
-
 def reserve_handoff(
     config_path: Path,
     *,
@@ -235,14 +65,6 @@ def reserve_handoff(
     ready = gate(config_path, lease_seconds=lease_seconds)
     if not ready.get("dispatch"):
         return ready
-    owner_activity = browser_owner_activity(config_path)
-    if owner_activity.get("defer"):
-        return {
-            **ready,
-            "dispatch": False,
-            "status": owner_activity["status"],
-            "owner_activity": owner_activity,
-        }
     config = autopilot_dispatch.read_json(config_path)
     reservation_seconds = int(
         config.get("relay_handoff_reservation_seconds", 180)
@@ -472,10 +294,11 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
     try:
         enriched_events: list[dict[str, Any]] = []
         for event in events:
+            event_id = str(event["id"])
             try:
                 memory = watcher.commenter_history_for_event(
                     connection,
-                    str(event["id"]),
+                    event_id,
                     limit=watcher_config.commenter_memory_limit,
                 )
             except (KeyError, ValueError):
@@ -486,11 +309,63 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
                     "returned_interactions": 0,
                     "interactions": [],
                 }
-            enriched_events.append(
-                {
-                    **event,
-                    "commenter_memory": memory,
+            enriched_event = {
+                **event,
+                "commenter_memory": memory,
+            }
+            existing_resolution = connection.execute(
+                """
+                SELECT disposition, reason, blocker_code, resolved_at
+                FROM event_resolutions
+                WHERE event_id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+            if existing_resolution is not None:
+                latest_requeue = connection.execute(
+                    """
+                    SELECT reason, requeued_at
+                    FROM response_policy_requeues
+                    WHERE event_id = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (event_id,),
+                ).fetchone()
+                requeue_reason = (
+                    str(latest_requeue["reason"])
+                    if latest_requeue is not None
+                    else "queued_event_with_existing_resolution"
+                )
+                if (
+                    requeue_reason
+                    == "verified_chatgpt_5_6_pro_branch_recovery"
+                ):
+                    revision_reason = (
+                        "Verified official ChatGPT 5.6 Pro branch restored "
+                        "the mandatory Pro dependency"
+                    )
+                else:
+                    revision_reason = (
+                        "Auditable requeue after durable resolution: "
+                        + requeue_reason
+                    )
+                enriched_event["resolution_recovery"] = {
+                    "supersedes_existing_resolution": True,
+                    "existing_disposition": existing_resolution[
+                        "disposition"
+                    ],
+                    "existing_blocker_code": existing_resolution[
+                        "blocker_code"
+                    ],
+                    "existing_resolved_at": existing_resolution[
+                        "resolved_at"
+                    ],
+                    "requeue_reason": requeue_reason,
+                    "resolution_revision_reason": revision_reason,
                 }
+            enriched_events.append(
+                enriched_event
             )
         events = enriched_events
     finally:

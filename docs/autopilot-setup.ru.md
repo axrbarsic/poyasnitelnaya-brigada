@@ -19,9 +19,9 @@
    Alex получает локальное уведомление.
 6. Одна существующая in-app heartbeat-сессия на Luna Low выполняет один
    `relay-reserve-handoff`. Python сам проверяет durable repair incident, затем
-   X queue и возвращает единственный маршрут. После проверки durable rollout и
-   quiet period Luna делает один direct `send_message_to_thread`. Codex ставит
-   follow-up в очередь или направляет его в активный turn.
+   X queue и атомарно резервирует единственный маршрут. Luna сразу делает один
+   direct `send_message_to_thread`. Codex ставит follow-up в очередь или
+   направляет его в активный turn.
 7. Закрепленная сессия Sol High атомарно делает `claim`, восстанавливает живую
    ветку, публикует и сохраняет точную историю.
 8. После завершения supervisor может закрыть только тот Desktop, который
@@ -86,7 +86,6 @@ trust_level = "trusted"
 {
   "browser_owner_cwd": ".",
   "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
-  "command_center_idle_grace_seconds": 60,
   "desktop_relay_mode": "in_app_heartbeat",
   "desktop_auto_quit_after_work": true,
   "desktop_auto_quit_grace_seconds": 180,
@@ -101,6 +100,7 @@ trust_level = "trusted"
   "codex_cli_update_interval_seconds": 21600,
   "resource_mode": "auto",
   "memory_guard_enabled": true,
+  "memory_guard_swap_blocks_dispatch": false,
   "voice_priority_enabled": true,
   "voice_priority_hold_seconds": 300,
   "session_janitor_interval_seconds": 60,
@@ -120,12 +120,10 @@ trust_level = "trusted"
 `browser_owner_thread_id` принадлежит одной закрепленной owner-сессии на Sol
 High. `x-relay` является heartbeat одной существующей Luna Low сессии, а не
 standalone automation. `reserve-handoff` не claim события, но атомарно блокирует
-повторную отправку wake на 180 секунд. До создания reservation команда читает
-durable rollout owner, требует terminal-состояние последней задачи и выдерживает
-`command_center_idle_grace_seconds`. Relay не читает live owner thread как
-дополнительный gate. Он отправляет ровно один direct follow-up в закреплённый
-thread, а Codex ставит его в очередь или
-направляет в активный turn. При ошибке доставки relay выполняет
+повторную отправку wake на 180 секунд. Relay не читает owner thread как
+дополнительный gate. Он сразу отправляет ровно один direct follow-up в
+закреплённый thread, а Codex ставит его в очередь или направляет в активный
+turn. При ошибке доставки relay выполняет
 `release-handoff` с точным reservation token. Успешный owner claim переводит
 reservation в состояние `claimed`. Atomic reservation и глобальный owner claim
 не допускают двух Browser-owner. Восстановимый prompt heartbeat хранится в
@@ -134,6 +132,15 @@ reservation в состояние `claimed`. Atomic reservation и глобал�
 Ручной ответ Alex считается ходом `alex`. Если на него отвечают, Browser owner
 поднимает точную живую ветку, сохраняет ранее не импортированный ручной ответ и
 использует его вместе со всей историей до подготовки продолжения.
+
+Если точная историческая custom-GPT conversation закреплена за устаревшей
+моделью, Browser owner может использовать только официальный
+`Branch in new chat` от точного Pro-ответа Alex. Новая ветка становится
+канонической лишь после проверки идентичности custom GPT, полной истории до
+этого ответа, отдельного target URL и видимой модели `ChatGPT 5.6 Pro`.
+Миграция сохраняется append-only, после чего
+`pro-model-recovery-requeue` без event ID возвращает все доказанно
+восстановленные blockers в durable очередь.
 
 Событие от настроенного `user_id` является собственным ходом Alex, а не
 входящей работой. Watcher импортирует точный текст и метаданные цепочки как ход
@@ -179,11 +186,10 @@ scheduled run создает отдельную задачу и может ос�
    `codex app CANONICAL_ROOT`, если процесс отсутствует.
 6. In-app heartbeat выполняет один `relay-reserve-handoff`. Python сам
    резервирует repair incident либо, при его отсутствии, X queue и возвращает
-   единственный `dispatch` вместе с точным `route`. Пока канонический командный
-   центр активен или находится внутри quiet period, команда возвращает
-   `owner_thread_active` или `owner_thread_cooldown` без reservation.
+   единственный `dispatch` вместе с точным `route`.
 7. Победивший relay делает один direct `send_message_to_thread` с override Sol
-   High без отдельного live-чтения owner thread.
+   High без отдельного live-чтения owner thread. Codex ставит follow-up в
+   очередь или направляет его в активный turn.
 8. При ошибке доставки relay выполняет `release-handoff` со своим точным
    reservation token и завершается. Очередь остается pending. Соседний
    heartbeat получает `handoff_reserved`, а глобальный owner claim не допускает
@@ -196,6 +202,12 @@ scheduled run создает отдельную задачу и может ос�
 11. После exact history и durable resolution owner выполняет `completed`.
 12. Если Desktop был запущен supervisor, пустая очередь и owner=null запускают
     grace timer, после которого завершается только сохраненный managed PID.
+
+Пока Desktop готов, а owner отсутствует, dispatcher сохраняет один
+`waiting_since` между минутными тиками. `system_doctor` поднимает
+`runtime.relay_progress` только когда ожидание без owner превышает версионный
+контракт `max_relay_wait_seconds`. Resource deferral и активный owner не
+считаются остановкой relay.
 
 ## Контракты памяти и качества
 

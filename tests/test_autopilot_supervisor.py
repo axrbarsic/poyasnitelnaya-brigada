@@ -157,21 +157,16 @@ class AutopilotSupervisorTests(unittest.TestCase):
             now=self.now,
             checks=[database_failure],
         )
-        with mock.patch.object(
-            autopilot_supervisor.autopilot_bridge,
-            "browser_owner_activity",
-            return_value={"defer": False, "status": "owner_thread_idle"},
-        ):
-            reserved = autopilot_supervisor.reserve_handoff(
-                self.config,
-                lease_seconds=1800,
-                now=self.now,
-            )
-            duplicate = autopilot_supervisor.reserve_handoff(
-                self.config,
-                lease_seconds=1800,
-                now=self.now + timedelta(seconds=1),
-            )
+        reserved = autopilot_supervisor.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+            now=self.now,
+        )
+        duplicate = autopilot_supervisor.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+            now=self.now + timedelta(seconds=1),
+        )
 
         claimed = autopilot_supervisor.claim(
             self.config,
@@ -234,18 +229,11 @@ class AutopilotSupervisorTests(unittest.TestCase):
             now=self.now,
             checks=[database_failure],
         )
-        with (
-            mock.patch.object(
-                autopilot_supervisor.autopilot_bridge,
-                "browser_owner_activity",
-                return_value={"defer": False, "status": "owner_thread_idle"},
-            ),
-            mock.patch.object(
-                autopilot_supervisor.autopilot_bridge,
-                "reserve_handoff",
-                side_effect=AssertionError(
-                    "X must wait while repair is pending"
-                ),
+        with mock.patch.object(
+            autopilot_supervisor.autopilot_bridge,
+            "reserve_handoff",
+            side_effect=AssertionError(
+                "X must wait while repair is pending"
             ),
         ):
             result = autopilot_supervisor.relay_reserve_handoff(
@@ -349,16 +337,11 @@ class AutopilotSupervisorTests(unittest.TestCase):
             now=self.now,
             checks=[failure],
         )
-        with mock.patch.object(
-            autopilot_supervisor.autopilot_bridge,
-            "browser_owner_activity",
-            return_value={"defer": False, "status": "owner_thread_idle"},
-        ):
-            autopilot_supervisor.reserve_handoff(
-                self.config,
-                lease_seconds=30,
-                now=self.now + timedelta(seconds=1),
-            )
+        autopilot_supervisor.reserve_handoff(
+            self.config,
+            lease_seconds=30,
+            now=self.now + timedelta(seconds=1),
+        )
 
         recovered = autopilot_supervisor.gate(
             self.config,

@@ -294,11 +294,11 @@ authority for queued eligible replies.
 4. Only for `dispatch=true`, launch Codex Desktop when it is absent. One
    existing in-app Luna Low heartbeat calls one `relay-reserve-handoff`.
    Python chooses repair or X and returns one unambiguous `dispatch` plus
-   `route`. Before creating a reservation, its model-free guard requires the
-   latest canonical owner task to be terminal plus the configured quiet period.
-   The relay sends one direct `send_message_to_thread` follow-up to the pinned
-   Sol High owner without a separate live status read. Codex queues or steers
-   the follow-up when a turn is active.
+   `route`. The atomic reservation suppresses adjacent heartbeat ticks. The
+   relay sends one direct `send_message_to_thread` follow-up to the pinned Sol
+   High owner without a separate live status read. Codex queues or steers the
+   follow-up when a turn is active, while the global owner claim serializes
+   Browser work.
 5. If delivery fails, run `scripts/autopilot_bridge.py release-handoff` with
    the exact reservation token and finish without Browser. Leave the durable
    queue pending.

@@ -36,11 +36,9 @@ an X reply.
 11. One existing in-app Luna Low heartbeat calls one deterministic
     `relay-reserve-handoff`. Python selects either repair or X, creates at most
     one reservation, and returns one unambiguous `dispatch` plus `route`.
-    Before creating a reservation, Python reads the canonical owner's durable
-    rollout, requires the latest task to be terminal, and enforces a one-minute
-    quiet period. The relay then sends one direct `send_message_to_thread`
-    follow-up to the pinned Sol High Browser-owner without a separate live
-    status read. Codex queues or steers the follow-up when a turn is active.
+    The relay then sends one direct `send_message_to_thread` follow-up to the
+    pinned Sol High Browser-owner without reading owner status. Codex queues or
+    steers the follow-up when a turn is active.
     If delivery fails, the relay runs `release-handoff` with its exact
     reservation token and exits. The durable queue remains pending. Atomic
     reservation and the global owner claim prevent adjacent heartbeat ticks
@@ -156,6 +154,12 @@ The same SQLite database stores append-only conversation chains:
   rewrites;
 - an append-only chain provenance correction can neutralize an invalid flat
   turn hint without deleting or rewriting the original JSONL record;
+- an append-only ChatGPT migration links a legacy custom-GPT conversation to
+  an official `Branch in new chat` only when the branch preserves the exact
+  custom GPT, history through the exact Pro-generated Alex turn, and the
+  visible `ChatGPT 5.6 Pro` model. The verified target URL becomes canonical;
+- `pro-model-recovery-requeue` selects every matching terminal model blocker
+  from durable state and requeues it without accepting an event ID;
 - canonical JSONL export provides a reviewable private Git backup without
   including API credentials, cookies, or Browser state.
 
@@ -203,12 +207,13 @@ contradiction claim, or factual conclusion.
   by Alex.
 - A short handoff reservation closes the race between adjacent heartbeat
   ticks before the Browser owner can acquire its global claim.
-- The relay uses durable rollout, a quiet period, an atomic reservation, and
-  the global owner claim before direct delivery. Mobile Remote, local Desktop,
-  and automated Browser work are serialized on the same durable thread. Since
-  the Codex rollout read and message delivery are separate
-  operations, operators must also avoid simultaneous interactive sends from
-  two clients.
+- Dispatcher state preserves the start of an unowned relay wait. The doctor
+  escalates only after that wait exceeds the versioned recovery limit, while
+  resource deferral and an active owner remain valid non-stalled states.
+- The relay uses an atomic reservation and the global owner claim around direct
+  delivery. Mobile Remote, local Desktop, and automated Browser work are
+  serialized on the same durable thread. The direct follow-up is queued or
+  steered by Codex when the owner turn is active.
 - An IAB timeout is classified per execution turn. One fresh turn in the same
   Browser-owner task may run the official bootstrap once; publication resumes
   only after an authenticated read-only preflight succeeds.

@@ -25,7 +25,7 @@ from typing import Any, Callable, Iterable
 from scripts import event_dispatch, keychain_bundle
 
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 TOKEN_ENV_NAMES = ("X_BEARER_TOKEN", "X_API_BEARER_TOKEN", "TWITTER_BEARER_TOKEN")
 INITIAL_AUDIT_EXPIRY_PROVENANCE = "stored_api_auto_expiry_v1"
 TERMINAL_BLOCKER_CODES = {
@@ -306,6 +306,25 @@ def connect_database(path: Path) -> sqlite3.Connection:
             source_url TEXT NOT NULL,
             PRIMARY KEY(status_id, source_url),
             FOREIGN KEY(status_id) REFERENCES conversation_turns(status_id)
+        );
+
+        CREATE TABLE IF NOT EXISTS chatgpt_conversation_migrations (
+            migration_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            chain_id TEXT NOT NULL,
+            source_url TEXT NOT NULL,
+            target_url TEXT NOT NULL,
+            source_model TEXT NOT NULL,
+            target_model TEXT NOT NULL,
+            branch_from_status_id TEXT NOT NULL,
+            method TEXT NOT NULL,
+            reason TEXT NOT NULL,
+            evidence_json TEXT NOT NULL,
+            verified_at TEXT NOT NULL,
+            UNIQUE(chain_id, source_url, target_url),
+            UNIQUE(chain_id, target_url),
+            FOREIGN KEY(chain_id) REFERENCES conversation_chains(chain_id),
+            FOREIGN KEY(branch_from_status_id)
+                REFERENCES conversation_turns(status_id)
         );
 
         CREATE TABLE IF NOT EXISTS event_resolutions (
@@ -1984,6 +2003,92 @@ def requeue_unanswered_skips(
     }
 
 
+def requeue_recovered_pro_model_blockers(
+    config: Config,
+    connection: sqlite3.Connection,
+    *,
+    dry_run: bool,
+) -> dict[str, Any]:
+    if not config.mandatory_response_mode:
+        raise ValueError(
+            "mandatory_response_mode must be enabled before Pro recovery"
+        )
+    candidates = connection.execute(
+        """
+        SELECT e.*, r.*
+        FROM events e
+        JOIN event_resolutions r ON r.event_id = e.event_id
+        JOIN conversation_chains c
+          ON c.chain_id = e.conversation_id
+        JOIN chatgpt_conversation_migrations migration
+          ON migration.chain_id = c.chain_id
+         AND migration.target_url = c.chatgpt_conversation_url
+         AND migration.target_model = 'ChatGPT 5.6 Pro'
+         AND migration.method = 'branch_in_new_chat'
+        WHERE r.disposition = 'blocked'
+          AND r.blocker_code = 'required_pro_model_unavailable'
+          AND e.delivery_state != 'queued'
+          AND COALESCE(e.author_id, '') != ?
+          AND NOT EXISTS (
+              SELECT 1
+              FROM conversation_turns alex
+              WHERE alex.parent_status_id = e.event_id
+                AND alex.actor = 'alex'
+          )
+        ORDER BY e.created_at, CAST(e.event_id AS INTEGER)
+        """,
+        (config.user_id,),
+    ).fetchall()
+    requeued_at = isoformat()
+    if not dry_run and candidates:
+        with connection:
+            delete_meta(connection, "initial_audit_completed_at")
+            for row in candidates:
+                event_id = str(row["event_id"])
+                connection.execute(
+                    """
+                    INSERT INTO response_policy_requeues(
+                        event_id, previous_resolution_json, reason,
+                        requeued_at
+                    ) VALUES(?, ?, ?, ?)
+                    """,
+                    (
+                        event_id,
+                        json.dumps(
+                            _resolution_row_payload(row),
+                            ensure_ascii=False,
+                            sort_keys=True,
+                        ),
+                        "verified_chatgpt_5_6_pro_branch_recovery",
+                        requeued_at,
+                    ),
+                )
+                connection.execute(
+                    """
+                    UPDATE events
+                    SET delivery_state = 'queued'
+                    WHERE event_id = ?
+                    """,
+                    (event_id,),
+                )
+    wake = (
+        refresh_wake_file(config, connection)
+        if not dry_run
+        else {"pending_count": len(queued_events(connection))}
+    )
+    if not dry_run:
+        write_health(config, connection, last_new_count=0)
+    return {
+        "dry_run": dry_run,
+        "candidate_count": len(candidates),
+        "candidate_event_ids": [
+            str(row["event_id"]) for row in candidates
+        ],
+        "pending_count": wake["pending_count"],
+        "reason": "verified_chatgpt_5_6_pro_branch_recovery",
+    }
+
+
 def complete_initial_audit(
     config: Config,
     connection: sqlite3.Connection,
@@ -2150,6 +2255,94 @@ def _matching_alex_reply_turns(
     ).fetchall()
 
 
+def _replied_to_status_id(event: sqlite3.Row) -> str:
+    try:
+        payload = json.loads(str(event["payload_json"]))
+    except json.JSONDecodeError as error:
+        raise ValueError("payload_json must be valid JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError("payload_json must contain an object")
+    references = payload.get("referenced_tweets")
+    if not isinstance(references, list):
+        raise ValueError("payload_json referenced_tweets must be an array")
+    parent_ids = [
+        str(reference.get("id") or "")
+        for reference in references
+        if isinstance(reference, dict)
+        and reference.get("type") == "replied_to"
+    ]
+    if len(parent_ids) != 1:
+        raise ValueError("payload_json must contain exactly one replied_to ID")
+    return _validate_status_id(parent_ids[0], "parent_status_id")
+
+
+def _is_exact_chatgpt_conversation_url(value: str | None) -> bool:
+    if not value:
+        return False
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme != "https" or parsed.hostname != "chatgpt.com":
+        return False
+    return re.search(r"/c/[A-Za-z0-9-]+/?$", parsed.path) is not None
+
+
+def _chatgpt_custom_gpt_scope(value: str | None) -> str | None:
+    if not _is_exact_chatgpt_conversation_url(value):
+        return None
+    parsed = urllib.parse.urlparse(str(value))
+    match = re.fullmatch(
+        r"(/g/[A-Za-z0-9_-]+)/c/[A-Za-z0-9-]+/?",
+        parsed.path,
+    )
+    return match.group(1) if match else None
+
+
+def _require_required_pro_model_unavailable_proof(
+    connection: sqlite3.Connection,
+    event_id: str,
+) -> None:
+    event = connection.execute(
+        "SELECT * FROM events WHERE event_id = ?",
+        (event_id,),
+    ).fetchone()
+    if event is None:
+        raise KeyError(f"Unknown event {event_id}")
+    conversation_id = str(event["conversation_id"] or event_id)
+    chain = connection.execute(
+        "SELECT * FROM conversation_chains WHERE chain_id = ?",
+        (conversation_id,),
+    ).fetchone()
+    if (
+        chain is None
+        or chain["provenance"] not in {"pro", "mixed"}
+        or not _is_exact_chatgpt_conversation_url(
+            chain["chatgpt_conversation_url"]
+        )
+    ):
+        raise ValueError(
+            "required_pro_model_unavailable requires the exact ChatGPT "
+            "conversation URL in the Pro chain"
+        )
+    parent_status_id = _replied_to_status_id(event)
+    parent = connection.execute(
+        "SELECT * FROM conversation_turns WHERE status_id = ?",
+        (parent_status_id,),
+    ).fetchone()
+    expected_parent_url = (
+        f"https://x.com/axrbarsic/status/{parent_status_id}"
+    )
+    if (
+        parent is None
+        or parent["chain_id"] != conversation_id
+        or parent["actor"] != "alex"
+        or parent["url"] != expected_parent_url
+        or parent["provenance"] != "pro"
+    ):
+        raise ValueError(
+            "required_pro_model_unavailable requires the exact imported "
+            "Pro-generated Alex parent"
+        )
+
+
 def _enforce_mandatory_response_resolution(
     config: Config,
     connection: sqlite3.Connection,
@@ -2163,6 +2356,14 @@ def _enforce_mandatory_response_resolution(
         raise ValueError("Unknown blocker_code. Allowed values: " + allowed)
     if disposition != "blocked" and blocker_code is not None:
         raise ValueError("blocker_code is valid only for blocked resolutions")
+    if (
+        disposition == "blocked"
+        and blocker_code == "required_pro_model_unavailable"
+    ):
+        _require_required_pro_model_unavailable_proof(
+            connection,
+            event_id,
+        )
     if not config.mandatory_response_mode:
         return
     if disposition == "skip" and not _matching_alex_reply_turns(
@@ -2971,6 +3172,188 @@ def import_history_snapshot(
     }
 
 
+def import_chatgpt_conversation_migration(
+    connection: sqlite3.Connection,
+    record: dict[str, Any],
+    *,
+    within_transaction: bool = False,
+) -> dict[str, Any]:
+    chain_id = _validate_status_id(
+        _required_text(record, "chain_id", "conversation_root_id"),
+        "chain_id",
+    )
+    source_url = _required_text(
+        record,
+        "source_chatgpt_conversation_url",
+        "source_url",
+    )
+    target_url = _required_text(
+        record,
+        "target_chatgpt_conversation_url",
+        "target_url",
+    )
+    source_scope = _chatgpt_custom_gpt_scope(source_url)
+    target_scope = _chatgpt_custom_gpt_scope(target_url)
+    if source_scope is None or target_scope is None:
+        raise ValueError(
+            "ChatGPT migration requires exact custom GPT conversation URLs"
+        )
+    if source_scope != target_scope:
+        raise ValueError(
+            "ChatGPT migration must preserve the exact custom GPT identity"
+        )
+    if source_url == target_url:
+        raise ValueError("ChatGPT migration target must differ from source")
+
+    source_model = _required_text(record, "source_model")
+    target_model = _required_text(record, "target_model")
+    if target_model != "ChatGPT 5.6 Pro":
+        raise ValueError(
+            "ChatGPT migration target model must be exactly ChatGPT 5.6 Pro"
+        )
+    method = _required_text(record, "method")
+    if method != "branch_in_new_chat":
+        raise ValueError(
+            "ChatGPT migration method must be branch_in_new_chat"
+        )
+    branch_from_status_id = _validate_status_id(
+        _required_text(record, "branch_from_status_id"),
+        "branch_from_status_id",
+    )
+    reason = _required_text(record, "reason", "migration_reason")
+    verified_at_value = _required_text(record, "verified_at")
+    verified_at = parse_time(verified_at_value)
+    if (
+        verified_at is None
+        or verified_at.tzinfo is None
+        or verified_at.utcoffset() is None
+    ):
+        raise ValueError(
+            "ChatGPT migration verified_at must be timezone-aware"
+        )
+    evidence = record.get("evidence")
+    if (
+        not isinstance(evidence, list)
+        or not evidence
+        or any(not str(item).strip() for item in evidence)
+    ):
+        raise ValueError(
+            "ChatGPT migration requires a non-empty evidence array"
+        )
+    evidence_json = json.dumps(
+        [str(item).strip() for item in evidence],
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    canonical_verified_at = isoformat(verified_at.astimezone(timezone.utc))
+
+    transaction = contextlib.nullcontext() if within_transaction else connection
+    with transaction:
+        chain = connection.execute(
+            "SELECT * FROM conversation_chains WHERE chain_id = ?",
+            (chain_id,),
+        ).fetchone()
+        if chain is None:
+            raise ValueError(
+                f"ChatGPT migration chain does not exist: {chain_id}"
+            )
+        if chain["provenance"] not in {"pro", "mixed"}:
+            raise ValueError(
+                "ChatGPT migration requires a Pro or mixed chain"
+            )
+        branch_turn = connection.execute(
+            "SELECT * FROM conversation_turns WHERE status_id = ?",
+            (branch_from_status_id,),
+        ).fetchone()
+        if (
+            branch_turn is None
+            or branch_turn["chain_id"] != chain_id
+            or branch_turn["actor"] != "alex"
+            or branch_turn["provenance"] != "pro"
+        ):
+            raise ValueError(
+                "ChatGPT migration requires the exact Pro-generated Alex "
+                "branch turn"
+            )
+
+        existing = connection.execute(
+            """
+            SELECT *
+            FROM chatgpt_conversation_migrations
+            WHERE chain_id = ?
+              AND source_url = ?
+              AND target_url = ?
+            """,
+            (chain_id, source_url, target_url),
+        ).fetchone()
+        if existing is not None:
+            _assert_existing_values(
+                existing,
+                {
+                    "source_model": source_model,
+                    "target_model": target_model,
+                    "branch_from_status_id": branch_from_status_id,
+                    "method": method,
+                    "reason": reason,
+                    "evidence_json": evidence_json,
+                    "verified_at": canonical_verified_at,
+                },
+                resource=f"ChatGPT migration {chain_id}",
+            )
+            return {
+                "chain_id": chain_id,
+                "source_url": source_url,
+                "target_url": target_url,
+                "inserted": False,
+            }
+
+        if chain["chatgpt_conversation_url"] not in {
+            source_url,
+            target_url,
+        }:
+            raise ValueError(
+                "ChatGPT migration source must equal the active chain URL, "
+                "or target must already be active during exact restore"
+            )
+        connection.execute(
+            """
+            INSERT INTO chatgpt_conversation_migrations(
+                chain_id, source_url, target_url, source_model,
+                target_model, branch_from_status_id, method, reason,
+                evidence_json, verified_at
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                chain_id,
+                source_url,
+                target_url,
+                source_model,
+                target_model,
+                branch_from_status_id,
+                method,
+                reason,
+                evidence_json,
+                canonical_verified_at,
+            ),
+        )
+        if chain["chatgpt_conversation_url"] == source_url:
+            connection.execute(
+                """
+                UPDATE conversation_chains
+                SET chatgpt_conversation_url = ?,
+                    updated_at = ?
+                WHERE chain_id = ?
+                """,
+                (target_url, canonical_verified_at, chain_id),
+            )
+    return {
+        "chain_id": chain_id,
+        "source_url": source_url,
+        "target_url": target_url,
+        "inserted": True,
+    }
+
+
 def import_history_file(
     connection: sqlite3.Connection,
     path: Path,
@@ -3019,7 +3402,14 @@ def import_history_file(
             chain_provenance_corrections[chain_id] = corrected_provenance
 
     chain_records: list[dict[str, Any]] = []
+    migration_records: list[dict[str, Any]] = []
     for source_record in records:
+        if (
+            source_record.get("snapshot_type")
+            == "chatgpt_conversation_migration"
+        ):
+            migration_records.append(source_record)
+            continue
         if isinstance(source_record.get("turns"), list):
             record = json.loads(json.dumps(source_record))
         elif source_record.get("record_type") in {
@@ -3058,6 +3448,10 @@ def import_history_file(
                     "conversation_root_id",
                     "chain_id",
                 ),
+                "chatgpt_conversation_url": source_record.get(
+                    "chatgpt_conversation_url"
+                ),
+                "ledger_reference": source_record.get("ledger_reference"),
                 "provenance": _optional_text(
                     source_record,
                     "chain_provenance",
@@ -3116,9 +3510,23 @@ def import_history_file(
             )
             for record in chain_records
         ]
+        migration_results = [
+            import_chatgpt_conversation_migration(
+                connection,
+                record,
+                within_transaction=True,
+            )
+            for record in migration_records
+        ]
     return {
         "records": len(results),
-        "skipped_metadata_records": len(records) - len(chain_records),
+        "migration_records": len(migration_results),
+        "inserted_migrations": sum(
+            int(item["inserted"]) for item in migration_results
+        ),
+        "skipped_metadata_records": (
+            len(records) - len(chain_records) - len(migration_records)
+        ),
         "inserted_turns": sum(item["inserted_turns"] for item in results),
         "inserted_sources": sum(item["inserted_sources"] for item in results),
         "chains": [item["chain_id"] for item in results],
@@ -3602,6 +4010,31 @@ def history_chain_for_status(
                 "source_urls": [row["source_url"] for row in sources],
             }
         )
+    migration_rows = connection.execute(
+        """
+        SELECT *
+        FROM chatgpt_conversation_migrations
+        WHERE chain_id = ?
+        ORDER BY migration_id
+        """,
+        (chain["chain_id"],),
+    ).fetchall()
+    migrations = [
+        {
+            "snapshot_type": "chatgpt_conversation_migration",
+            "chain_id": row["chain_id"],
+            "source_chatgpt_conversation_url": row["source_url"],
+            "target_chatgpt_conversation_url": row["target_url"],
+            "source_model": row["source_model"],
+            "target_model": row["target_model"],
+            "branch_from_status_id": row["branch_from_status_id"],
+            "method": row["method"],
+            "reason": row["reason"],
+            "evidence": json.loads(row["evidence_json"]),
+            "verified_at": row["verified_at"],
+        }
+        for row in migration_rows
+    ]
     return {
         "schema_version": SCHEMA_VERSION,
         "chain_id": chain["chain_id"],
@@ -3610,6 +4043,7 @@ def history_chain_for_status(
         "chatgpt_conversation_url": chain["chatgpt_conversation_url"],
         "ledger_reference": chain["ledger_reference"],
         "turns": result_turns,
+        "chatgpt_conversation_migrations": migrations,
     }
 
 
@@ -3627,14 +4061,24 @@ def export_history(
     temporary = output.with_suffix(output.suffix + ".tmp")
     with temporary.open("w", encoding="utf-8") as handle:
         for chain_id in chain_ids:
+            chain = history_chain_for_status(connection, chain_id)
             handle.write(
                 json.dumps(
-                    history_chain_for_status(connection, chain_id),
+                    chain,
                     ensure_ascii=False,
                     sort_keys=True,
                 )
                 + "\n"
             )
+            for migration in chain["chatgpt_conversation_migrations"]:
+                handle.write(
+                    json.dumps(
+                        migration,
+                        ensure_ascii=False,
+                        sort_keys=True,
+                    )
+                    + "\n"
+                )
     temporary.replace(output)
     return {
         "output": str(output),
@@ -3658,11 +4102,20 @@ def history_status(connection: sqlite3.Connection) -> dict[str, Any]:
             "SELECT COUNT(*) AS count FROM conversation_sources"
         ).fetchone()["count"]
     )
+    migrations = int(
+        connection.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM chatgpt_conversation_migrations
+            """
+        ).fetchone()["count"]
+    )
     return {
         "schema_version": SCHEMA_VERSION,
         "chains": chains,
         "turns": turns,
         "sources": sources,
+        "chatgpt_conversation_migrations": migrations,
     }
 
 
@@ -4704,6 +5157,18 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Report candidates without changing queue state.",
     )
+    pro_recovery_requeue = commands.add_parser(
+        "pro-model-recovery-requeue",
+        help=(
+            "Requeue every model blocker whose exact custom GPT history has "
+            "a verified ChatGPT 5.6 Pro branch."
+        ),
+    )
+    pro_recovery_requeue.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Report candidates without changing queue state.",
+    )
     commands.add_parser(
         "initial-audit-complete",
         help="Complete first review only when the queue is empty.",
@@ -5022,6 +5487,20 @@ def main() -> int:
                         connection,
                         response_window_hours=args.hours,
                         now=requeue_as_of,
+                        dry_run=args.dry_run,
+                    )
+                )
+            except ValueError as error:
+                print_json({"status": "blocked", "message": str(error)})
+                return 2
+            return 0
+
+        if args.command == "pro-model-recovery-requeue":
+            try:
+                print_json(
+                    requeue_recovered_pro_model_blockers(
+                        config,
+                        connection,
                         dry_run=args.dry_run,
                     )
                 )

@@ -594,6 +594,9 @@ def select_mode(sample: ResourceSample, config: dict[str, Any]) -> str:
     pressure_free = int(config["resource_mode_pressure_free_percent"])
     pressure_rss = float(config["resource_mode_pressure_codex_rss_mb"])
     pressure_swap = float(config["resource_mode_pressure_swap_used_mb"])
+    swap_blocks_dispatch = bool(
+        config.get("memory_guard_swap_blocks_dispatch", False)
+    )
     historical_swap = swap_is_historical(sample, config)
     if (
         (
@@ -602,7 +605,8 @@ def select_mode(sample: ResourceSample, config: dict[str, Any]) -> str:
         )
         or sample.codex_rss_mb > pressure_rss
         or (
-            sample.swap_used_mb is not None
+            swap_blocks_dispatch
+            and sample.swap_used_mb is not None
             and sample.swap_used_mb > pressure_swap
             and not historical_swap
         )
@@ -682,7 +686,7 @@ def high_free_dispatch_envelope_is_healthy(
     return (
         sample.free_percent is not None
         and sample.free_percent
-        >= int(config.get("memory_guard_high_free_recovery_percent", 40))
+        >= int(config.get("memory_guard_high_free_recovery_percent", 35))
         and sample.codex_rss_mb
         <= float(
             config.get(
@@ -768,7 +772,13 @@ def _assess_limits(
             limits_config.get("memory_guard_max_swap_used_mb", float("inf"))
         )
         if (
-            sample.swap_used_mb > maximum_swap
+            bool(
+                policy_config.get(
+                    "memory_guard_swap_blocks_dispatch",
+                    False,
+                )
+            )
+            and sample.swap_used_mb > maximum_swap
             and not historical_swap
             and not high_free_recovered
         ):
@@ -833,6 +843,9 @@ def check(config_path: Path) -> dict[str, Any]:
             "defer": bool(reasons),
             "reasons": reasons,
             "mode": mode,
+            "swap_blocks_dispatch": bool(
+                config.get("memory_guard_swap_blocks_dispatch", False)
+            ),
             "sample": asdict(sample),
             "checked_at": autopilot_dispatch.isoformat(),
         }

@@ -639,15 +639,6 @@ def reserve_handoff(
                 "incident_id": incident["id"],
             }
 
-        owner_activity = autopilot_bridge.browser_owner_activity(config_path)
-        if owner_activity.get("defer"):
-            return {
-                "status": str(owner_activity["status"]),
-                "dispatch": False,
-                "repair_pending": True,
-                "incident_id": incident["id"],
-                "owner_activity": owner_activity,
-            }
         token = str(uuid.uuid4())
         incident["status"] = "handoff_pending"
         incident["handoff"] = {

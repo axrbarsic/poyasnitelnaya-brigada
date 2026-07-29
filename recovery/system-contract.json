@@ -88,6 +88,7 @@
     "autopilot_state_file": "var/autopilot-dispatch.json",
     "max_poll_age_seconds": 180,
     "max_dispatch_age_seconds": 180,
+    "max_relay_wait_seconds": 180,
     "healthy_statuses": [
       "healthy",
       "healthy_silence_review"

@@ -13,7 +13,7 @@ import tempfile
 import urllib.parse
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
@@ -231,9 +231,17 @@ def claim(
                 and owner_runtime_id != runtime_id
             )
             owner_started_at = parse_time(owner.get("claimed_at"))
+            owner_expires_at = parse_time(owner.get("lease_expires_at"))
+            if owner_expires_at is None and owner_started_at is not None:
+                owner_expires_at = owner_started_at + timedelta(
+                    seconds=lease_seconds
+                )
+                owner["lease_expires_at"] = isoformat(owner_expires_at)
             if owner_started_at is not None and not runtime_changed:
-                owner_age = (current_time - owner_started_at).total_seconds()
-                if owner_age < lease_seconds:
+                if (
+                    owner_expires_at is not None
+                    and current_time < owner_expires_at
+                ):
                     active_ids = [
                         str(value) for value in owner.get("event_ids", [])
                     ]
@@ -310,6 +318,9 @@ def claim(
 
         claim_token = str(uuid.uuid4())
         claimed_at = isoformat(current_time)
+        lease_expires_at = isoformat(
+            current_time + timedelta(seconds=lease_seconds)
+        )
         for event in events:
             previous = state_events.get(event["id"])
             dispatch_count = (
@@ -325,6 +336,7 @@ def claim(
         state["owner"] = {
             "claim_token": claim_token,
             "claimed_at": claimed_at,
+            "lease_expires_at": lease_expires_at,
             "event_ids": [event["id"] for event in events],
             "runtime_id": runtime_id,
         }
@@ -334,6 +346,7 @@ def claim(
             "dispatch": True,
             "claim_token": claim_token,
             "claimed_at": claimed_at,
+            "lease_expires_at": lease_expires_at,
             "lease_seconds": lease_seconds,
             "pending_count": len(events),
             "events": [compact_event(event) for event in events],
@@ -393,9 +406,18 @@ def status(wake_file: Path, state_file: Path, *, lease_seconds: int) -> dict[str
         active_event_ids: list[str] = []
         if isinstance(owner, dict):
             claimed_at = parse_time(owner.get("claimed_at"))
+            lease_expires_at = parse_time(owner.get("lease_expires_at"))
+            if lease_expires_at is None and claimed_at is not None:
+                lease_expires_at = claimed_at + timedelta(
+                    seconds=lease_seconds
+                )
+                owner["lease_expires_at"] = isoformat(lease_expires_at)
+                state["updated_at"] = isoformat(current_time)
+                atomic_write_json(state_file, state)
             if (
                 claimed_at is not None
-                and (current_time - claimed_at).total_seconds() < lease_seconds
+                and lease_expires_at is not None
+                and current_time < lease_expires_at
             ):
                 owner_busy = True
                 active_claim_token = str(owner.get("claim_token"))

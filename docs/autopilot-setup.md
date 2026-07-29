@@ -17,8 +17,8 @@ The system separates token-free mechanics from content decisions:
 5. A ready queue starts Codex Desktop in the canonical workspace when the app
    is closed. Failure keeps the queue intact, retries later, and alerts Alex.
 6. One existing in-app Luna Low heartbeat checks a durable repair incident
-   before the X queue and runs the matching `reserve-handoff`. After the
-   durable rollout and quiet-period guard, it makes exactly one direct
+   before the X queue and runs the matching `reserve-handoff`. It atomically
+   reserves one route and immediately makes exactly one direct
    `send_message_to_thread` call. Codex queues or steers the follow-up if a
    turn is active.
 7. The pinned Sol High task claims atomically, restores the live thread,
@@ -83,7 +83,6 @@ Create ignored `config.json` from the example and set:
 {
   "browser_owner_cwd": ".",
   "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
-  "command_center_idle_grace_seconds": 60,
   "desktop_relay_mode": "in_app_heartbeat",
   "desktop_auto_quit_after_work": true,
   "desktop_auto_quit_grace_seconds": 180,
@@ -98,6 +97,7 @@ Create ignored `config.json` from the example and set:
   "codex_cli_update_interval_seconds": 21600,
   "resource_mode": "auto",
   "memory_guard_enabled": true,
+  "memory_guard_swap_blocks_dispatch": false,
   "voice_priority_enabled": true,
   "voice_priority_hold_seconds": 300,
   "session_janitor_interval_seconds": 60,
@@ -117,11 +117,9 @@ Create ignored `config.json` from the example and set:
 `browser_owner_thread_id` identifies one pinned Sol High owner. `x-relay` is a
 heartbeat attached to one existing Luna Low thread, not a standalone
 automation. `reserve-handoff` does not claim X events, but prevents duplicate
-wake delivery for 180 seconds. Before creating a reservation, it reads the
-owner's durable rollout, requires the latest task to be terminal, and enforces
-`command_center_idle_grace_seconds`. A live owner-thread read is not a
-prerequisite for delivery. The relay sends exactly one direct follow-up to the
-pinned thread, and Codex queues or steers that follow-up when a turn is already
+wake delivery for 180 seconds. The relay does not read the owner thread as a
+delivery gate. It immediately sends exactly one direct follow-up to the pinned
+thread, and Codex queues or steers that follow-up when a turn is already
 active. On a delivery failure, it runs `release-handoff` with the exact
 reservation token. A successful owner claim changes the reservation to
 `claimed`. Atomic reservation plus the global owner claim prevent concurrent
@@ -131,6 +129,14 @@ Browser owners. The restorable heartbeat prompt is tracked in
 A reply posted manually by Alex is an `alex` turn. If somebody answers it, the
 Browser owner restores the exact live branch, stores any previously unseen
 manual reply, and uses the complete history before drafting the continuation.
+
+If an exact historical custom-GPT conversation is pinned to a retired model,
+the Browser owner may use only the official `Branch in new chat` action from
+the exact Pro-generated Alex answer. The branch becomes canonical only after
+the Browser verifies the same custom GPT identity, complete history through
+that answer, a distinct target URL, and the visible `ChatGPT 5.6 Pro` model.
+The migration is append-only. `pro-model-recovery-requeue` then restores every
+verified model blocker to the durable queue without receiving an event ID.
 
 An event authored by the configured `user_id` is Alex's own turn, never inbound
 work. The watcher imports its exact text and chain metadata as an `alex` turn,
@@ -172,11 +178,10 @@ dispatcher, then delete it through the official `automation_update` API.
    absent.
 5. The in-app heartbeat runs one `relay-reserve-handoff`. Python selects
    repair or X, creates at most one reservation, and returns one `dispatch`
-   with an exact `route`. It returns `owner_thread_active` or
-   `owner_thread_cooldown` without a reservation while the canonical command
-   center is active or inside its quiet period.
-6. The winning relay sends one direct message with a Sol High override. It
-   does not perform a separate live owner-thread read.
+   with an exact `route`.
+6. The winning relay sends one direct message with a Sol High override. It does
+   not perform a separate live owner-thread read. Codex queues or steers the
+   follow-up if the owner turn is active.
 7. If delivery fails, the relay runs `release-handoff` with its exact
    reservation token and exits. The queue remains pending. An adjacent
    heartbeat receives `handoff_reserved`, and the global owner claim prevents
@@ -187,6 +192,12 @@ dispatcher, then delete it through the official `automation_update` API.
 10. After exact history and durable resolution, the owner runs `completed`.
 11. If Desktop was supervisor-launched, an empty queue and cleared owner lease
     start a grace timer before that exact managed PID is stopped.
+
+While Desktop is ready and no owner exists, dispatcher state preserves one
+`waiting_since` timestamp across minute ticks. `system_doctor` raises
+`runtime.relay_progress` only when that unowned wait exceeds the versioned
+`max_relay_wait_seconds` contract. Resource deferral and an active owner do not
+count as a stalled relay.
 
 ## Memory and quality contracts
 

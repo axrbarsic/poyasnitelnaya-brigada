@@ -40,13 +40,19 @@ Codex automation is therefore retired.
 and publication rules remain unchanged.
 
 | Mode | Condition | Codex RSS | Renderers | Free memory | Swap |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Efficiency | voice or pressure | 2200 MiB | 5 | at least 20% | up to 896 MiB |
-| Balanced | user active | 2350 MiB | 6 | at least 14% | up to 1024 MiB |
-| Performance | idle 15 minutes, AC, at least 35% free | 2500 MiB | 7 | at least 12% | up to 1152 MiB |
+| --- | --- | ---: | ---: | ---: | --- |
+| Efficiency | voice or pressure | 2200 MiB | 5 | at least 20% | telemetry |
+| Balanced | user active | 2350 MiB | 6 | at least 14% | telemetry |
+| Performance | idle 15 minutes, AC, at least 35% free | 2500 MiB | 7 | at least 12% | telemetry |
 
 Hard caps always apply: 2700 MiB RSS, 8 renderers, at least 10% free memory,
-and no more than 1280 MiB swap.
+and strict helper-process limits.
+
+Swap remains measured and stored for diagnosis, but by default it neither
+selects a mode nor blocks Browser by itself. Its size includes historical
+memory pressure and can remain high after RAM recovers. Only current low free
+memory, excessive RSS, excessive renderers, or heavy helpers defer work.
+The system never attempts a forced swap purge.
 
 A high count of old lightweight helpers does not block forever when free
 memory, Codex RSS, aggregate helper RSS, and renderer count are all inside the
@@ -97,6 +103,7 @@ it creates more tasks.
 - protects the active and pinned Browser owner;
 - retains restorable history;
 - releases an orphaned claim only from strict state and timing evidence;
+- terminates only helpers proven to belong to a completed service task;
 - writes one replacing health state instead of an unbounded log.
 
 The safest final cleanup for helpers left by historical scheduled runs is one

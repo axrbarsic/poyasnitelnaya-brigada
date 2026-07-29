@@ -13,6 +13,7 @@ import re
 import sqlite3
 import subprocess
 import sys
+import time
 from contextlib import closing
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
@@ -155,6 +156,150 @@ def latest_poll_context(database: Path) -> dict[str, Any]:
             tail_success[0] if tail_success else None
         ),
     }
+
+
+def database_integrity(
+    database: Path,
+    *,
+    attempts: int = 3,
+    retry_delay_seconds: float = 0.1,
+) -> tuple[bool, dict[str, Any] | None]:
+    if attempts < 1:
+        raise ValueError("database integrity attempts must be positive")
+    uri = f"{database.resolve().as_uri()}?mode=ro"
+    for attempt in range(1, attempts + 1):
+        try:
+            with closing(
+                sqlite3.connect(uri, uri=True, timeout=5.0)
+            ) as connection:
+                connection.execute("PRAGMA query_only = ON")
+                connection.execute("PRAGMA busy_timeout = 5000")
+                connection.execute("BEGIN")
+                quick_rows = [
+                    str(row[0])
+                    for row in connection.execute(
+                        "PRAGMA quick_check"
+                    ).fetchall()
+                ]
+                foreign_rows = connection.execute(
+                    "PRAGMA foreign_key_check"
+                ).fetchall()
+                connection.rollback()
+            healthy = quick_rows == ["ok"] and not foreign_rows
+            if healthy:
+                return True, None
+            return False, {
+                "attempts": attempt,
+                "foreign_key_violation_count": len(foreign_rows),
+                "quick_check": quick_rows[:20],
+            }
+        except sqlite3.Error as error:
+            message = str(error)
+            lowered = message.lower()
+            transient = any(
+                marker in lowered
+                for marker in (
+                    "database is locked",
+                    "database table is locked",
+                    "database schema is locked",
+                    "database is busy",
+                )
+            )
+            retryable = transient or "unable to open database file" in lowered
+            if retryable and attempt < attempts:
+                time.sleep(retry_delay_seconds)
+                continue
+            return False, {
+                "attempts": attempt,
+                "error_class": type(error).__name__,
+                "error_message": message,
+                "retryable": retryable,
+                "transient": transient,
+            }
+    raise AssertionError("database integrity retry loop did not return")
+
+
+def relay_progress_check(
+    *,
+    pending_count: int,
+    dispatch_state: dict[str, Any],
+    owner: Any,
+    max_wait_seconds: int,
+    now: datetime | None = None,
+) -> Check:
+    if max_wait_seconds <= 0:
+        raise ValueError("relay progress max wait must be positive")
+    current = now or datetime.now(timezone.utc)
+    dispatch_status = str(dispatch_state.get("status", "missing"))
+    details: dict[str, Any] = {
+        "dispatch_status": dispatch_status,
+        "max_wait_seconds": max_wait_seconds,
+        "pending_count": pending_count,
+    }
+    if pending_count <= 0:
+        return Check(
+            "runtime.relay_progress",
+            "pass",
+            "Relay не имеет ожидающей очереди.",
+            "Проверь wake queue и dispatcher state.",
+            details,
+        )
+    if isinstance(owner, dict):
+        details["owner_event_ids"] = owner.get("event_ids", [])
+        return Check(
+            "runtime.relay_progress",
+            "pass",
+            "Ожидающая очередь уже принадлежит Browser owner.",
+            "Проверь owner lease и session janitor.",
+            details,
+        )
+    waiting_statuses = {
+        "desktop_launched_waiting_relay",
+        "desktop_ready_waiting_relay",
+    }
+    if dispatch_status not in waiting_statuses:
+        return Check(
+            "runtime.relay_progress",
+            "pass",
+            "Dispatcher не находится в состоянии ожидания relay.",
+            "Проверь отдельные gate и dispatcher health.",
+            details,
+        )
+    waiting_since = parse_timestamp(
+        dispatch_state.get("waiting_since")
+        or dispatch_state.get("checked_at")
+    )
+    if waiting_since is None:
+        details["waiting_since"] = dispatch_state.get("waiting_since")
+        return Check(
+            "runtime.relay_progress",
+            "fail",
+            "Dispatcher не записал начало ожидания relay.",
+            "Перезапусти штатный dispatcher и проверь waiting_since.",
+            details,
+        )
+    age_seconds = (current - waiting_since).total_seconds()
+    details["waiting_since"] = waiting_since.isoformat().replace(
+        "+00:00",
+        "Z",
+    )
+    details["age_seconds"] = round(age_seconds, 1)
+    healthy = 0 <= age_seconds <= max_wait_seconds
+    return Check(
+        "runtime.relay_progress",
+        "pass" if healthy else "fail",
+        (
+            f"Relay ожидает claim {round(age_seconds, 1)}s."
+            if healthy
+            else f"Relay не создал claim за {round(age_seconds, 1)}s."
+        ),
+        (
+            "Дождись ближайшего минутного heartbeat."
+            if healthy
+            else "Проверь heartbeat x-relay, reservation и direct delivery."
+        ),
+        details,
+    )
 
 
 def reasoning_effort_meets_minimum(
@@ -591,27 +736,43 @@ def check_contract(
             )
         )
     else:
-        uri = f"{live_database.resolve().as_uri()}?mode=ro"
-        try:
-            with closing(sqlite3.connect(uri, uri=True)) as connection:
-                quick = connection.execute("PRAGMA quick_check").fetchone()
-                foreign = connection.execute(
-                    "PRAGMA foreign_key_check"
-                ).fetchall()
-            healthy = quick == ("ok",) and not foreign
-        except sqlite3.Error:
-            healthy = False
+        healthy, integrity_details = database_integrity(live_database)
+        database_unavailable = bool(
+            integrity_details
+            and (
+                integrity_details.get("transient")
+                or integrity_details.get("retryable")
+            )
+        )
+        database_status = (
+            "pass"
+            if healthy
+            else "warn"
+            if database_unavailable
+            else "fail"
+        )
         checks.append(
             Check(
                 "runtime.database",
-                "pass" if healthy else "fail",
+                database_status,
                 (
                     "Live SQLite проходит quick_check и foreign_key_check."
                     if healthy
+                    else (
+                        "Live SQLite временно занята или недоступна, "
+                        "повреждение не подтверждено."
+                    )
+                    if database_unavailable
                     else "Live SQLite не прошла проверку целостности."
                 ),
-                "Останови poll, сделай snapshot повреждённого файла и "
-                "восстанови последний валидный snapshot.",
+                (
+                    "Повтори штатную проверку после завершения активной "
+                    "транзакции или восстановления доступа к файлу."
+                    if database_unavailable
+                    else "Останови poll, сделай snapshot повреждённого файла "
+                    "и восстанови последний валидный snapshot."
+                ),
+                integrity_details,
             )
         )
 
@@ -647,6 +808,7 @@ def check_contract(
         )
     )
 
+    dispatch_state: dict[str, Any] = {}
     dispatch_value = str(runtime.get("dispatch_state_file", "")).strip()
     if dispatch_value:
         dispatch_path = resolve_project_path(root, dispatch_value)
@@ -688,6 +850,7 @@ def check_contract(
             )
         )
 
+    owner: Any = None
     owner_state_value = str(
         runtime.get("autopilot_state_file", "")
     ).strip()
@@ -728,6 +891,16 @@ def check_contract(
                 ),
                 "Запусти штатный session janitor recovery, не удаляй очередь.",
                 owner_details,
+            )
+        )
+    max_relay_wait = int(runtime.get("max_relay_wait_seconds", 0))
+    if max_relay_wait > 0:
+        checks.append(
+            relay_progress_check(
+                pending_count=pending,
+                dispatch_state=dispatch_state,
+                owner=owner,
+                max_wait_seconds=max_relay_wait,
             )
         )
 
@@ -862,20 +1035,23 @@ def check_contract(
             if tail_success_at is not None
             else float("inf")
         )
-        transient_tail_error = (
+        transient_poll_error = (
             health_status == "degraded"
             and consecutive_failures == 1
             and 0 <= age_seconds <= max_age
             and poll_context.get("latest_source")
-            == "x_api_conversation_tail"
+            in {"x_api", "x_api_conversation_tail"}
             and poll_context.get("latest_status") == "failure"
             and str(last_error_class)
             in {"timeout", "TimeoutError", "URLError"}
-            and 0 <= tail_age_seconds <= max_age
+            and (
+                poll_context.get("latest_source") == "x_api"
+                or 0 <= tail_age_seconds <= max_age
+            )
         )
     except (OSError, ValueError, TypeError, AttributeError):
         health_ok = False
-        transient_tail_error = False
+        transient_poll_error = False
         age_seconds = float("inf")
         tail_age_seconds = float("inf")
         max_age = int(runtime.get("max_poll_age_seconds", 180))
@@ -887,12 +1063,18 @@ def check_contract(
     if health_ok:
         poll_status = "pass"
         poll_summary = f"Watcher poll свежий, age={round(age_seconds, 1)}s."
-    elif transient_tail_error:
+    elif transient_poll_error:
         poll_status = "warn"
-        poll_summary = (
-            "Основной poll свежий, conversation tail переживает одиночный "
-            f"сетевой timeout, tail age={round(tail_age_seconds, 1)}s."
-        )
+        if poll_context.get("latest_source") == "x_api":
+            poll_summary = (
+                "Основной poll переживает одиночный сетевой timeout, "
+                f"последний успех age={round(age_seconds, 1)}s."
+            )
+        else:
+            poll_summary = (
+                "Основной poll свежий, conversation tail переживает одиночный "
+                f"сетевой timeout, tail age={round(tail_age_seconds, 1)}s."
+            )
     else:
         poll_status = "fail"
         poll_summary = "Watcher poll не обновляется или находится в ошибке."

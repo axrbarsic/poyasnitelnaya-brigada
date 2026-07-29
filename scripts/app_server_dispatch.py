@@ -755,12 +755,22 @@ def desktop_supervisor_dispatch(
             write_state(config_path, config, result)
             return result
 
+    waiting_statuses = {
+        "desktop_launched_waiting_relay",
+        "desktop_ready_waiting_relay",
+    }
+    status = (
+        "desktop_launched_waiting_relay"
+        if launched
+        else "desktop_ready_waiting_relay"
+    )
+    preserve_waiting_since = (
+        previous.get("status") in waiting_statuses
+        and previous.get("work_kind") == work_kind
+        and previous.get("waiting_since")
+    )
     result = {
-        "status": (
-            "desktop_launched_waiting_relay"
-            if launched
-            else "desktop_ready_waiting_relay"
-        ),
+        "status": status,
         "mode": "in_app_heartbeat",
         "dispatched": False,
         "desktop_launched": launched,
@@ -768,6 +778,11 @@ def desktop_supervisor_dispatch(
         "owner_thread_id": owner_thread_id,
         "event_ids": event_ids,
         "pending_count": pending_count,
+        "waiting_since": (
+            previous["waiting_since"]
+            if preserve_waiting_since
+            else autopilot_dispatch.isoformat()
+        ),
         "work_kind": work_kind,
     }
     if repair_gate.get("incident_id"):
