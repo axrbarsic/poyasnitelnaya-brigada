@@ -122,6 +122,8 @@ class SystemDoctorTests(unittest.TestCase):
                 {
                     "browser_owner_thread_id": "owner",
                     "desktop_relay_mode": "in_app_heartbeat",
+                    "event_dispatch_on_new_events": True,
+                    "event_dispatch_launchagent_label": "agent",
                 }
             ),
             encoding="utf-8",
@@ -161,6 +163,7 @@ class SystemDoctorTests(unittest.TestCase):
                 "health_file": "var/health.json",
                 "max_poll_age_seconds": 180,
                 "healthy_statuses": ["healthy"],
+                "event_dispatch_launchagent_label": "agent",
             },
             "skill": {
                 "source": "skill-source",
@@ -189,6 +192,32 @@ class SystemDoctorTests(unittest.TestCase):
 
         failures = [check for check in checks if check.status == "fail"]
         self.assertEqual(failures, [])
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_disabled_event_dispatch_fails(
+        self,
+        _git_origin: mock.Mock,
+    ) -> None:
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["event_dispatch_on_new_events"] = False
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        check = next(
+            item
+            for item in checks
+            if item.identifier == "config.event_dispatch"
+        )
+        self.assertEqual(check.status, "fail")
 
     @mock.patch(
         "scripts.system_doctor.git_origin",

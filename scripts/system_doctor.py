@@ -308,6 +308,46 @@ def check_contract(
             "Установи desktop_relay_mode в in_app_heartbeat.",
         )
     )
+    runtime_contract = contract.get("runtime", {})
+    expected_event_dispatch_label = runtime_contract.get(
+        "event_dispatch_launchagent_label"
+    )
+    if expected_event_dispatch_label is not None:
+        expected_event_dispatch_label = str(expected_event_dispatch_label)
+        actual_event_dispatch_label = str(
+            config.get("event_dispatch_launchagent_label", "")
+        )
+        event_dispatch_enabled = bool(
+            config.get("event_dispatch_on_new_events", False)
+        )
+        event_dispatch_matches = (
+            event_dispatch_enabled
+            and actual_event_dispatch_label == expected_event_dispatch_label
+        )
+        checks.append(
+            Check(
+                "config.event_dispatch",
+                "pass" if event_dispatch_matches else "fail",
+                (
+                    "Новые X события немедленно запускают "
+                    "dispatcher."
+                    if event_dispatch_matches
+                    else (
+                        "Событийный запуск dispatcher не "
+                        "настроен."
+                    )
+                ),
+                (
+                    "Включи event_dispatch_on_new_events и верни точный "
+                    "event_dispatch_launchagent_label из контракта."
+                ),
+                {
+                    "enabled": event_dispatch_enabled,
+                    "actual_label": actual_event_dispatch_label,
+                    "expected_label": expected_event_dispatch_label,
+                },
+            )
+        )
 
     database = state_database(home)
     if database is None:

@@ -43,6 +43,10 @@ Codex Desktop Browser worker. It separates cheap mechanical work from expensive
 content decisions:
 
 - Python and the official X API detect, deduplicate, persist, and queue replies.
+- After new event IDs are durably queued, the watcher performs a non-killing
+  `launchctl kickstart` of the local dispatcher. The minute LaunchAgent remains
+  an independent fallback, so a failed kick loses no work and creates no
+  second owner.
 - A token-free Python dispatcher leases only eligible events.
 - A minute LaunchAgent runs the read-only gate in plain Python. Empty, busy,
   and resource-deferred queues use no model, open no Browser, and create no

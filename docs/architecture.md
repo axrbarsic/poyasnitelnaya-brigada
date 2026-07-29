@@ -24,12 +24,16 @@ an X reply.
    can never hide a direct mention.
 6. `wake-request.json` exposes only queued event metadata and canonical URLs.
 7. A macOS notification reports a new queue item without invoking a model.
-8. Under explicit standing authority, a one-minute LaunchAgent runs the
+8. After a live poll durably queues new event IDs, it performs one non-killing
+   `launchctl kickstart` of the existing dispatcher LaunchAgent. The periodic
+   minute launch remains active as a fallback. The kick does not reserve,
+   claim, inspect, or remove queue events.
+9. Under explicit standing authority, a one-minute LaunchAgent runs the
    read-only `autopilot_bridge gate` in Python. Empty, leased, voice-paused, and
    resource-deferred queues use no model and create no Codex task.
-9. A ready gate checks Codex Desktop. If Desktop is absent, the supervisor
+10. A ready gate checks Codex Desktop. If Desktop is absent, the supervisor
    launches it in the canonical repository and records the exact PID it owns.
-10. One existing in-app Luna Low heartbeat calls one deterministic
+11. One existing in-app Luna Low heartbeat calls one deterministic
     `relay-reserve-handoff`. Python selects either repair or X, creates at most
     one reservation, and returns one unambiguous `dispatch` plus `route`.
     Before creating a reservation, Python reads the canonical owner's durable
@@ -41,24 +45,24 @@ an X reply.
     reservation token and exits. The durable queue remains pending. Atomic
     reservation and the global owner claim prevent adjacent heartbeat ticks
     from creating concurrent Browser owners.
-11. The pinned task executes the atomic claim inside Codex Desktop and remains
+12. The pinned task executes the atomic claim inside Codex Desktop and remains
     the only authenticated Browser publication owner. After the queue is empty,
     the supervisor may close only the exact Desktop PID that it launched.
-12. A separate one-minute watchdog checks poll freshness and failure count.
-13. Sol High opens the complete live X subtree, classifies text and media in
+13. A separate one-minute watchdog checks poll freshness and failure count.
+14. Sol High opens the complete live X subtree, classifies text and media in
     context, and resolves an event only after publication, exact proof of an
     existing direct Alex child reply, or a terminal blocker.
-14. `initial-audit-next` performs only free mechanical grouping and exact-text
+15. `initial-audit-next` performs only free mechanical grouping and exact-text
     extraction. It never decides stance, relevance, or whether to publish.
-15. `initial-audit-expire --hours H --as-of UTC` fixes Alex's requested
+16. `initial-audit-expire --hours H --as-of UTC` fixes Alex's requested
     per-run lookback cutoff without Browser or model use. Dry-run and apply
     reuse the same timestamp. In one transaction it imports exact stored API
     history and records an age-policy skip only for unresolved events strictly
     older than that cutoff.
-16. New API events preserve expanded attachment metadata and alt text. Missing
+17. New API events preserve expanded attachment metadata and alt text. Missing
     media metadata still requires live Browser inspection and is never treated
     as proof that no media exists.
-17. `browser-handoff-sync` imports exact Browser history and applies only
+18. `browser-handoff-sync` imports exact Browser history and applies only
     already confirmed Sol dispositions. It cannot draft, classify, or publish,
     and it fails closed on missing history or mismatched chain metadata. A
     publication must include both the inspected user turn and the exact
@@ -68,23 +72,23 @@ an X reply.
     Every handoff proves exactly one authorization route: a direct reply to
     Alex, a reply in a conversation with a stored Alex turn, or an explicit
     `@axrbarsic` mention returned by the authenticated mentions endpoint.
-18. `autopilot_bridge` enriches each claimed event with compact
+19. `autopilot_bridge` enriches each claimed event with compact
     `commenter_memory` keyed by stable X user ID. It contains source-linked
     public turns and exact Alex children from any stored conversation. A deeper
     `commenter-history` query can search all retained years without adding the
     full archive to every Sol prompt.
-19. `x_archive_import.py` stages Alex's historical public posts and replies
+20. `x_archive_import.py` stages Alex's historical public posts and replies
     from an official X archive. It validates the archive account against the
     configured numeric X user ID, ignores direct-message members, and rejects
     append-only conflicts. Archive replies are exposed separately from exact
     incoming interaction history because the archive does not contain a
     complete copy of other users' turns.
-20. `candidate_corpus.py` stores externally collected public posts in a
+21. `candidate_corpus.py` stores externally collected public posts in a
     quarantined index keyed by stable X user ID. It exposes at most three
     compact search hints per event. Unverified hints have
     `usable_as_evidence=false`; only an append-only live X or official API
     verification can promote the exact observed record.
-21. Conversation tail search is not broad discovery. It watches only recent
+22. Conversation tail search is not broad discovery. It watches only recent
     chains already containing an exact Alex turn, excludes Alex's own posts,
     applies a bounded first lookback, and reuses immutable event ID
     deduplication. X bills read endpoints per returned resource and normally

@@ -22,7 +22,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
-from scripts import keychain_bundle
+from scripts import event_dispatch, keychain_bundle
 
 
 SCHEMA_VERSION = 9
@@ -4878,6 +4878,21 @@ def main() -> int:
                     }
                 )
                 return 1
+            try:
+                dispatch_result = event_dispatch.trigger_from_poll_result(
+                    config.source_path,
+                    result,
+                    live_poll=args.fixture is None,
+                )
+            except Exception as error:
+                dispatch_result = {
+                    "status": "fallback_scheduled",
+                    "triggered": False,
+                    "event_ids": list(result.get("new_event_ids", [])),
+                    "error_class": type(error).__name__,
+                }
+            if dispatch_result["status"] != "not_needed":
+                result["event_dispatch"] = dispatch_result
             if not args.quiet:
                 print_json(result)
             return 0
