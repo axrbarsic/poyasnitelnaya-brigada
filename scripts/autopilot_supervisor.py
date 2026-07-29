@@ -14,8 +14,14 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 try:
-    from scripts import autopilot_bridge, autopilot_dispatch, system_doctor
+    from scripts import (
+        automation_target_health,
+        autopilot_bridge,
+        autopilot_dispatch,
+        system_doctor,
+    )
 except ModuleNotFoundError:
+    import automation_target_health  # type: ignore[no-redef]
     import autopilot_bridge  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
     import system_doctor  # type: ignore[no-redef]
@@ -129,12 +135,32 @@ def collect_checks(
 ) -> list[system_doctor.Check]:
     root = config_path.expanduser().resolve().parent
     contract = system_doctor.read_json(contract_path.expanduser().resolve())
-    return system_doctor.check_contract(
+    checks = system_doctor.check_contract(
         root,
         Path.home().resolve(),
         contract,
         config_path.expanduser().resolve(),
     )
+    archived_targets = (
+        automation_target_health.archived_active_heartbeat_targets(
+            Path.home().resolve()
+        )
+    )
+    checks.append(
+        system_doctor.Check(
+            "automation.active_heartbeat_targets",
+            "fail" if archived_targets else "pass",
+            (
+                "Активная heartbeat automation указывает в архив."
+                if archived_targets
+                else "Все активные heartbeat automation имеют живые цели."
+            ),
+            "Сними архивный флаг с целевой задачи или приостанови "
+            "automation через официальный automation_update.",
+            {"targets": archived_targets} if archived_targets else None,
+        )
+    )
+    return checks
 
 
 def failure_fingerprint(checks: Iterable[system_doctor.Check]) -> str:
@@ -189,6 +215,73 @@ def poll_failure_is_repairable(
         str(details.get("health_status", "")) in REPAIRABLE_POLL_STATUSES
         or stale_by_age
     )
+
+
+def archived_automation_target_is_repairable(
+    failures: list[system_doctor.Check],
+) -> bool:
+    if [
+        check.identifier for check in failures
+    ] != ["automation.active_heartbeat_targets"]:
+        return False
+    details = failures[0].details or {}
+    targets = details.get("targets")
+    return bool(
+        isinstance(targets, list)
+        and targets
+        and all(
+            isinstance(target, dict)
+            and str(target.get("thread_id", "")).strip()
+            for target in targets
+        )
+    )
+
+
+def unarchive_automation_targets(
+    config: dict[str, Any],
+    failure: system_doctor.Check,
+) -> dict[str, Any]:
+    details = failure.details or {}
+    raw_targets = details.get("targets")
+    targets = raw_targets if isinstance(raw_targets, list) else []
+    executable = Path(
+        str(
+            config.get(
+                "codex_cli_path",
+                "/Applications/ChatGPT.app/Contents/Resources/codex",
+            )
+        )
+    ).expanduser()
+    results: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for target in targets:
+        if not isinstance(target, dict):
+            continue
+        thread_id = str(target.get("thread_id", "")).strip()
+        if not thread_id or thread_id in seen:
+            continue
+        seen.add(thread_id)
+        completed = subprocess.run(
+            [str(executable), "unarchive", thread_id],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        results.append(
+            {
+                "thread_id": thread_id,
+                "returncode": completed.returncode,
+                "stdout": completed.stdout.strip()[-500:],
+                "stderr": completed.stderr.strip()[-500:],
+            }
+        )
+    return {
+        "action": "unarchive_active_heartbeat_targets",
+        "success": bool(results)
+        and all(result["returncode"] == 0 for result in results),
+        "results": results,
+    }
 
 
 def kickstart_poll() -> dict[str, Any]:
@@ -386,7 +479,14 @@ def run_once(
             "work_in_progress",
             "failed",
         }
-        if poll_failure_is_repairable(failures) and not coordination_active:
+        poll_repairable = poll_failure_is_repairable(failures)
+        automation_repairable = archived_automation_target_is_repairable(
+            failures
+        )
+        if (
+            (poll_repairable or automation_repairable)
+            and not coordination_active
+        ):
             cooldown = _repair_cooldown(config)
             last_attempt_at = (
                 parse_time(attempts[-1].get("attempted_at"))
@@ -394,7 +494,11 @@ def run_once(
                 else None
             )
             if not attempts:
-                result = repair_runner()
+                result = (
+                    repair_runner()
+                    if poll_repairable
+                    else unarchive_automation_targets(config, failures[0])
+                )
                 attempt = {
                     **result,
                     "attempted_at": isoformat(current),
@@ -411,14 +515,16 @@ def run_once(
                 and (current - last_attempt_at).total_seconds() >= cooldown
             ):
                 incident["status"] = "escalation_pending"
-        elif not poll_failure_is_repairable(
-            failures
-        ) and incident.get("status") not in {
+        elif (
+            not poll_repairable
+            and not automation_repairable
+            and incident.get("status") not in {
             "handoff_pending",
             "claimed",
             "work_in_progress",
             "failed",
-        }:
+            }
+        ):
             incident["status"] = "escalation_pending"
 
         save_state(path, state)

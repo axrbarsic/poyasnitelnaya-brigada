@@ -111,6 +111,42 @@ class AutopilotSupervisorTests(unittest.TestCase):
         self.assertEqual(repair.call_count, 1)
         self.assertTrue(autopilot_supervisor.gate(self.config)["dispatch"])
 
+    def test_archived_heartbeat_target_is_repaired_without_model(self) -> None:
+        failure = self.check(
+            "automation.active_heartbeat_targets",
+            "fail",
+            details={
+                "targets": [
+                    {
+                        "automation_id": "mail",
+                        "thread_id": "archived-thread",
+                    }
+                ]
+            },
+        )
+        repair = {
+            "action": "unarchive_active_heartbeat_targets",
+            "success": True,
+            "results": [
+                {"thread_id": "archived-thread", "returncode": 0}
+            ],
+        }
+        with mock.patch.object(
+            autopilot_supervisor,
+            "unarchive_automation_targets",
+            return_value=repair,
+        ) as unarchive:
+            result = autopilot_supervisor.run_once(
+                self.config,
+                self.contract,
+                now=self.now,
+                checks=[failure],
+            )
+
+        unarchive.assert_called_once()
+        self.assertEqual(result["status"], "repair_observing")
+        self.assertFalse(result["model_wake_required"])
+
     def test_nonrepairable_failure_claims_once_and_closes_with_report(
         self,
     ) -> None:
