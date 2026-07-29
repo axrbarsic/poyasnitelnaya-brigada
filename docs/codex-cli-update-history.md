@@ -17,3 +17,17 @@
   восстанавливает соединения; усилены сетевые approvals, исправлено сохранение
   пользовательского ввода при прерывании MCP startup и подписаны bundled
   macOS helper binaries.
+
+## 2026-07-27T12:47:27.059597Z - 0.146.0-alpha.10.1 -> 0.146.0-alpha.12
+
+- Релиз: https://github.com/openai/codex/releases/tag/rust-v0.146.0-alpha.12
+- Проверка: `codex --version` и `codex doctor --summary` успешно.
+- Кратко: - Текст release notes для `0.146.0-alpha.12` не предоставлен.
+- Поэтому достоверно перечислить новые возможности и исправления невозможно.
+
+## 2026-07-28T06:48:30.896835Z - 0.146.0-alpha.12 -> 0.146.0-alpha.14
+
+- Релиз: https://github.com/openai/codex/releases/tag/rust-v0.146.0-alpha.14
+- Проверка: `codex --version` и `codex doctor --summary` успешно.
+- Кратко: - Текст release notes для версии 0.146.0-alpha.14 не предоставлен.
+- Поэтому достоверно перечислить новые возможности и исправления невозможно.

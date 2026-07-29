@@ -52,12 +52,12 @@ content decisions:
   pending and raises a throttled local alert.
 - One existing in-app Luna Low heartbeat calls `reserve-handoff`. Python first
   checks the canonical owner's durable rollout and requires its latest turn to
-  be terminal plus a one-minute quiet period. The relay then requires live
-  `status.type=idle` or `status.type=notLoaded` before sending one message. An
-  active interactive turn creates no reservation. A live thread read failure
-  or delivery failure releases the exact reservation with `release-handoff`,
-  so the queue waits instead of creating a parallel branch. A TTL reservation
-  blocks adjacent heartbeat runs from sending the same wake twice.
+  be terminal plus a one-minute quiet period. The relay then sends one direct
+  follow-up without a separate live status read. Codex queues or steers the
+  follow-up if a turn starts during delivery. A delivery failure releases the
+  exact reservation with `release-handoff`, so the queue waits instead of
+  creating a parallel branch. A TTL reservation and global owner claim block
+  adjacent heartbeat runs from creating concurrent Browser owners.
 - A model-free LaunchAgent archives completed service runs and recovers stale
   owner claims without creating another Codex task.
 - The supervisor may stop only a Desktop process that it launched itself, and
@@ -120,12 +120,11 @@ It does not:
 When Alex explicitly grants standing autopilot authority, a model-free
 LaunchAgent checks the durable queue. Only a ready queue starts Desktop when
 needed. One existing in-app Luna Low heartbeat sends a reserved wake to the
-persistent Sol High Browser owner through the Codex app thread API only while
-that canonical thread is inactive. Mobile Remote, local Desktop, and the
-automated Browser owner therefore take turns on one durable thread. The status
-read and message delivery are not one atomic Codex operation, so interactive
-messages from two screens must also be sent serially. Sol High remains the only
-publication brain.
+persistent Sol High Browser owner through the Codex app thread API after the
+durable terminal and quiet-period gate. Mobile Remote, local Desktop, and the
+automated Browser owner use one durable thread. If another turn starts during
+delivery, Codex queues or steers the follow-up, while the global owner claim
+still serializes publication. Sol High remains the only publication brain.
 
 With `mandatory_response_mode=true`, every eligible available event inside the
 requested lookback receives exactly one reply. Support, sarcasm, jokes, insults,
@@ -307,13 +306,10 @@ configuration and logs, and falls back to `/usr/bin/security` only when the
 helper is unavailable. Keychain is used only when no supported environment
 variable is present.
 
-Compile the helper locally before live use:
+Install the signed helper locally before live use:
 
 ```bash
-mkdir -p var
-xcrun swiftc -framework Security \
-  scripts/keychain_helper.swift \
-  -o var/keychain-helper
+scripts/install_keychain_helper.sh
 ```
 
 Store a token without putting it in process arguments:
@@ -323,11 +319,29 @@ printf '%s' "$X_BEARER_TOKEN" | \
   var/keychain-helper set axrbarsic-x-mention-watcher axrbarsic
 ```
 
-The helper also supports metadata-only verification:
+The helper supports presence checks:
 
 ```bash
 var/keychain-helper exists axrbarsic-x-mention-watcher axrbarsic
 ```
+
+Verify the Data Protection Keychain accessibility without printing the token:
+
+```bash
+var/keychain-helper is-after-first-unlock \
+  axrbarsic-x-mention-watcher axrbarsic
+```
+
+The installer builds an app-like helper, signs it with the configured Apple
+Development team, embeds a Mac provisioning profile, and verifies its
+Keychain access group and existing-item migration before atomically switching
+`var/keychain-helper`. On the first legacy migration, macOS may ask once for
+permission to let the signed helper read the old login-keychain item. Approve
+that system prompt: the token is not printed, the DP copy stays in Keychain,
+and later background reads do not require the prompt.
+The helper stores secrets in the macOS Data Protection Keychain as
+`AfterFirstUnlockThisDeviceOnly`. Add the Apple Account to Xcode before the
+first install. A standalone unsigned CLI cannot use this Keychain mode.
 
 `config.json`, `var/`, SQLite state, health files, queues, and secrets are
 excluded from Git.

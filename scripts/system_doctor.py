@@ -20,8 +20,9 @@ from pathlib import Path
 from typing import Any, Iterable
 
 try:
-    from scripts import personality_policy
+    from scripts import keychain_bundle, personality_policy
 except ModuleNotFoundError:
+    import keychain_bundle  # type: ignore[no-redef]
     import personality_policy  # type: ignore[no-redef]
 
 
@@ -701,9 +702,93 @@ def check_contract(
                 if helper_ok
                 else "Keychain helper отсутствует или не исполняем."
             ),
-            "Пересобери scripts/keychain_helper.swift в var/keychain-helper.",
+            "Выполни scripts/install_keychain_helper.sh.",
         )
     )
+    keychain_service = str(config.get("keychain_service", "")).strip()
+    keychain_account = str(config.get("keychain_account", "")).strip()
+    if (
+        sys.platform == "darwin"
+        and helper_ok
+        and keychain_service
+        and keychain_account
+    ):
+        try:
+            bundle_verification = keychain_bundle.verify_bundle(helper)
+            bundle_ok = bundle_verification.ok
+            bundle_details = {
+                "app_path": bundle_verification.app_path,
+                "bundle_id": bundle_verification.bundle_id,
+                "application_id": bundle_verification.application_id,
+                "profile_name": bundle_verification.profile_name,
+                "profile_expires_at": (
+                    bundle_verification.profile_expires_at
+                ),
+                "errors": list(bundle_verification.errors),
+            }
+        except Exception as error:
+            bundle_ok = False
+            bundle_details = {
+                "errors": [
+                    "verifier raised "
+                    + type(error).__name__
+                ]
+            }
+        checks.append(
+            Check(
+                "runtime.keychain_bundle",
+                "pass" if bundle_ok else "fail",
+                (
+                    "Keychain helper подписан и авторизован профилем."
+                    if bundle_ok
+                    else "Keychain helper не имеет валидного app-like bundle."
+                ),
+                "Добавь Apple Account в Xcode, затем выполни "
+                "scripts/install_keychain_helper.sh.",
+                bundle_details,
+            )
+        )
+        accessibility_ok = False
+        accessibility_details: dict[str, Any] = {
+            "bundle_verified": bundle_ok,
+        }
+        if bundle_ok:
+            try:
+                verified_helper = Path(
+                    bundle_verification.executable_path
+                )
+                accessibility = subprocess.run(
+                    [
+                        str(verified_helper),
+                        "is-after-first-unlock",
+                        keychain_service,
+                        keychain_account,
+                    ],
+                    check=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                accessibility_ok = accessibility.returncode == 0
+                accessibility_details["returncode"] = (
+                    accessibility.returncode
+                )
+            except (OSError, subprocess.SubprocessError) as error:
+                accessibility_details["error_class"] = type(error).__name__
+        checks.append(
+            Check(
+                "runtime.keychain_accessibility",
+                "pass" if accessibility_ok else "fail",
+                (
+                    "Bearer item имеет AfterFirstUnlock accessibility."
+                    if accessibility_ok
+                    else "AfterFirstUnlock accessibility не подтверждена."
+                ),
+                "Установи подписанный helper, разблокируй macOS один раз и "
+                "выполни ensure-after-first-unlock.",
+                accessibility_details,
+            )
+        )
 
     health_path = resolve_project_path(root, str(runtime["health_file"]))
     try:

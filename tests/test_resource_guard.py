@@ -25,10 +25,80 @@ class ResourceGuardTests(unittest.TestCase):
 
         self.assertEqual(sample.codex_rss_mb, 300.0)
         self.assertEqual(sample.renderer_count, 1)
+        self.assertEqual(sample.renderer_process_count, 1)
+        self.assertEqual(sample.renderer_rss_mb, 100.0)
         self.assertEqual(sample.node_repl_count, 1)
         self.assertEqual(sample.mcp_process_count, 1)
+        self.assertEqual(sample.node_repl_process_count, 1)
+        self.assertEqual(sample.mcp_raw_process_count, 1)
         self.assertEqual(sample.node_repl_rss_mb, 50.0)
         self.assertEqual(sample.mcp_process_rss_mb, 25.0)
+
+    def test_process_parser_uses_rss_weighted_renderer_equivalents(self) -> None:
+        output = "\n".join(
+            [
+                "2048 /Applications/ChatGPT.app/Contents/Frameworks/"
+                "Codex (Renderer).app/Contents/MacOS/"
+                "Codex (Renderer) --type=renderer",
+                "32768 /Applications/ChatGPT.app/Contents/Frameworks/"
+                "Codex (Renderer).app/Contents/MacOS/"
+                "Codex (Renderer) --type=renderer",
+            ]
+        )
+
+        sample = resource_guard.parse_processes(output)
+
+        self.assertEqual(sample.renderer_process_count, 2)
+        self.assertEqual(sample.renderer_count, 1)
+        self.assertEqual(sample.renderer_rss_mb, 34.0)
+
+    def test_process_parser_scales_renderer_equivalents_by_rss(self) -> None:
+        output = (
+            "614400 /Applications/ChatGPT.app/Contents/Frameworks/"
+            "Codex (Renderer).app/Contents/MacOS/"
+            "Codex (Renderer) --type=renderer"
+        )
+
+        sample = resource_guard.parse_processes(output)
+
+        self.assertEqual(sample.renderer_process_count, 1)
+        self.assertEqual(sample.renderer_count, 3)
+        self.assertEqual(sample.renderer_rss_mb, 600.0)
+
+    def test_process_parser_uses_rss_weighted_helper_equivalents(self) -> None:
+        output = "\n".join(
+            [
+                "1024 node /tmp/node_repl/server.js",
+                "1024 node /tmp/node_repl/server.js",
+                "1024 node /tmp/node_repl/server.js",
+                "2048 uv run mcp_server.py",
+                "2048 uv run mcp_server.py",
+            ]
+        )
+
+        sample = resource_guard.parse_processes(output)
+
+        self.assertEqual(sample.node_repl_process_count, 3)
+        self.assertEqual(sample.node_repl_count, 1)
+        self.assertEqual(sample.node_repl_rss_mb, 3.0)
+        self.assertEqual(sample.mcp_raw_process_count, 2)
+        self.assertEqual(sample.mcp_process_count, 1)
+        self.assertEqual(sample.mcp_process_rss_mb, 4.0)
+
+    def test_process_parser_scales_helper_equivalents_by_rss(self) -> None:
+        output = "\n".join(
+            [
+                "131072 node /tmp/node_repl/server.js",
+                "196608 uv run mcp_server.py",
+            ]
+        )
+
+        sample = resource_guard.parse_processes(output)
+
+        self.assertEqual(sample.node_repl_process_count, 1)
+        self.assertEqual(sample.node_repl_count, 2)
+        self.assertEqual(sample.mcp_raw_process_count, 1)
+        self.assertEqual(sample.mcp_process_count, 3)
 
     def test_assess_reports_only_exceeded_limits(self) -> None:
         sample = resource_guard.ResourceSample(
@@ -551,6 +621,10 @@ class ResourceGuardTests(unittest.TestCase):
             node_repl_count=3,
             mcp_process_count=4,
             free_percent=None,
+            renderer_process_count=8,
+            renderer_rss_mb=1400,
+            node_repl_process_count=7,
+            mcp_raw_process_count=9,
         )
         with (
             mock.patch(
@@ -566,6 +640,10 @@ class ResourceGuardTests(unittest.TestCase):
 
         fallback.assert_called_once_with()
         self.assertEqual(sample.codex_rss_mb, 1900)
+        self.assertEqual(sample.renderer_process_count, 8)
+        self.assertEqual(sample.renderer_rss_mb, 1400)
+        self.assertEqual(sample.node_repl_process_count, 7)
+        self.assertEqual(sample.mcp_raw_process_count, 9)
         self.assertIsNone(sample.free_percent)
 
     def test_collect_keeps_process_sample_if_memory_pressure_fails(self) -> None:

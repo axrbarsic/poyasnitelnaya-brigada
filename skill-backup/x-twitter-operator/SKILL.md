@@ -100,11 +100,10 @@ start, never the quality of Sol High reasoning or fact checking:
   chooses repair or X and returns one unambiguous `dispatch` plus `route`. Its
   model-free rollout guard requires the latest canonical owner task to be
   terminal plus a quiet period before creating a reservation. The relay must
-  then read the pinned Sol High owner thread and invoke
-  `send_message_to_thread` once only when
-  `status.type=idle` or `status.type=notLoaded`;
-- if the owner thread is active, cannot be read, or delivery fails, release only
-  that exact reservation with `release-handoff` and leave the queue pending;
+  invoke `send_message_to_thread` exactly once without a separate live owner
+  status read. Codex queues or steers a follow-up when a turn is active;
+- if delivery fails, release only that exact reservation with
+  `release-handoff` and leave the queue pending;
 - let the reservation suppress adjacent heartbeat ticks before the owner claim
   becomes visible;
 - never use the external app-server relay in production. It has no Codex
@@ -343,11 +342,11 @@ without supplying target IDs.
   existing in-app Luna heartbeat calls one `relay-reserve-handoff`. Python
   chooses repair or X and returns one unambiguous `dispatch` plus `route`.
   The command checks the durable owner rollout and quiet period without a
-  model. After a reservation, Luna verifies that the pinned owner thread has
-  `status.type=idle` or `status.type=notLoaded` and calls the direct Codex app
-  tool with `gpt-5.6-sol` and `high`. An unreadable live owner thread and a
-  delivery failure release the exact reservation without touching the queue.
-  The pinned Sol owner atomically claims the batch and executes the wake prompt.
+  model. After a reservation, Luna calls the direct Codex app tool exactly once
+  with `gpt-5.6-sol` and `high`, without a separate live status read. A
+  delivery failure releases the exact reservation without touching the queue.
+  The pinned Sol owner atomically claims the batch and executes the queued or
+  steered wake prompt.
 - In normal unattended idle, supervisor-owned Desktop is closed and Luna does
   not run. If Alex intentionally keeps Desktop open, the heartbeat still
   performs its small scheduled gate, but it never wakes Sol for an empty queue.

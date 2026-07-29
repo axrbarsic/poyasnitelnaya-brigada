@@ -14,8 +14,10 @@ drafts, posts, deletes, likes, follows, or changes X account state.
 
 - Keep the Bearer Token only in macOS Keychain under service
   `axrbarsic-x-mention-watcher` and account `axrbarsic`.
-- Prefer `var/keychain-helper`, compiled from
-  `scripts/keychain_helper.swift`, over the `security` CLI.
+- Prefer `var/keychain-helper`, installed by
+  `scripts/install_keychain_helper.sh`, over the `security` CLI. The helper
+  must resolve inside its signed app-like bundle and carry a valid Mac
+  provisioning profile for its Keychain access group.
 - Never print, log, screenshot, hash, measure, or place the token in argv.
 - `config.json`, `var/`, databases, queues, health files, and secrets are
   ignored by Git.
@@ -294,12 +296,12 @@ authority for queued eligible replies.
    Python chooses repair or X and returns one unambiguous `dispatch` plus
    `route`. Before creating a reservation, its model-free guard requires the
    latest canonical owner task to be terminal plus the configured quiet period.
-   The relay then reads the
-   pinned Sol High owner thread. It sends one direct `send_message_to_thread`
-   call only when `status.type=idle` or `status.type=notLoaded`.
-5. If the owner thread is active, cannot be read, or delivery fails, run
-   `scripts/autopilot_bridge.py release-handoff` with the exact reservation
-   token and finish without Browser. Leave the durable queue pending.
+   The relay sends one direct `send_message_to_thread` follow-up to the pinned
+   Sol High owner without a separate live status read. Codex queues or steers
+   the follow-up when a turn is active.
+5. If delivery fails, run `scripts/autopilot_bridge.py release-handoff` with
+   the exact reservation token and finish without Browser. Leave the durable
+   queue pending.
 6. Let the pinned owner atomically claim the queue with
    `scripts/autopilot_bridge.py claim`.
 7. Run the mechanical claim before loading X skills and references. If the

@@ -63,7 +63,7 @@ class Outcome:
 def combinations() -> Iterable[Combination]:
     keys = tuple(FACTOR_SPACE)
     for values in product(*(FACTOR_SPACE[key] for key in keys)):
-        yield Combination(**dict(zip(keys, values, strict=True)))
+        yield Combination(**dict(zip(keys, values)))
 
 
 def _reachable(case: Combination) -> bool:

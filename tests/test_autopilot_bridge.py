@@ -265,21 +265,17 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertTrue(result["dispatch"])
         self.assertEqual(result["status"], "handoff_reserved_ready")
 
-    def test_relay_prompt_accepts_only_known_inactive_live_states(self) -> None:
+    def test_relay_prompt_uses_direct_followup_without_live_read(self) -> None:
         prompt = (
             Path(__file__).resolve().parents[1]
             / "macos"
             / "x-relay.prompt.txt"
         ).read_text(encoding="utf-8")
 
-        self.assertIn(
-            "`thread.status.type` дословно равен `idle` или `notLoaded`",
-            prompt,
-        )
-        self.assertIn(
-            "При `active`, любом другом статусе или ошибке чтения",
-            prompt,
-        )
+        self.assertIn("прямой `codex_app.send_message_to_thread`", prompt)
+        self.assertIn("Не читай owner thread", prompt)
+        self.assertNotIn("codex_app.read_thread", prompt)
+        self.assertNotIn("owner_thread_not_idle", prompt)
 
     def test_relay_fails_closed_for_partial_owner_rollout(self) -> None:
         self.write_events([self.event()])

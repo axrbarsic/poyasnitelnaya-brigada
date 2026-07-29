@@ -22,6 +22,8 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterable
 
+from scripts import keychain_bundle
+
 
 SCHEMA_VERSION = 9
 TOKEN_ENV_NAMES = ("X_BEARER_TOKEN", "X_API_BEARER_TOKEN", "TWITTER_BEARER_TOKEN")
@@ -3984,8 +3986,21 @@ def bearer_token_with_source(config: Config) -> tuple[str, str]:
             if config.keychain_helper.is_file() and os.access(
                 config.keychain_helper, os.X_OK
             ):
+                try:
+                    verification = keychain_bundle.verify_bundle(
+                        config.keychain_helper
+                    )
+                except Exception as error:
+                    raise RuntimeError(
+                        "Unable to verify the configured Keychain helper"
+                    ) from error
+                if not verification.ok:
+                    raise RuntimeError(
+                        "Refusing an unverified Keychain helper"
+                    )
+                verified_helper = Path(verification.executable_path)
                 command = [
-                    str(config.keychain_helper),
+                    str(verified_helper),
                     "get",
                     config.keychain_service,
                     config.keychain_account,
@@ -4009,6 +4024,8 @@ def bearer_token_with_source(config: Config) -> tuple[str, str]:
                 text=True,
                 timeout=10,
             )
+        except RuntimeError:
+            raise
         except (OSError, subprocess.SubprocessError) as error:
             raise RuntimeError("Unable to read X API bearer token from Keychain") from error
         value = result.stdout.strip()

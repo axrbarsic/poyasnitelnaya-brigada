@@ -157,7 +157,12 @@ dirty, сначала сохранить и классифицировать и�
 - LaunchAgent перерендерить из `macos/*.plist.example` через
   `scripts/render_launchd.py`;
 - heartbeat восстановить только через официальный `automation_update`;
-- секрет X вернуть только в macOS Keychain;
+- подписанный app-like Keychain helper восстановить командой
+  `scripts/install_keychain_helper.sh`. Для первого выпуска нужен Apple Account
+  в Xcode и Mac provisioning profile. При миграции старого login-keychain item
+  один раз подтвердить системный запрос доступа macOS;
+- секрет X вернуть только через установленный helper в Data Protection
+  Keychain с `AfterFirstUnlockThisDeviceOnly`;
 - live SQLite вернуть из последнего валидного snapshot только после сохранения
   копии повреждённого файла.
 

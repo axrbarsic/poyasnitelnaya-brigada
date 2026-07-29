@@ -54,7 +54,8 @@ python3 evidence_import.py \
 - `~/.codex/skills/x-twitter-operator`, установленная рабочая копия skill;
 - `~/Library/LaunchAgents/com.axrbarsic.xmention.*.plist`, загруженные службы
   macOS;
-- macOS Keychain, где хранятся секреты;
+- macOS Data Protection Keychain, где хранятся секреты. Подписанный helper
+  собирается из `macos/XMentionKeychainHelper*` и устанавливается под `var/`;
 - отдельный archive vault для исходных ZIP-архивов X.
 
 Это не отдельные исходники проекта. Skill восстанавливается из

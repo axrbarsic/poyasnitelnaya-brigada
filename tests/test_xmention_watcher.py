@@ -3496,6 +3496,14 @@ class WatcherTests(unittest.TestCase):
 
     def test_native_keychain_helper_is_preferred_when_executable(self) -> None:
         helper = self.root / "keychain-helper"
+        verified_helper = (
+            self.root
+            / "signed"
+            / "XMentionKeychainHelper.app"
+            / "Contents"
+            / "MacOS"
+            / "XMentionKeychainHelper"
+        )
         helper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         helper.chmod(0o700)
         raw = json.loads(self.config.source_path.read_text(encoding="utf-8"))
@@ -3507,6 +3515,13 @@ class WatcherTests(unittest.TestCase):
         with (
             mock.patch.dict(os.environ, {}, clear=True),
             mock.patch(
+                "xmention_watcher.keychain_bundle.verify_bundle",
+                return_value=SimpleNamespace(
+                    ok=True,
+                    executable_path=str(verified_helper),
+                ),
+            ) as verify,
+            mock.patch(
                 "xmention_watcher.subprocess.run",
                 return_value=SimpleNamespace(stdout="helper-token\n"),
             ) as run,
@@ -3516,8 +3531,74 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(source, "keychain_helper")
         self.assertEqual(
             run.call_args.args[0],
-            [str(helper), "get", "test-service", "test-account"],
+            [
+                str(verified_helper),
+                "get",
+                "test-service",
+                "test-account",
+            ],
         )
+        verify.assert_called_once_with(helper)
+
+    def test_unverified_native_keychain_helper_is_never_executed(self) -> None:
+        helper = self.root / "keychain-helper"
+        marker = self.root / "helper-was-executed"
+        helper.write_text(
+            "#!/bin/sh\n"
+            f"touch '{marker}'\n",
+            encoding="utf-8",
+        )
+        helper.chmod(0o700)
+        raw = json.loads(self.config.source_path.read_text(encoding="utf-8"))
+        raw["keychain_helper"] = str(helper)
+        raw["keychain_service"] = "test-service"
+        raw["keychain_account"] = "test-account"
+        self.config.source_path.write_text(json.dumps(raw), encoding="utf-8")
+        configured = watcher.load_config(self.config.source_path)
+
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch(
+                "xmention_watcher.keychain_bundle.verify_bundle",
+                return_value=SimpleNamespace(ok=False),
+            ),
+            mock.patch("xmention_watcher.subprocess.run") as run,
+            self.assertRaisesRegex(
+                RuntimeError,
+                "Refusing an unverified Keychain helper",
+            ),
+        ):
+            watcher.bearer_token_with_source(configured)
+
+        run.assert_not_called()
+        self.assertFalse(marker.exists())
+
+    def test_keychain_helper_verifier_error_fails_closed(self) -> None:
+        helper = self.root / "keychain-helper"
+        helper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        helper.chmod(0o700)
+        raw = json.loads(self.config.source_path.read_text(encoding="utf-8"))
+        raw["keychain_helper"] = str(helper)
+        raw["keychain_service"] = "test-service"
+        raw["keychain_account"] = "test-account"
+        self.config.source_path.write_text(json.dumps(raw), encoding="utf-8")
+        configured = watcher.load_config(self.config.source_path)
+
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch(
+                "xmention_watcher.keychain_bundle.verify_bundle",
+                side_effect=ValueError("broken verifier"),
+            ),
+            mock.patch("xmention_watcher.subprocess.run") as run,
+            self.assertRaisesRegex(
+                RuntimeError,
+                "Unable to verify the configured Keychain helper",
+            ),
+        ):
+            watcher.bearer_token_with_source(configured)
+
+        run.assert_not_called()
 
     def test_preflight_reports_source_without_token_value(self) -> None:
         secret = "preflight-secret"

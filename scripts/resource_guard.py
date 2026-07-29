@@ -28,6 +28,8 @@ CODEX_MAIN_EXECUTABLES = (
     "/Applications/Codex.app/Contents/MacOS/Codex",
     "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
 )
+RENDERER_EQUIVALENT_RSS_KIB = 256 * 1024
+HELPER_EQUIVALENT_RSS_KIB = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -44,13 +46,18 @@ class ResourceSample:
     voice_input_pids: tuple[int, ...] = ()
     node_repl_rss_mb: float = 0.0
     mcp_process_rss_mb: float = 0.0
+    renderer_process_count: int = 0
+    renderer_rss_mb: float = 0.0
+    node_repl_process_count: int = 0
+    mcp_raw_process_count: int = 0
 
 
 def parse_processes(output: str) -> ResourceSample:
     codex_rss_kib = 0
-    renderer_count = 0
-    node_repl_count = 0
-    mcp_process_count = 0
+    renderer_process_count = 0
+    renderer_rss_kib = 0
+    node_repl_process_count = 0
+    mcp_raw_process_count = 0
     node_repl_rss_kib = 0
     mcp_process_rss_kib = 0
     for raw_line in output.splitlines():
@@ -64,17 +71,48 @@ def parse_processes(output: str) -> ResourceSample:
         if "(Renderer)" in command and any(
             marker in command for marker in CODEX_MARKERS
         ):
-            renderer_count += 1
+            renderer_process_count += 1
+            renderer_rss_kib += rss_kib
         if "node_repl" in command:
-            node_repl_count += 1
+            node_repl_process_count += 1
             node_repl_rss_kib += rss_kib
         if "mcp" in command.lower() and (
             "python" in command.lower()
             or "node" in command.lower()
             or "uv" in command.lower()
         ):
-            mcp_process_count += 1
+            mcp_raw_process_count += 1
             mcp_process_rss_kib += rss_kib
+    renderer_count = (
+        (
+            renderer_rss_kib
+            + RENDERER_EQUIVALENT_RSS_KIB
+            - 1
+        )
+        // RENDERER_EQUIVALENT_RSS_KIB
+        if renderer_process_count
+        else 0
+    )
+    node_repl_count = (
+        (
+            node_repl_rss_kib
+            + HELPER_EQUIVALENT_RSS_KIB
+            - 1
+        )
+        // HELPER_EQUIVALENT_RSS_KIB
+        if node_repl_process_count
+        else 0
+    )
+    mcp_process_count = (
+        (
+            mcp_process_rss_kib
+            + HELPER_EQUIVALENT_RSS_KIB
+            - 1
+        )
+        // HELPER_EQUIVALENT_RSS_KIB
+        if mcp_raw_process_count
+        else 0
+    )
     return ResourceSample(
         codex_rss_mb=round(codex_rss_kib / 1024, 1),
         renderer_count=renderer_count,
@@ -83,6 +121,10 @@ def parse_processes(output: str) -> ResourceSample:
         free_percent=None,
         node_repl_rss_mb=round(node_repl_rss_kib / 1024, 1),
         mcp_process_rss_mb=round(mcp_process_rss_kib / 1024, 1),
+        renderer_process_count=renderer_process_count,
+        renderer_rss_mb=round(renderer_rss_kib / 1024, 1),
+        node_repl_process_count=node_repl_process_count,
+        mcp_raw_process_count=mcp_raw_process_count,
     )
 
 
@@ -532,6 +574,10 @@ def collect() -> ResourceSample:
         voice_input_pids=voice_input_pids,
         node_repl_rss_mb=sample.node_repl_rss_mb,
         mcp_process_rss_mb=sample.mcp_process_rss_mb,
+        renderer_process_count=sample.renderer_process_count,
+        renderer_rss_mb=sample.renderer_rss_mb,
+        node_repl_process_count=sample.node_repl_process_count,
+        mcp_raw_process_count=sample.mcp_raw_process_count,
     )
 
 

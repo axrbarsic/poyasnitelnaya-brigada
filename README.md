@@ -54,13 +54,12 @@
    не снимает событие с очереди и вызывает локальное уведомление.
 7. Один существующий in-app heartbeat на Luna Low вызывает `reserve-handoff`.
    Python сначала проверяет durable rollout канонического owner и требует
-   завершения последнего turn с минутным quiet period. Затем relay проверяет
-   live `status.type=idle` или `status.type=notLoaded` и только после этого
-   отправляет одно сообщение.
-   Активный интерактивный turn не создает reservation. Ошибка live-чтения или
-   доставки освобождает точную reservation командой `release-handoff`, поэтому
-   очередь ждет без создания параллельной ветки. Reservation с TTL не позволяет
-   двум соседним heartbeat отправить одинаковый wake.
+   завершения последней durable задачи с минутным quiet period. Затем relay
+   отправляет ровно один direct follow-up в закреплённый owner thread без
+   отдельного live-чтения его статуса. Codex ставит follow-up в очередь или
+   направляет его в активный turn. Ошибка доставки освобождает точную
+   reservation командой `release-handoff`. Reservation с TTL и глобальный
+   owner claim не позволяют двум heartbeat создать двух Browser-owner.
 8. Sol High открывает живую ветку X, анализирует текст и изображения, проверяет
    первичные источники, историю диалога и отсутствие дубля.
 9. Короткий ответ пишет Sol High. Длинный follow-up может продолжаться только в
@@ -142,17 +141,38 @@ cp config.example.json config.json
 ```
 
 Укажите в `config.json` числовой X user ID. Токен не записывайте в файл.
-Сохраните его в macOS Keychain с помощью bundled helper:
+Добавьте Apple Account в Xcode. Затем соберите и установите подписанный
+app-like Keychain helper с Mac provisioning profile:
 
 ```bash
-mkdir -p var
-xcrun swiftc -framework Security \
-  scripts/keychain_helper.swift \
-  -o var/keychain-helper
+scripts/install_keychain_helper.sh
+```
 
+Сохраните Bearer Token через установленный helper:
+
+```bash
 printf '%s' "$X_BEARER_TOKEN" | \
   var/keychain-helper set axrbarsic-x-mention-watcher axrbarsic
 ```
+
+Helper сохраняет Bearer item в macOS Data Protection Keychain с доступностью
+`AfterFirstUnlockThisDeviceOnly`. После первого входа в macOS LaunchAgent
+продолжает читать его при заблокированном экране, но не получает доступ до
+первого входа после перезагрузки. Item не переносится на другое устройство.
+Старый login-keychain item мигрирует в DP-копию автоматически и не удаляется.
+Standalone CLI для этого недостаточен: Apple требует app-like bundle,
+подпись и provisioning profile, который разрешает Keychain access group.
+Installer проверяет подпись, entitlements, профиль, срок его действия и
+миграцию существующего item до атомарного переключения
+`var/keychain-helper`. При первой миграции macOS может один раз запросить
+разрешение подписанному helper на чтение старого login-keychain item. Разрешите
+доступ в системном окне: токен не выводится, DP-копия создаётся внутри
+Keychain, а последующие фоновые чтения обходятся без этого запроса. Это
+соответствует
+[`TN3137`](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)
+и рекомендациям Apple для
+[`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`](https://developer.apple.com/documentation/security/ksecattraccessibleafterfirstunlockthisdeviceonly)
+в фоновых процессах.
 
 Проверьте готовность и тесты:
 

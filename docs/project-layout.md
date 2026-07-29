@@ -54,7 +54,8 @@ Only required deployment points remain outside the directory:
 - `~/.codex/skills/x-twitter-operator`, the installed skill copy;
 - `~/Library/LaunchAgents/com.axrbarsic.xmention.*.plist`, the loaded macOS
   services;
-- macOS Keychain, which holds secrets;
+- macOS Data Protection Keychain, which holds secrets. Its signed helper bundle
+  is rebuilt from `macos/XMentionKeychainHelper*` and installed below `var/`;
 - a separate archive vault for original X archive ZIP files.
 
 These are not additional source trees. The skill is restored from

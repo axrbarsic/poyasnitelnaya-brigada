@@ -7,6 +7,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 import evidence_import
 import memory_snapshot
@@ -204,6 +205,30 @@ class ResticBackupTests(unittest.TestCase):
         self.assertTrue(payload["has_password"])
         self.assertNotIn("TOP_SECRET_RESTIC_PASSWORD", result.stdout)
         self.assertNotIn(str(self.root / "repo"), payload["argv"])
+
+    def test_unverified_keychain_helper_is_never_executed(self) -> None:
+        marker = self.root / "helper-was-executed"
+        self.helper.write_text(
+            "#!/bin/sh\n"
+            f"touch '{marker}'\n",
+            encoding="utf-8",
+        )
+
+        with (
+            mock.patch(
+                "restic_backup.keychain_bundle.verify_bundle",
+                return_value=mock.Mock(ok=False),
+            ),
+            mock.patch("restic_backup.subprocess.run") as run,
+            self.assertRaisesRegex(
+                ValueError,
+                "Refusing an unverified Keychain helper",
+            ),
+        ):
+            restic_backup.load_credentials(self.settings)
+
+        run.assert_not_called()
+        self.assertFalse(marker.exists())
 
     def test_failure_state_is_secret_free_and_atomic(self) -> None:
         credentials = restic_backup.ResticCredentials(

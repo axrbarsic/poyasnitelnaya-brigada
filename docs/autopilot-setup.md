@@ -17,9 +17,10 @@ The system separates token-free mechanics from content decisions:
 5. A ready queue starts Codex Desktop in the canonical workspace when the app
    is closed. Failure keeps the queue intact, retries later, and alerts Alex.
 6. One existing in-app Luna Low heartbeat checks a durable repair incident
-   before the X queue, runs the matching `reserve-handoff`, reads the canonical
-   owner thread, then makes exactly one `send_message_to_thread` call only when
-   that thread is inactive.
+   before the X queue and runs the matching `reserve-handoff`. After the
+   durable rollout and quiet-period guard, it makes exactly one direct
+   `send_message_to_thread` call. Codex queues or steers the follow-up if a
+   turn is active.
 7. The pinned Sol High task claims atomically, restores the live thread,
    publishes, and stores exact history.
 8. The supervisor may later stop only a Desktop process it launched itself.
@@ -118,11 +119,13 @@ heartbeat attached to one existing Luna Low thread, not a standalone
 automation. `reserve-handoff` does not claim X events, but prevents duplicate
 wake delivery for 180 seconds. Before creating a reservation, it reads the
 owner's durable rollout, requires the latest task to be terminal, and enforces
-`command_center_idle_grace_seconds`. The relay then reads the live owner thread
-and sends only when `status.type=idle` or `status.type=notLoaded`. On a live
-read failure or delivery failure, it runs `release-handoff` with the exact
+`command_center_idle_grace_seconds`. A live owner-thread read is not a
+prerequisite for delivery. The relay sends exactly one direct follow-up to the
+pinned thread, and Codex queues or steers that follow-up when a turn is already
+active. On a delivery failure, it runs `release-handoff` with the exact
 reservation token. A successful owner claim changes the reservation to
-`claimed`. The restorable heartbeat prompt is tracked in
+`claimed`. Atomic reservation plus the global owner claim prevent concurrent
+Browser owners. The restorable heartbeat prompt is tracked in
 [`macos/x-relay.prompt.txt`](../macos/x-relay.prompt.txt).
 
 A reply posted manually by Alex is an `alex` turn. If somebody answers it, the
@@ -172,12 +175,12 @@ dispatcher, then delete it through the official `automation_update` API.
    with an exact `route`. It returns `owner_thread_active` or
    `owner_thread_cooldown` without a reservation while the canonical command
    center is active or inside its quiet period.
-6. The winning relay reads the exact live Browser owner thread. It sends one message
-   with a Sol High override only when `status.type=idle` or
-   `status.type=notLoaded`.
-7. If the owner thread is active, cannot be read, or delivery fails, the relay
-   runs `release-handoff` with its exact reservation token and exits. The queue
-   remains pending. An adjacent heartbeat receives `handoff_reserved`.
+6. The winning relay sends one direct message with a Sol High override. It
+   does not perform a separate live owner-thread read.
+7. If delivery fails, the relay runs `release-handoff` with its exact
+   reservation token and exits. The queue remains pending. An adjacent
+   heartbeat receives `handoff_reserved`, and the global owner claim prevents
+   concurrent Browser owners.
 8. The Browser owner runs `claim`, then `started`.
 9. The owner loads `x-twitter-operator`, opens the minimum tabs, performs double
    dedupe, and executes the publication transaction.
@@ -193,16 +196,22 @@ dispatcher, then delete it through the official `automation_update` API.
 - Only Sol High makes publication decisions and writes short replies.
 - Luna never analyzes X content or drafts responses.
 - The resource guard pauses Browser work without deleting queued events.
+- Renderer limits use 256 MiB RSS equivalents, while the raw process count and
+  total renderer RSS remain visible. Cached lightweight renderer processes do
+  not block Browser work merely because a Codex release creates more of them.
+- `node_repl_count` and `mcp_process_count` use 64 MiB RSS equivalents.
+  Their raw counts remain visible as `node_repl_process_count` and
+  `mcp_raw_process_count`, so idle helper shells cannot exhaust the limits.
 - An active voice conversation selects the efficiency profile and holds a
   post-voice pause.
 - Display lock is not an error. On an awake Mac, the owner performs one
   read-only Browser preflight and continues when `iab` is available.
 - The handoff reservation and global owner lease prevent overlapping relay and
   Browser-owner runs.
-- The relay never wakes an active canonical owner thread. Mobile Remote, local
-  Desktop, and automated Browser work use that durable thread serially. Because
-  the thread status read and message delivery are separate Codex operations,
-  interactive sends from two clients must also be serialized.
+- Python creates no reservation while the durable canonical owner is active.
+  If another turn starts during delivery, Codex queues or steers the direct
+  follow-up. Mobile Remote, local Desktop, and automated Browser work use the
+  same durable thread, while the global owner claim serializes publication.
 - The janitor never terminates the current Browser owner or an ambiguous
   process.
 

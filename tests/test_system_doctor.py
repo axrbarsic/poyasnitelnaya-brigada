@@ -190,6 +190,98 @@ class SystemDoctorTests(unittest.TestCase):
         failures = [check for check in checks if check.status == "fail"]
         self.assertEqual(failures, [])
 
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_locked_keychain_accessibility_fails(
+        self,
+        _git_origin: mock.Mock,
+    ) -> None:
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["keychain_service"] = "test-service"
+        config["keychain_account"] = "test-account"
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        helper = self.root / "var" / "keychain-helper"
+        marker = self.root / "helper-was-executed"
+        helper.write_text(
+            "#!/bin/sh\n"
+            f"touch '{marker}'\n"
+            "exit 2\n",
+            encoding="utf-8",
+        )
+        helper.chmod(0o755)
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        accessibility = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.keychain_accessibility"
+        )
+        self.assertEqual(accessibility.status, "fail")
+        self.assertIn("ensure-after-first-unlock", accessibility.repair)
+        bundle = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.keychain_bundle"
+        )
+        self.assertEqual(bundle.status, "fail")
+        self.assertFalse(marker.exists())
+
+    @mock.patch(
+        "scripts.system_doctor.keychain_bundle.verify_bundle",
+    )
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_signed_keychain_bundle_and_accessibility_pass(
+        self,
+        _git_origin: mock.Mock,
+        _verify_bundle: mock.Mock,
+    ) -> None:
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["keychain_service"] = "test-service"
+        config["keychain_account"] = "test-account"
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        helper = self.root / "var" / "keychain-helper"
+        _verify_bundle.return_value = (
+            system_doctor.keychain_bundle.BundleVerification(
+                ok=True,
+                app_path="/tmp/XMentionKeychainHelper.app",
+                executable_path=str(helper.resolve()),
+                bundle_id="com.axrbarsic.xmention.keychain-helper",
+                application_id=(
+                    "J6MW4855LU.com.axrbarsic.xmention.keychain-helper"
+                ),
+                profile_name="Mac Team Provisioning Profile",
+                profile_expires_at="2027-01-01T00:00:00+00:00",
+                errors=(),
+            )
+        )
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        statuses = {
+            check.identifier: check.status
+            for check in checks
+            if check.identifier.startswith("runtime.keychain_")
+        }
+        self.assertEqual(statuses["runtime.keychain_helper"], "pass")
+        self.assertEqual(statuses["runtime.keychain_bundle"], "pass")
+        self.assertEqual(statuses["runtime.keychain_accessibility"], "pass")
+
     def prepare_degraded_poll(
         self,
         *,

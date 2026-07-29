@@ -21,6 +21,13 @@
 - [x] Regenerate the existing Bearer Token only after explicit approval because
   X warns that the old token will be invalidated.
 - [x] Put the bearer token in macOS Keychain, never in the repository.
+- [x] Install the signed app-like Keychain helper with a Mac provisioning
+  profile that authorizes its Keychain access group.
+- [x] Store the bearer item in the macOS Data Protection Keychain as
+  `AfterFirstUnlockThisDeviceOnly` so the poll LaunchAgent keeps working after
+  the screen is locked without migrating the token to another device.
+- [x] Lock the screen and prove that the helper, poll LaunchAgent, and doctor
+  stay healthy without an authentication prompt.
 - [x] Configure the numeric X user ID.
 - [x] Start with a new empty shadow database.
 - [x] Run one live baseline poll and compare relevant IDs with the manual

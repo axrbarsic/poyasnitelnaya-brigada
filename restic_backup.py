@@ -22,6 +22,7 @@ from urllib.parse import urlsplit
 import evidence_import
 import memory_snapshot
 import xmention_watcher as watcher
+from scripts import keychain_bundle
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -523,11 +524,24 @@ def _keychain(
     return value
 
 
-def check_keychain_contract(settings: BackupSettings) -> dict[str, Any]:
+def verify_keychain_helper(settings: BackupSettings) -> None:
     if not settings.keychain_helper.is_file() or not os.access(
-        settings.keychain_helper, os.X_OK
+        settings.keychain_helper,
+        os.X_OK,
     ):
         raise ValueError("Bundled Keychain helper is unavailable")
+    try:
+        verification = keychain_bundle.verify_bundle(
+            settings.keychain_helper
+        )
+    except Exception as error:
+        raise ValueError("Keychain helper verification failed") from error
+    if not verification.ok:
+        raise ValueError("Refusing an unverified Keychain helper")
+
+
+def check_keychain_contract(settings: BackupSettings) -> dict[str, Any]:
+    verify_keychain_helper(settings)
     checked: list[str] = []
     for account in KEYCHAIN_ACCOUNTS.values():
         _keychain(
@@ -545,6 +559,7 @@ def check_keychain_contract(settings: BackupSettings) -> dict[str, Any]:
 
 
 def load_credentials(settings: BackupSettings) -> ResticCredentials:
+    verify_keychain_helper(settings)
     values = {
         name: _keychain(
             settings.keychain_helper,

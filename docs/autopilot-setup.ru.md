@@ -19,8 +19,9 @@
    Alex получает локальное уведомление.
 6. Одна существующая in-app heartbeat-сессия на Luna Low выполняет один
    `relay-reserve-handoff`. Python сам проверяет durable repair incident, затем
-   X queue и возвращает единственный маршрут. Luna читает канонический owner
-   thread и делает один `send_message_to_thread` только при неактивном thread.
+   X queue и возвращает единственный маршрут. После проверки durable rollout и
+   quiet period Luna делает один direct `send_message_to_thread`. Codex ставит
+   follow-up в очередь или направляет его в активный turn.
 7. Закрепленная сессия Sol High атомарно делает `claim`, восстанавливает живую
    ветку, публикует и сохраняет точную историю.
 8. После завершения supervisor может закрыть только тот Desktop, который
@@ -121,11 +122,13 @@ High. `x-relay` является heartbeat одной существующей L
 standalone automation. `reserve-handoff` не claim события, но атомарно блокирует
 повторную отправку wake на 180 секунд. До создания reservation команда читает
 durable rollout owner, требует terminal-состояние последней задачи и выдерживает
-`command_center_idle_grace_seconds`. Затем relay читает live owner thread и
-отправляет wake только при `status.type=idle` или `status.type=notLoaded`. При
-ошибке live-чтения или доставки он выполняет `release-handoff` с точным
-reservation token. Успешный owner claim переводит reservation в состояние
-`claimed`. Восстановимый prompt heartbeat хранится в
+`command_center_idle_grace_seconds`. Relay не читает live owner thread как
+дополнительный gate. Он отправляет ровно один direct follow-up в закреплённый
+thread, а Codex ставит его в очередь или
+направляет в активный turn. При ошибке доставки relay выполняет
+`release-handoff` с точным reservation token. Успешный owner claim переводит
+reservation в состояние `claimed`. Atomic reservation и глобальный owner claim
+не допускают двух Browser-owner. Восстановимый prompt heartbeat хранится в
 [`macos/x-relay.prompt.txt`](../macos/x-relay.prompt.txt).
 
 Ручной ответ Alex считается ходом `alex`. Если на него отвечают, Browser owner
@@ -179,12 +182,12 @@ scheduled run создает отдельную задачу и может ос�
    единственный `dispatch` вместе с точным `route`. Пока канонический командный
    центр активен или находится внутри quiet period, команда возвращает
    `owner_thread_active` или `owner_thread_cooldown` без reservation.
-7. Победивший relay читает точный live Browser owner thread и делает один
-   `send_message_to_thread` с override Sol High только при `status.type=idle`
-   или `status.type=notLoaded`.
-8. При активном thread, ошибке чтения или ошибке доставки relay выполняет
-   `release-handoff` со своим точным reservation token и завершается. Очередь
-   остается pending. Соседний heartbeat получает `handoff_reserved`.
+7. Победивший relay делает один direct `send_message_to_thread` с override Sol
+   High без отдельного live-чтения owner thread.
+8. При ошибке доставки relay выполняет `release-handoff` со своим точным
+   reservation token и завершается. Очередь остается pending. Соседний
+   heartbeat получает `handoff_reserved`, а глобальный owner claim не допускает
+   двух Browser-owner.
 9. Repair owner выполняет doctor claim и started, чинит минимально и закрывает
    incident только после нулевого FAIL и отчета. X owner выполняет X claim и
    started.
@@ -202,16 +205,23 @@ scheduled run создает отдельную задачу и может ос�
 - Только Sol High принимает публикационные решения и пишет short.
 - Luna не анализирует X и не формулирует ответы.
 - Ресурсный guard ставит Browser на паузу, но не удаляет очередь.
+- Лимиты renderer считаются эквивалентами по 256 МиБ RSS, при этом сырое
+  количество процессов и суммарный renderer RSS остаются видимыми. Легкие
+  кэшированные renderer не блокируют Browser только из-за изменений
+  внутренней архитектуры Codex.
+- `node_repl_count` и `mcp_process_count` считаются эквивалентами по 64 МиБ
+  RSS. Сырые количества остаются видны как `node_repl_process_count` и
+  `mcp_raw_process_count`, поэтому пустые helper-процессы не исчерпывают лимиты.
 - Активный голосовой разговор включает экономный режим и удерживает паузу.
 - Блокировка дисплея не является ошибкой. При awake Mac owner выполняет один
   read-only Browser preflight и продолжает, если `iab` доступен.
 - `reserve-handoff` и глобальный owner lease предотвращают перекрывающиеся
   relay и Browser-owner запуски.
-- Relay никогда не будит активный канонический owner thread. Mobile Remote,
-  локальный Desktop и автоматический Browser owner используют один durable
-  thread последовательно. Поскольку чтение статуса и доставка сообщения
-  являются разными операциями Codex, интерактивные сообщения с двух клиентов
-  также нельзя отправлять одновременно.
+- Python не создает reservation, пока durable канонический owner активен. Если
+  другой turn начался во время доставки, Codex ставит direct follow-up в
+  очередь или направляет его в активный turn. Mobile Remote, локальный Desktop
+  и автоматический Browser owner используют один durable thread, а глобальный
+  owner claim сериализует публикацию.
 - Janitor не должен убивать текущий Browser owner или неоднозначный процесс.
 
 ## Живой canary

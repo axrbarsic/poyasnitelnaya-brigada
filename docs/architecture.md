@@ -34,12 +34,13 @@ an X reply.
     one reservation, and returns one unambiguous `dispatch` plus `route`.
     Before creating a reservation, Python reads the canonical owner's durable
     rollout, requires the latest task to be terminal, and enforces a one-minute
-    quiet period. The relay then reads the pinned Sol High Browser-owner thread
-    and sends one `send_message_to_thread` call only when
-    `status.type=idle` or `status.type=notLoaded`. If the live thread cannot be
-    read or delivery fails, the relay runs `release-handoff` with its exact
-    reservation token and exits. The durable queue remains pending, and
-    adjacent heartbeat ticks cannot hand off the same queue.
+    quiet period. The relay then sends one direct `send_message_to_thread`
+    follow-up to the pinned Sol High Browser-owner without a separate live
+    status read. Codex queues or steers the follow-up when a turn is active.
+    If delivery fails, the relay runs `release-handoff` with its exact
+    reservation token and exits. The durable queue remains pending. Atomic
+    reservation and the global owner claim prevent adjacent heartbeat ticks
+    from creating concurrent Browser owners.
 11. The pinned task executes the atomic claim inside Codex Desktop and remains
     the only authenticated Browser publication owner. After the queue is empty,
     the supervisor may close only the exact Desktop PID that it launched.
@@ -174,7 +175,11 @@ contradiction claim, or factual conclusion.
 
 ## Failure containment
 
-- API credentials come from an environment variable or macOS Keychain.
+- API credentials come from an environment variable or macOS Data Protection
+  Keychain. The production helper runs from a signed app-like bundle with a
+  Mac provisioning profile and uses
+  `AfterFirstUnlockThisDeviceOnly`, so the user LaunchAgent can poll while the
+  display is locked after the first login.
 - Credentials, SQLite, queue, health, alerts, and logs are excluded from Git.
 - An API error never advances `since_id`.
 - A duplicate API response never creates a duplicate queue item.
@@ -194,9 +199,10 @@ contradiction claim, or factual conclusion.
   by Alex.
 - A short handoff reservation closes the race between adjacent heartbeat
   ticks before the Browser owner can acquire its global claim.
-- The relay never wakes an active canonical owner thread. Mobile Remote, local
-  Desktop, and automated Browser work are serialized on the same durable
-  thread. Since the Codex thread status read and message delivery are separate
+- The relay uses durable rollout, a quiet period, an atomic reservation, and
+  the global owner claim before direct delivery. Mobile Remote, local Desktop,
+  and automated Browser work are serialized on the same durable thread. Since
+  the Codex rollout read and message delivery are separate
   operations, operators must also avoid simultaneous interactive sends from
   two clients.
 - An IAB timeout is classified per execution turn. One fresh turn in the same
