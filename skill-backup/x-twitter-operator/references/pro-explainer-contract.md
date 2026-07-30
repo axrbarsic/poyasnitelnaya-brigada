@@ -84,6 +84,13 @@ python3 <x-twitter-operator-dir>/scripts/validate_reply.py \
 После заполнения X composer повторить ту же проверку по фактическому DOM value.
 Composer обязан совпадать с validated source byte-for-byte.
 
+Для DraftJS composer фактическое значение восстанавливается из упорядоченных
+элементов `[data-block="true"]`: взять `textContent` каждого блока и соединить
+блоки одним литеральным `\n`. Raw `innerText` не использовать, потому что он
+может добавить служебный перенос между блоками и ложно превратить точные 4000
+code points в 4005. В evidence записать block count, code points, exact match и
+проверку запрещённых символов.
+
 ## Publication transaction
 
 Непосредственно перед публикацией:

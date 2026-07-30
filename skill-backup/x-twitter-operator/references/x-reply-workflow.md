@@ -148,6 +148,10 @@ Before filling a local «Пояснительная бригада» reply:
 After filling:
 
 - read the actual textbox value from the DOM;
+- for X DraftJS, reconstruct that value from ordered
+  `[data-block="true"]` elements by joining each block's `textContent` with
+  one literal `\n`; never use raw `innerText`, which adds presentation-only
+  newlines between blocks;
 - count its Unicode code points;
 - scan again for forbidden characters;
 - confirm line breaks are preserved when relevant;

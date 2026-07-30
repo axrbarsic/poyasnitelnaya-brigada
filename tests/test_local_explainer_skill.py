@@ -24,6 +24,9 @@ VALIDATOR = (
     / "scripts"
     / "validate_reply.py"
 )
+X_OPERATOR_SKILL = (
+    ROOT / "skill-backup" / "x-twitter-operator" / "SKILL.md"
+)
 
 
 class LocalExplainerSkillTests(unittest.TestCase):
@@ -40,6 +43,15 @@ class LocalExplainerSkillTests(unittest.TestCase):
         self.assertIn("--exact 4000", skill)
         self.assertIn("Never open ChatGPT or the custom GPT", skill)
         self.assertIn("ровно 4000 Unicode code points", interface)
+
+    def test_x_operator_uses_draftjs_block_value_for_composer_gate(
+        self,
+    ) -> None:
+        skill = X_OPERATOR_SKILL.read_text(encoding="utf-8")
+
+        self.assertIn('data-block="true"', skill)
+        self.assertIn("`innerText`", skill)
+        self.assertIn("presentation-only extra newline", skill)
 
     def test_validator_accepts_only_exactly_4000_code_points(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

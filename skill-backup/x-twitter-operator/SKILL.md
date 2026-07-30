@@ -257,6 +257,14 @@ The validator rejects literal U+2014, U+2013, non-breaking spaces, zero-width ch
 
 After filling the actual X composer, read its DOM value and repeat the length and forbidden-character checks on that value. Source validation alone is not sufficient because paste and rich text handling can change content.
 
+For the X DraftJS contenteditable composer, the canonical DOM value is the
+ordered sequence of elements with `data-block="true"`: take each block's
+`textContent` and join the blocks with one literal `\n`. Do not validate raw
+`innerText`, because it can insert a presentation-only extra newline between
+DraftJS blocks and falsely turn an exact 4000-code-point draft into 4005.
+Record the block count, reconstructed code-point count, exact source match,
+and forbidden-character scan in evidence.
+
 ## Пояснительная бригада
 
 Use the local `poyasnitelnaya-brigada` skill only for `pro` targets.
