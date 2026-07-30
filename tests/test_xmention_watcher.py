@@ -2149,7 +2149,7 @@ class WatcherTests(unittest.TestCase):
                 invalid,
             )
 
-    def test_verified_pro_branch_requeues_model_blocker_without_event_id(
+    def test_local_skill_requeues_legacy_model_blocker_without_migration(
         self,
     ) -> None:
         chain_id = "2078353040654938170"
@@ -2158,10 +2158,6 @@ class WatcherTests(unittest.TestCase):
         source_url = (
             "https://chatgpt.com/g/g-example-poiasnitelnaia/"
             "c/legacy-conversation"
-        )
-        target_url = (
-            "https://chatgpt.com/g/g-example-poiasnitelnaia/"
-            "c/pro-conversation"
         )
         pro_config = replace(
             self.config,
@@ -2212,23 +2208,6 @@ class WatcherTests(unittest.TestCase):
             reply_url=None,
             blocker_code="required_pro_model_unavailable",
         )
-        watcher.import_chatgpt_conversation_migration(
-            self.connection,
-            {
-                "snapshot_type": "chatgpt_conversation_migration",
-                "chain_id": chain_id,
-                "source_chatgpt_conversation_url": source_url,
-                "target_chatgpt_conversation_url": target_url,
-                "source_model": "GPT-5.5",
-                "target_model": "ChatGPT 5.6 Pro",
-                "branch_from_status_id": parent_status_id,
-                "method": "branch_in_new_chat",
-                "reason": "Legacy conversation is pinned to an older model",
-                "evidence": ["verified Browser branch"],
-                "verified_at": "2026-07-29T16:00:00Z",
-            },
-        )
-
         preview = watcher.requeue_recovered_pro_model_blockers(
             pro_config,
             self.connection,
@@ -2266,7 +2245,7 @@ class WatcherTests(unittest.TestCase):
         ).fetchone()
         self.assertEqual(
             audit["reason"],
-            "verified_chatgpt_5_6_pro_branch_recovery",
+            "local_poyasnitelnaya_brigada_skill_recovery",
         )
 
     def test_legacy_blocked_resolution_requires_audited_code_revision(

@@ -339,11 +339,11 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
                 )
                 if (
                     requeue_reason
-                    == "verified_chatgpt_5_6_pro_branch_recovery"
+                    == "local_poyasnitelnaya_brigada_skill_recovery"
                 ):
                     revision_reason = (
-                        "Verified official ChatGPT 5.6 Pro branch restored "
-                        "the mandatory Pro dependency"
+                        "The local poyasnitelnaya-brigada skill removed "
+                        "the legacy ChatGPT dependency"
                     )
                 else:
                     revision_reason = (

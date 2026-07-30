@@ -38,17 +38,40 @@ class ProjectLayoutAuditTests(unittest.TestCase):
             installed = base / "installed-skill"
             installed.mkdir()
             (installed / "SKILL.md").write_text("skill\n", encoding="utf-8")
+            generation_installed = base / "installed-generation-skill"
+            generation_installed.mkdir()
+            (generation_installed / "SKILL.md").write_text(
+                (
+                    root
+                    / "skill-backup/poyasnitelnaya-brigada/SKILL.md"
+                ).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (generation_installed / "agents").mkdir()
+            (
+                generation_installed / "agents" / "openai.yaml"
+            ).write_text(
+                (
+                    root
+                    / "skill-backup/poyasnitelnaya-brigada/agents/openai.yaml"
+                ).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
 
             result = project_layout_audit.audit_layout(
                 root=root,
                 config_path=config,
                 installed_skill=installed,
+                installed_generation_skill=generation_installed,
                 require_installed_skill=True,
             )
 
             self.assertTrue(result["complete"])
             self.assertTrue(result["browser_owner_cwd_ok"])
             self.assertTrue(result["installed_skill_matches"])
+            self.assertTrue(
+                result["installed_generation_skill_matches"]
+            )
 
     def test_rejects_external_browser_workspace_and_skill_drift(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -58,22 +81,38 @@ class ProjectLayoutAuditTests(unittest.TestCase):
             installed = base / "installed-skill"
             installed.mkdir()
             (installed / "SKILL.md").write_text("different\n", encoding="utf-8")
+            generation_installed = base / "installed-generation-skill"
+            generation_installed.mkdir()
+            (generation_installed / "SKILL.md").write_text(
+                "different\n", encoding="utf-8"
+            )
 
             result = project_layout_audit.audit_layout(
                 root=root,
                 config_path=config,
                 installed_skill=installed,
+                installed_generation_skill=generation_installed,
                 require_installed_skill=True,
             )
 
             self.assertFalse(result["complete"])
             self.assertFalse(result["browser_owner_cwd_ok"])
             self.assertFalse(result["installed_skill_matches"])
+            self.assertFalse(
+                result["installed_generation_skill_matches"]
+            )
             self.assertIn(
                 "browser_owner_cwd_outside_canonical_root",
                 result["errors"],
             )
             self.assertIn(
                 "installed_skill_differs_from_repository_backup",
+                result["errors"],
+            )
+            self.assertIn(
+                (
+                    "installed_generation_skill_differs_from_"
+                    "repository_backup"
+                ),
                 result["errors"],
             )

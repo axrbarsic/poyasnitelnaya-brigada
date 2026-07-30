@@ -14,6 +14,7 @@
     "scripts/autopilot_state_model.py",
     "scripts/autopilot_supervisor.py",
     "scripts/event_dispatch.py",
+    "scripts/outbound_cycle.py",
     "scripts/install_keychain_helper.sh",
     "scripts/keychain_bundle.py",
     "macos/XMentionKeychainHelper/main.swift",
@@ -31,13 +32,16 @@
     "scripts/lightpanda_mcp.py",
     "docs/lightpanda-integration.ru.md",
     "skill-backup/x-twitter-operator/SKILL.md",
-    "macos/x-relay.prompt.txt"
+    "skill-backup/poyasnitelnaya-brigada/SKILL.md",
+    "skill-backup/poyasnitelnaya-brigada/agents/openai.yaml",
+    "macos/x-relay.prompt.txt",
+    "macos/x-15.prompt.txt"
   ],
   "threads": {
     "browser_owner": {
       "id": "019fa129-0483-7f20-ad9e-06c966d41df3",
       "model": "gpt-5.6-sol",
-      "minimum_reasoning_effort": "high",
+      "minimum_reasoning_effort": "max",
       "cwd": "/Users/alexlane/Developer/x-mention-watcher",
       "must_be_unarchived": true,
       "pin_recommended": true
@@ -57,6 +61,21 @@
       "rrule": "FREQ=MINUTELY;INTERVAL=1",
       "target_thread_id": "019f9d46-67b0-72c1-aca6-406af579d5fa",
       "prompt_source": "macos/x-relay.prompt.txt"
+    },
+    "outbound_local_skill": {
+      "id": "x-15",
+      "kind": "cron",
+      "status": "ACTIVE",
+      "rrule": "FREQ=MINUTELY;INTERVAL=15",
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "max",
+      "execution_environment": "local",
+      "prompt_source": "macos/x-15.prompt.txt"
+    },
+    "retired_outbound_heartbeat": {
+      "id": "x-pro-15",
+      "kind": "heartbeat",
+      "status": "PAUSED"
     },
     "retired_dispatcher": {
       "id": "x",
@@ -94,10 +113,20 @@
       "healthy_silence_review"
     ]
   },
-  "skill": {
-    "source": "skill-backup/x-twitter-operator",
-    "installed": ".codex/skills/x-twitter-operator"
-  },
+  "skills": [
+    {
+      "id": "x_skill",
+      "display_name": "X skill",
+      "source": "skill-backup/x-twitter-operator",
+      "installed": ".codex/skills/x-twitter-operator"
+    },
+    {
+      "id": "poyasnitelnaya_brigada_skill",
+      "display_name": "skill «Пояснительная бригада»",
+      "source": "skill-backup/poyasnitelnaya-brigada",
+      "installed": ".codex/skills/poyasnitelnaya-brigada"
+    }
+  ],
   "personality": {
     "tracked_policy": "personality/policy.json",
     "runtime_overrides": "var/personality-overrides.json"

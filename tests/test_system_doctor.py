@@ -73,6 +73,17 @@ class SystemDoctorTests(unittest.TestCase):
         installed_skill = self.home / ".codex" / "skills" / "x"
         installed_skill.mkdir(parents=True)
         (installed_skill / "SKILL.md").write_text("same\n", encoding="utf-8")
+        (self.root / "generation-skill-source").mkdir()
+        (self.root / "generation-skill-source" / "SKILL.md").write_text(
+            "generation\n", encoding="utf-8"
+        )
+        installed_generation_skill = (
+            self.home / ".codex" / "skills" / "generation"
+        )
+        installed_generation_skill.mkdir(parents=True)
+        (installed_generation_skill / "SKILL.md").write_text(
+            "generation\n", encoding="utf-8"
+        )
         state_dir = self.home / ".codex"
         state_dir.mkdir(exist_ok=True)
         state = state_dir / "state_1.sqlite"
@@ -165,10 +176,20 @@ class SystemDoctorTests(unittest.TestCase):
                 "healthy_statuses": ["healthy"],
                 "event_dispatch_launchagent_label": "agent",
             },
-            "skill": {
-                "source": "skill-source",
-                "installed": ".codex/skills/x",
-            },
+            "skills": [
+                {
+                    "id": "x_skill",
+                    "display_name": "X skill",
+                    "source": "skill-source",
+                    "installed": ".codex/skills/x",
+                },
+                {
+                    "id": "generation_skill",
+                    "display_name": "generation skill",
+                    "source": "generation-skill-source",
+                    "installed": ".codex/skills/generation",
+                },
+            ],
             "personality": {
                 "tracked_policy": "personality/policy.json",
                 "runtime_overrides": "var/personality-overrides.json",
@@ -396,6 +417,13 @@ class SystemDoctorTests(unittest.TestCase):
 
         failures = [check for check in checks if check.status == "fail"]
         self.assertEqual(failures, [])
+        skill_statuses = {
+            check.identifier: check.status
+            for check in checks
+            if check.identifier.startswith("deployment.")
+        }
+        self.assertEqual(skill_statuses["deployment.x_skill"], "pass")
+        self.assertEqual(skill_statuses["deployment.generation_skill"], "pass")
 
     @mock.patch(
         "scripts.system_doctor.git_origin",

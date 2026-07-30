@@ -21,7 +21,7 @@ The system separates token-free mechanics from content decisions:
    reserves one route and immediately makes exactly one direct
    `send_message_to_thread` call. Codex queues or steers the follow-up if a
    turn is active.
-7. The pinned Sol High task claims atomically, restores the live thread,
+7. The pinned Sol Max task claims atomically, restores the live thread,
    publishes, and stores exact history.
 8. The supervisor may later stop only a Desktop process it launched itself.
 
@@ -29,13 +29,10 @@ The external app-server performs neither relay nor Browser work. It has no
 Codex Desktop built-in Browser session or desktop-only cross-thread tools. The
 authenticated Browser always belongs to the persistent in-app owner.
 
-> Current deployment status, 2026-07-26: the persistent Sol High owner passed
-> a read-only Browser preflight with the display locked and processed three
-> events. The new in-app relay then handed off the next organic event without
-> manual prompting; it was published, imported, and durably resolved. The
-> live test exposed a race between adjacent heartbeat runs. Atomic
-> `reserve-handoff` with a TTL now closes that race. The old `x` automation
-> remains paused until the new LaunchAgent completes final verification.
+> Current deployment status, 2026-07-30: the persistent Sol Max owner and Luna
+> Low relay pass doctor with zero failures. The explainer route now runs as a
+> local skill without ChatGPT, uses exact durable history, and validates one
+> reply of exactly 4000 Unicode code points.
 >
 > The same live checkpoint also ran an isolated empty cycle through the real
 > dispatcher entry point. It returned `idle`; task IDs, relay and owner turns,
@@ -58,8 +55,8 @@ Official architecture references:
 | Session janitor LaunchAgent | 1 minute | none | Archive service tasks, recover claims |
 | Event dispatcher LaunchAgent | 1 minute | none while idle | Gate, Desktop launch, managed shutdown |
 | In-app relay heartbeat | while Desktop is open | Luna Low | Reservation and one owner message |
-| Pinned Browser owner | per event | Sol High | Claim, Browser, sources, publication |
-| Custom GPT | Pro only | configured Pro | Long answer in historical conversation |
+| Pinned Browser owner | per event | Sol Max | Claim, Browser, sources, publication |
+| Local explainer skill | Pro only | Sol Max | Exact 4000-point reply, history, sources |
 | Codex CLI updater | 6 hours | none without update | Version, SHA-256, doctor, history |
 
 Idle terminal monitoring spends zero model tokens and creates no task. The
@@ -114,7 +111,7 @@ Create ignored `config.json` from the example and set:
 }
 ```
 
-`browser_owner_thread_id` identifies one pinned Sol High owner. `x-relay` is a
+`browser_owner_thread_id` identifies one pinned Sol Max owner. `x-relay` is a
 heartbeat attached to one existing Luna Low thread, not a standalone
 automation. `reserve-handoff` does not claim X events, but prevents duplicate
 wake delivery for 180 seconds. The relay does not read the owner thread as a
@@ -130,13 +127,10 @@ A reply posted manually by Alex is an `alex` turn. If somebody answers it, the
 Browser owner restores the exact live branch, stores any previously unseen
 manual reply, and uses the complete history before drafting the continuation.
 
-If an exact historical custom-GPT conversation is pinned to a retired model,
-the Browser owner may use only the official `Branch in new chat` action from
-the exact Pro-generated Alex answer. The branch becomes canonical only after
-the Browser verifies the same custom GPT identity, complete history through
-that answer, a distinct target URL, and the visible `ChatGPT 5.6 Pro` model.
-The migration is append-only. `pro-model-recovery-requeue` then restores every
-verified model blocker to the durable queue without receiving an event ID.
+Pro history now comes from SQLite and append-only JSONL. Historical custom-GPT
+URLs and migration records remain audit metadata only. The compatibility
+command `pro-model-recovery-requeue` restores legacy model, conversation, and
+screenshot blockers to the durable queue without receiving an event ID.
 
 An event authored by the configured `user_id` is Alex's own turn, never inbound
 work. The watcher imports its exact text and chain metadata as an `alex` turn,
@@ -179,7 +173,7 @@ dispatcher, then delete it through the official `automation_update` API.
 5. The in-app heartbeat runs one `relay-reserve-handoff`. Python selects
    repair or X, creates at most one reservation, and returns one `dispatch`
    with an exact `route`.
-6. The winning relay sends one direct message with a Sol High override. It does
+6. The winning relay sends one direct message with a Sol Max override. It does
    not perform a separate live owner-thread read. Codex queues or steers the
    follow-up if the owner turn is active.
 7. If delivery fails, the relay runs `release-handoff` with its exact
@@ -203,8 +197,9 @@ count as a stalled relay.
 
 - Idle: zero model tokens, zero Browser tabs, zero new tasks.
 - Short: one X tab.
-- Pro: one X tab, one ChatGPT tab, one active generation.
-- Only Sol High makes publication decisions and writes short replies.
+- Pro: one X tab, the local skill, and zero ChatGPT tabs.
+- Only Sol makes publication decisions. The local Pro route always requires
+  reasoning effort `max`.
 - Luna never analyzes X content or drafts responses.
 - The resource guard pauses Browser work without deleting queued events.
 - Renderer limits use 256 MiB RSS equivalents, while the raw process count and
@@ -231,7 +226,7 @@ count as a stalled relay.
 1. Pause the old X automation.
 2. Use one real unresolved event without giving its ID to the model.
 3. Require natural watcher discovery.
-4. Confirm one relay turn and one Sol High owner turn.
+4. Confirm one relay turn and one Sol Max owner turn.
 5. Verify the X URL, exact history, and durable resolution.
 6. Confirm the event leaves the queue.
 7. Run one idle dispatcher cycle and verify no task or helper count increase.

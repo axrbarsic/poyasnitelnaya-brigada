@@ -512,7 +512,7 @@ class AppServerDispatchTests(unittest.TestCase):
             )
             self.assertEqual(state["status"], "dispatcher_busy")
 
-    def test_ready_gate_uses_luna_relay_for_sol_high_owner(self) -> None:
+    def test_ready_gate_uses_luna_relay_for_sol_max_owner(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             config = self.make_config(root)

@@ -698,7 +698,7 @@ def high_free_dispatch_envelope_is_healthy(
         <= int(
             config.get(
                 "memory_guard_high_free_recovery_renderer_count",
-                5,
+                6,
             )
         )
         and (
@@ -753,6 +753,8 @@ def _assess_limits(
     )
     for name, value, converter in limits:
         maximum = converter(limits_config[f"memory_guard_max_{name}"])
+        if name == "renderer_count" and high_free_recovered:
+            continue
         if (
             name in {"node_repl_count", "mcp_process_count"}
             and (helpers_recovered or high_free_recovered)

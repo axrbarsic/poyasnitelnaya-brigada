@@ -20,11 +20,11 @@ Codex automation is therefore retired.
    Desktop or Browser.
 3. A ready queue launches Codex Desktop only when it is absent.
 4. One existing in-app Luna Low heartbeat atomically reserves the handoff and
-   sends exactly one message to the pinned Sol High owner.
+   sends exactly one message to the pinned Sol Max owner.
 5. An adjacent heartbeat cannot hand off the same queue again.
 6. The Browser owner claims atomically and remains the sole owner.
 7. Short work uses one X tab.
-8. Pro work uses at most one X tab, one ChatGPT tab, and one generation.
+8. Pro work uses one X tab and the local explainer skill, with no ChatGPT tab.
 9. Every task-owned tab closes on a terminal outcome.
 10. The dispatcher verifies that every original event ID left the queue.
 11. A released unresolved claim is failure, not success.
@@ -36,7 +36,7 @@ Codex automation is therefore retired.
 
 ## Automatic profiles
 
-`resource_mode: auto` changes only Browser admission. Sol High, source checking,
+`resource_mode: auto` changes only Browser admission. Sol Max, source checking,
 and publication rules remain unchanged.
 
 | Mode | Condition | Codex RSS | Renderers | Free memory | Swap |
@@ -45,7 +45,7 @@ and publication rules remain unchanged.
 | Balanced | user active | 2350 MiB | 6 | at least 14% | telemetry |
 | Performance | idle 15 minutes, AC, at least 35% free | 2500 MiB | 7 | at least 12% | telemetry |
 
-Hard caps always apply: 2700 MiB RSS, 8 renderers, at least 10% free memory,
+Hard caps always apply: 3200 MiB RSS, 8 renderers, at least 10% free memory,
 and strict helper-process limits.
 
 Swap remains measured and stored for diagnosis, but by default it neither
@@ -56,9 +56,11 @@ The system never attempts a forced swap purge.
 
 A high count of old lightweight helpers does not block forever when free
 memory, Codex RSS, aggregate helper RSS, and renderer count are all inside the
-recovery envelope. This exception exists only for already accumulated legacy
-processes. After the old automation is deleted and Codex Desktop restarts once,
-legacy helpers should disappear and stop accumulating.
+recovery envelope. The default recovery ceilings are 3200 MiB Codex RSS and 8
+renderer equivalents.
+This exception exists only for already accumulated legacy processes. After
+stale tasks are archived and Codex Desktop restarts once, legacy helpers should
+disappear and stop accumulating.
 
 ## Voice priority
 
@@ -67,7 +69,7 @@ blocks only the heavy Browser owner. The last microphone observation holds the
 pause for `voice_priority_hold_seconds`, which defaults to 300 seconds.
 
 Replies remain durable while realtime voice receives memory and CPU first.
-After the hold expires, the ordinary Sol High owner processes the queue.
+After the hold expires, the ordinary Sol Max owner processes the queue.
 
 ## Measured cost
 
@@ -88,7 +90,7 @@ The new idle path:
 In normal unattended idle, supervisor-owned Desktop is closed and Luna Low does
 not run. A ready queue gets one short Luna relay. If Alex intentionally keeps
 Desktop open, the in-app heartbeat continues its small scheduled Luna gate.
-Sol High cost follows the number and complexity of real replies instead of
+Sol Max cost follows the number and complexity of real replies instead of
 elapsed monitoring time.
 
 ## Archiving
@@ -116,7 +118,7 @@ app-server and never depends on heuristically killing unrelated processes.
 2. Run an idle dispatcher cycle and confirm zero new tasks.
 3. Compare helper PID and RSS before and after idle, with no growth.
 4. Wait for one real X event.
-5. Confirm one Luna relay and one Sol High owner turn.
+5. Confirm one Luna relay and one Sol Max owner turn.
 6. Verify the X URL, exact history, and durable resolution.
 7. Confirm the original event leaves the queue.
 8. Confirm an adjacent heartbeat is blocked by the reservation.

@@ -29,12 +29,13 @@ automation, LaunchAgent, SQLite или Keychain. Он сверяет:
 
 - канонический каталог и Git origin;
 - обязательные файлы каркаса;
-- главную Sol High сессию и Luna Low relay;
+- главную Sol Max сессию и Luna Low relay;
 - архивный флаг, модель, минимальный effort и рабочий каталог ролей;
-- официальный heartbeat `x-relay` и paused старый dispatcher;
+- официальный heartbeat `x-relay`, самостоятельный cron `x-15` и paused
+  старые automations;
 - пять LaunchAgent;
 - SQLite integrity, очередь и Keychain helper;
-- установленный `x-twitter-operator` с Git-копией;
+- установленные `x-twitter-operator` и `poyasnitelnaya-brigada` с Git-копиями;
 - матрицу характера и runtime overrides.
 
 ## Офлайн-эмулятор
@@ -83,7 +84,7 @@ cooldown он повторяет read-only диагностику. Если по
 неоднозначному ресурсу, создается один durable incident.
 
 Dispatcher видит incident без модели, поднимает Codex Desktop штатным путем, а
-существующая Luna relay-сессия передает его существующей Sol High owner-сессии.
+существующая Luna relay-сессия передает его существующей Sol Max owner-сессии.
 Одинаковый fingerprint не создает повторные incident каждую минуту.
 Reservation, claim token, started, completed и failed защищают ремонт от двух
 одновременных владельцев. `completed` для настоящей аварии принимается только
@@ -154,9 +155,14 @@ dirty, сначала сохранить и классифицировать и�
 
 - `~/.codex/skills/x-twitter-operator` восстановить только из
   `skill-backup/x-twitter-operator`;
+- `~/.codex/skills/poyasnitelnaya-brigada` восстановить только из
+  `skill-backup/poyasnitelnaya-brigada`;
 - LaunchAgent перерендерить из `macos/*.plist.example` через
   `scripts/render_launchd.py`;
-- heartbeat восстановить только через официальный `automation_update`;
+- heartbeat `x-relay` и cron `x-15` восстановить только через официальный
+  `automation_update`. Для `x-15` обязательны local execution,
+  `gpt-5.6-sol`, effort `max`, 15-минутный интервал и точный prompt из
+  `macos/x-15.prompt.txt`;
 - подписанный app-like Keychain helper восстановить командой
   `scripts/install_keychain_helper.sh`. Для первого выпуска нужен Apple Account
   в Xcode и Mac provisioning profile. При миграции старого login-keychain item
@@ -165,6 +171,12 @@ dirty, сначала сохранить и классифицировать и�
   Keychain с `AfterFirstUnlockThisDeviceOnly`;
 - live SQLite вернуть из последнего валидного snapshot только после сохранения
   копии повреждённого файла.
+
+При изменении существующего `x-15` сначала поставить его на паузу официальным
+инструментом, дождаться завершения всех уже запущенных задач этой automation и
+проверить `owner=null` через `outbound_cycle.py status`. Обновлять prompt поверх
+активного run запрещено: старый Browser owner еще может публиковать, когда
+первый run нового контракта уже получил lease.
 
 ### 5. Повторить безопасные проверки
 
@@ -180,6 +192,20 @@ python3 scripts/autopilot_bridge.py \
 
 Если `dispatch=false`, Browser не открывается. Если `dispatch=true`, обработка
 идёт через единственный существующий Browser owner.
+
+Состояние outbound catch-up проверяется отдельно:
+
+```bash
+python3 scripts/outbound_cycle.py \
+  --state var/outbound-cycle.json \
+  --lease-seconds 1800 status
+```
+
+Файл находится в `var/` и не восстанавливается из Git. При доказанном пропуске
+окна добавляется одна идемпотентная корректировка с уникальным ID, точным
+числом, причиной и временными границами. Нельзя вручную уменьшать счетчик или
+засчитывать неподтвержденную публикацию. Обычный run закрывает текущий слот,
+а только вторая durable публикация одного run уменьшает catch-up на единицу.
 
 ## Управляемый характер
 

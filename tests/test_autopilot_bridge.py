@@ -54,11 +54,14 @@ class AutopilotBridgeTests(unittest.TestCase):
 
         self.assertTrue(result["dispatch"])
         self.assertIn(
-            "запрещено молча считать его short",
+            "запрещено молча считать его",
             result["prompt"],
         )
-        self.assertIn("ChatGPT 5.6 Pro", result["prompt"])
-        self.assertIn("Жди готовый ответ до\n15 минут", result["prompt"])
+        self.assertIn("poyasnitelnaya-brigada", result["prompt"])
+        self.assertIn("gpt-5.6-sol", result["prompt"])
+        self.assertIn("reasoning_effort=max", result["prompt"])
+        self.assertIn("ровно 4000 Unicode", result["prompt"])
+        self.assertNotIn("Жди готовый ответ до", result["prompt"])
 
     def test_claim_exposes_auditable_resolution_recovery(self) -> None:
         current = self.event()
@@ -120,7 +123,7 @@ class AutopilotBridgeTests(unittest.TestCase):
                 """,
                 (
                     current["event_id"],
-                    "verified_chatgpt_5_6_pro_branch_recovery",
+                    "local_poyasnitelnaya_brigada_skill_recovery",
                     watcher.isoformat(),
                 ),
             )
@@ -135,8 +138,8 @@ class AutopilotBridgeTests(unittest.TestCase):
             result["prompt"],
         )
         self.assertIn(
-            "Verified official ChatGPT 5.6 Pro branch restored "
-            "the mandatory Pro dependency",
+            "The local poyasnitelnaya-brigada skill removed "
+            "the legacy ChatGPT dependency",
             result["prompt"],
         )
 
@@ -242,8 +245,10 @@ class AutopilotBridgeTests(unittest.TestCase):
             / "x-relay.prompt.txt"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("прямой `codex_app.send_message_to_thread`", prompt)
+        self.assertIn("прямой codex_app.send_message_to_thread", prompt)
         self.assertIn("Не читай owner thread", prompt)
+        self.assertIn("model `gpt-5.6-sol`", prompt)
+        self.assertIn("thinking `max`", prompt)
         self.assertNotIn("codex_app.read_thread", prompt)
         self.assertNotIn("owner_thread_not_idle", prompt)
 

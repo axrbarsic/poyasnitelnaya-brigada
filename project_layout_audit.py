@@ -29,6 +29,8 @@ REQUIRED_PATHS = (
     "macos/com.axrbarsic.xmention.codex-update.plist.example",
     "macos/com.axrbarsic.xmention.janitor.plist.example",
     "macos/com.axrbarsic.xmention.watchdog.plist.example",
+    "macos/x-15.prompt.txt",
+    "macos/x-relay.prompt.txt",
     "memory_snapshot.py",
     "readiness_audit.py",
     "scripts/autopilot_bridge.py",
@@ -36,11 +38,16 @@ REQUIRED_PATHS = (
     "scripts/autopilot_dispatch.py",
     "scripts/app_server_dispatch.py",
     "scripts/codex_cli_updater.py",
+    "scripts/outbound_cycle.py",
+    "skill-backup/poyasnitelnaya-brigada/SKILL.md",
+    "skill-backup/poyasnitelnaya-brigada/agents/openai.yaml",
     "skill-backup/x-twitter-operator/SKILL.md",
     "restic_backup.py",
     "tests/test_archive_intake.py",
     "tests/test_app_server_dispatch.py",
     "tests/test_codex_cli_updater.py",
+    "tests/test_local_explainer_skill.py",
+    "tests/test_outbound_cycle.py",
     "tests/test_readiness_audit.py",
     "tests/test_restic_backup.py",
     "tests/test_xmention_watcher.py",
@@ -88,6 +95,7 @@ def audit_layout(
     root: Path,
     config_path: Path,
     installed_skill: Path | None,
+    installed_generation_skill: Path | None = None,
     require_installed_skill: bool,
 ) -> dict[str, Any]:
     canonical_root = root.resolve()
@@ -128,10 +136,38 @@ def audit_layout(
     elif require_installed_skill:
         errors.append("installed_skill_missing")
 
+    generation_skill_backup = (
+        canonical_root / "skill-backup/poyasnitelnaya-brigada"
+    )
+    generation_backup_manifest = directory_manifest(
+        generation_skill_backup
+    )
+    installed_generation_skill_exists = (
+        installed_generation_skill is not None
+        and installed_generation_skill.is_dir()
+    )
+    installed_generation_skill_matches: bool | None = None
+    if (
+        installed_generation_skill_exists
+        and installed_generation_skill is not None
+    ):
+        installed_generation_skill_matches = (
+            directory_manifest(installed_generation_skill.resolve())
+            == generation_backup_manifest
+        )
+        if not installed_generation_skill_matches:
+            errors.append(
+                "installed_generation_skill_differs_from_repository_backup"
+            )
+    elif require_installed_skill:
+        errors.append("installed_generation_skill_missing")
+
     if missing_paths:
         errors.append("required_project_paths_missing")
     if not backup_manifest:
         errors.append("skill_backup_empty")
+    if not generation_backup_manifest:
+        errors.append("generation_skill_backup_empty")
 
     complete = not errors
     return {
@@ -150,6 +186,18 @@ def audit_layout(
             else None
         ),
         "installed_skill_matches": installed_skill_matches,
+        "generation_skill_backup_files": len(generation_backup_manifest),
+        "installed_generation_skill": (
+            str(installed_generation_skill.resolve())
+            if (
+                installed_generation_skill_exists
+                and installed_generation_skill is not None
+            )
+            else None
+        ),
+        "installed_generation_skill_matches": (
+            installed_generation_skill_matches
+        ),
         "errors": errors,
     }
 
@@ -167,6 +215,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path.home() / ".codex/skills/x-twitter-operator",
     )
+    parser.add_argument(
+        "--installed-generation-skill",
+        type=Path,
+        default=Path.home() / ".codex/skills/poyasnitelnaya-brigada",
+    )
     parser.add_argument("--require-installed-skill", action="store_true")
     return parser.parse_args()
 
@@ -183,6 +236,7 @@ def main() -> int:
         root=root,
         config_path=config_path,
         installed_skill=args.installed_skill,
+        installed_generation_skill=args.installed_generation_skill,
         require_installed_skill=args.require_installed_skill,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

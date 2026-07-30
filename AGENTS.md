@@ -17,12 +17,13 @@
 
 - Use the installed `x-twitter-operator` skill for every X or ChatGPT Browser
   operation.
-- Keep the Browser owner on `gpt-5.6-sol` with high reasoning.
+- Keep the Browser owner on `gpt-5.6-sol` with reasoning effort `max`.
 - Only the Browser owner may operate authenticated tabs, classify a live
   target, author a short reply, validate the composer, or publish.
-- Idle runs own zero Browser tabs. Short replies use one X tab. Open ChatGPT
-  only after a Pro route is proven. A Pro reply may own one X tab, one ChatGPT
-  tab, and one active generation.
+- Idle runs own zero Browser tabs. Short and Pro replies use one X tab.
+  The Pro route generates locally and owns zero ChatGPT tabs. Open ChatGPT
+  only for an explicitly authorized visual-bot route such as `377` or
+  `Ложкин`, never for «Пояснительная бригада».
 - Close every task-owned Browser tab before the scheduled run ends. Never close
   a user-owned tab.
 - One global owner lease covers the whole queue. A new event must wait while
@@ -31,7 +32,13 @@
   the scheduled task without Browser work.
 - Use deterministic scripts for queue state, exact IDs, duplicate checks,
   Unicode length, forbidden characters, and timestamp filtering.
-- Treat helper results as evidence. Sol High performs the final live-context
+- Generate every «Пояснительная бригада» reply locally with the tracked
+  `poyasnitelnaya-brigada` skill. Never open ChatGPT or the custom GPT for this
+  route. The active owner must be `gpt-5.6-sol` with reasoning effort `max`.
+- A local «Пояснительная бригада» reply contains exactly 4000 Unicode code
+  points after removing one technical final newline. Validate it with
+  `skill-backup/x-twitter-operator/scripts/validate_reply.py --exact 4000`.
+- Treat helper results as evidence. Sol performs the final live-context
   decision and publication transaction.
 
 ## Lightpanda public read-only route
@@ -78,8 +85,9 @@
   archives, runtime locks, generated evidence, or history exports.
 - `var/watcher.sqlite3` is the live source of truth.
 - Create consistent backups only with `memory_snapshot.py`.
-- The installed skill under `~/.codex/skills/x-twitter-operator` is deployment
-  state. Its restorable source is `skill-backup/x-twitter-operator`.
+- Installed skills under `~/.codex/skills/x-twitter-operator` and
+  `~/.codex/skills/poyasnitelnaya-brigada` are deployment state. Their
+  restorable sources are the matching directories under `skill-backup/`.
 - The macOS LaunchAgent files under `~/Library/LaunchAgents` are deployment
   state generated from the tracked templates in `macos/`.
 

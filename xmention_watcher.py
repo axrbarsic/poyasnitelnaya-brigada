@@ -2018,15 +2018,12 @@ def requeue_recovered_pro_model_blockers(
         SELECT e.*, r.*
         FROM events e
         JOIN event_resolutions r ON r.event_id = e.event_id
-        JOIN conversation_chains c
-          ON c.chain_id = e.conversation_id
-        JOIN chatgpt_conversation_migrations migration
-          ON migration.chain_id = c.chain_id
-         AND migration.target_url = c.chatgpt_conversation_url
-         AND migration.target_model = 'ChatGPT 5.6 Pro'
-         AND migration.method = 'branch_in_new_chat'
         WHERE r.disposition = 'blocked'
-          AND r.blocker_code = 'required_pro_model_unavailable'
+          AND r.blocker_code IN (
+              'required_pro_model_unavailable',
+              'missing_historical_pro_conversation',
+              'target_screenshot_unavailable'
+          )
           AND e.delivery_state != 'queued'
           AND COALESCE(e.author_id, '') != ?
           AND NOT EXISTS (
@@ -2059,7 +2056,7 @@ def requeue_recovered_pro_model_blockers(
                             ensure_ascii=False,
                             sort_keys=True,
                         ),
-                        "verified_chatgpt_5_6_pro_branch_recovery",
+                        "local_poyasnitelnaya_brigada_skill_recovery",
                         requeued_at,
                     ),
                 )
@@ -2085,7 +2082,7 @@ def requeue_recovered_pro_model_blockers(
             str(row["event_id"]) for row in candidates
         ],
         "pending_count": wake["pending_count"],
-        "reason": "verified_chatgpt_5_6_pro_branch_recovery",
+        "reason": "local_poyasnitelnaya_brigada_skill_recovery",
     }
 
 
@@ -5160,8 +5157,8 @@ def build_parser() -> argparse.ArgumentParser:
     pro_recovery_requeue = commands.add_parser(
         "pro-model-recovery-requeue",
         help=(
-            "Requeue every model blocker whose exact custom GPT history has "
-            "a verified ChatGPT 5.6 Pro branch."
+            "Requeue legacy ChatGPT, model, and screenshot blockers now "
+            "covered by the local poyasnitelnaya-brigada skill."
         ),
     )
     pro_recovery_requeue.add_argument(

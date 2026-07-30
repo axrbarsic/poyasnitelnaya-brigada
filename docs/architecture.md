@@ -37,7 +37,7 @@ an X reply.
     `relay-reserve-handoff`. Python selects either repair or X, creates at most
     one reservation, and returns one unambiguous `dispatch` plus `route`.
     The relay then sends one direct `send_message_to_thread` follow-up to the
-    pinned Sol High Browser-owner without reading owner status. Codex queues or
+    pinned Sol Max Browser-owner without reading owner status. Codex queues or
     steers the follow-up when a turn is active.
     If delivery fails, the relay runs `release-handoff` with its exact
     reservation token and exits. The durable queue remains pending. Atomic
@@ -47,7 +47,7 @@ an X reply.
     the only authenticated Browser publication owner. After the queue is empty,
     the supervisor may close only the exact Desktop PID that it launched.
 13. A separate one-minute watchdog checks poll freshness and failure count.
-14. Sol High opens the complete live X subtree, classifies text and media in
+14. Sol Max opens the complete live X subtree, classifies text and media in
     context, and resolves an event only after publication, exact proof of an
     existing direct Alex child reply, or a terminal blocker.
 15. `initial-audit-next` performs only free mechanical grouping and exact-text
@@ -91,6 +91,13 @@ an X reply.
     applies a bounded first lookback, and reuses immutable event ID
     deduplication. X bills read endpoints per returned resource and normally
     deduplicates the same resource within one UTC day.
+23. Scheduled outbound uses the standalone local cron `x-15`, never a
+    heartbeat attached to the busy owner task. It runs on `gpt-5.6-sol` with
+    effort `max`, checks the incoming queue first, and obtains a separate
+    atomic lease from `scripts/outbound_cycle.py`. A normal run handles one
+    target. A bounded catch-up run may handle a second target sequentially in
+    the same X tab. Only a verified second publication consumes one missed
+    opportunity, so catch-up cannot force a weak or duplicate target.
 
 Each event resolution can preserve stance, confidence, media meaning, and
 multiple evidence notes. This prevents a media-only reply from disappearing
@@ -142,7 +149,7 @@ filtering.
 The same SQLite database stores append-only conversation chains:
 
 - one chain row maps the root X status, short or Pro provenance, ledger
-  reference, and exact ChatGPT conversation URL when applicable;
+  reference, and any legacy ChatGPT conversation URL as audit metadata only;
 - an Alex reply posted manually is still an `alex` turn. When a later mention
   points to it, the Browser owner must restore that exact live parent and the
   surrounding subtree before drafting, then persist the manual turn before the
@@ -154,12 +161,11 @@ The same SQLite database stores append-only conversation chains:
   rewrites;
 - an append-only chain provenance correction can neutralize an invalid flat
   turn hint without deleting or rewriting the original JSONL record;
-- an append-only ChatGPT migration links a legacy custom-GPT conversation to
-  an official `Branch in new chat` only when the branch preserves the exact
-  custom GPT, history through the exact Pro-generated Alex turn, and the
-  visible `ChatGPT 5.6 Pro` model. The verified target URL becomes canonical;
-- `pro-model-recovery-requeue` selects every matching terminal model blocker
-  from durable state and requeues it without accepting an event ID;
+- append-only ChatGPT migration records remain historical audit evidence and
+  are not runtime dependencies;
+- `pro-model-recovery-requeue` requeues legacy model, conversation, and
+  screenshot blockers now covered by the local explainer skill, without
+  accepting an event ID;
 - canonical JSONL export provides a reviewable private Git backup without
   including API credentials, cookies, or Browser state.
 
@@ -253,6 +259,6 @@ Polling, deduplication, queueing, health checks, lease checks, notifications,
 CLI update checks, and every terminal idle gate use no model calls. In normal
 unattended idle, supervisor-owned Desktop is closed, so the in-app heartbeat
 does not run either. A ready queue spends one short Luna Low turn on the
-cross-thread relay. Sol High receives a turn only for real queued events. If
+cross-thread relay. Sol Max receives a turn only for real queued events. If
 Alex intentionally keeps Desktop open, the in-app heartbeat still performs its
 small scheduled Luna gate while the terminal dispatcher remains model-free.

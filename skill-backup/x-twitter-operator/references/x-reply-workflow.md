@@ -114,15 +114,35 @@ value.
 
 ### Pro reply
 
-Inspect the complete context locally, then follow the custom GPT screenshot-only contract. Send exactly one target-only screenshot and zero text code points. Never forward local research, sources, instructions, length requirements, or corrections. Do not manually merge bot text with a local introduction or conclusion.
+Inspect the complete context locally, load `poyasnitelnaya-brigada`, and generate
+inside the Sol Max Browser-owner turn. Include exact durable X history and
+current primary-source research. Never open ChatGPT or the custom GPT. Produce
+one direct monologue of exactly 4000 Unicode code points and validate it
+deterministically before filling the X composer.
 
 ## 5. Composer validation
 
-Before filling:
+Before filling a short reply:
 
-- validate the source text with `scripts/validate_reply.py`;
+- validate and split the source text with `scripts/split_reply_thread.py`;
 - confirm no literal U+2014 or U+2013;
-- confirm the text is no longer than 4000 Unicode code points;
+- confirm every generated part is from 1 through 4000 Unicode code points;
+- confirm the target post is still open.
+
+Before filling a local «Пояснительная бригада» reply:
+
+- validate with:
+
+  ```bash
+  python3 <skill-dir>/scripts/validate_reply.py \
+    --file /path/to/reply.txt \
+    --strip-one-final-newline \
+    --exact 4000
+  ```
+
+- confirm `generation_model=gpt-5.6-sol`;
+- confirm `reasoning_effort=max`;
+- confirm `generation_skill=poyasnitelnaya-brigada`;
 - confirm the target post is still open.
 
 After filling:
@@ -137,13 +157,18 @@ If the actual value differs from the validated source, clear the composer and in
 
 ## 6. Publication verification
 
-After clicking:
+After clicking each part:
 
 1. Wait for the page state to settle.
 2. Confirm the composer cleared.
 3. Locate a new thread article from `@axrbarsic`.
 4. Verify a distinctive prefix or the full text when practical.
 5. Capture the reply URL.
+
+For a multi-part payload, the first part replies to the exact target. Open the
+verified URL of each published part and make the next part its direct child.
+Do not add numbering or connective text. The ledger must prove the complete
+ordered status-ID chain and exact hash of every part.
 
 If the click times out, inspect state before clicking again. A timeout can occur after a successful submission. Blindly retrying risks duplicates.
 

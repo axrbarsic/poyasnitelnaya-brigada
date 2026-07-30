@@ -22,7 +22,7 @@
    X queue и атомарно резервирует единственный маршрут. Luna сразу делает один
    direct `send_message_to_thread`. Codex ставит follow-up в очередь или
    направляет его в активный turn.
-7. Закрепленная сессия Sol High атомарно делает `claim`, восстанавливает живую
+7. Закрепленная сессия Sol Max атомарно делает `claim`, восстанавливает живую
    ветку, публикует и сохраняет точную историю.
 8. После завершения supervisor может закрыть только тот Desktop, который
    запустил сам. Пользовательский Desktop он не закрывает.
@@ -31,13 +31,10 @@
 встроенной Browser-сессии Codex Desktop и desktop-only cross-thread tools.
 Browser всегда принадлежит постоянной owner-сессии внутри приложения.
 
-> Текущее состояние deployment на 2026-07-26: постоянный Sol High owner прошел
-> read-only Browser preflight при заблокированном экране и обработал три
-> события. Затем новый in-app relay самостоятельно передал следующее
-> органическое событие, которое было опубликовано, импортировано и durably
-> resolved. Практический тест обнаружил гонку двух соседних heartbeat; она
-> закрыта атомарным `reserve-handoff` с TTL. Старая automation `x` остается
-> paused до финальной проверки нового LaunchAgent.
+> Текущее состояние deployment на 2026-07-30: постоянный Sol Max owner и Luna
+> Low relay проходят doctor без FAIL. Маршрут «Пояснительной бригады»
+> выполняется локальным skill без ChatGPT, использует exact durable history и
+> проверяет один ответ ровно на 4000 Unicode code points.
 >
 > В том же live checkpoint изолированный пустой цикл прошёл через настоящий
 > entry point dispatcher и вернул `idle`. Task IDs, relay и owner turns,
@@ -60,8 +57,8 @@ Browser всегда принадлежит постоянной owner-сесс�
 | Session janitor LaunchAgent | 1 минута | нет | Архив служебных задач, recovery claim |
 | Event dispatcher LaunchAgent | 1 минута | нет при idle | Gate, запуск и managed shutdown Desktop |
 | In-app relay heartbeat | пока Desktop открыт | Luna Low | Reservation и одно сообщение owner |
-| Закрепленный Browser owner | по событию | Sol High | Claim, Browser, фактчек, публикация |
-| Кастомный GPT | только Pro | настроенный Pro | Длинный ответ в исторической conversation |
+| Закрепленный Browser owner | по событию | Sol Max | Claim, Browser, фактчек, публикация |
+| Локальный skill «Пояснительная бригада» | только Pro | Sol Max | Ровно 4000 code points, история, источники |
 | Codex CLI updater | 6 часов | нет без update | Version check, SHA-256, doctor, журнал |
 
 Пустой terminal monitoring не расходует model tokens и не создает задач.
@@ -118,7 +115,7 @@ trust_level = "trusted"
 ```
 
 `browser_owner_thread_id` принадлежит одной закрепленной owner-сессии на Sol
-High. `x-relay` является heartbeat одной существующей Luna Low сессии, а не
+Max. `x-relay` является heartbeat одной существующей Luna Low сессии, а не
 standalone automation. `reserve-handoff` не claim события, но атомарно блокирует
 повторную отправку wake на 180 секунд. Relay не читает owner thread как
 дополнительный gate. Он сразу отправляет ровно один direct follow-up в
@@ -133,14 +130,11 @@ reservation в состояние `claimed`. Atomic reservation и глобал�
 поднимает точную живую ветку, сохраняет ранее не импортированный ручной ответ и
 использует его вместе со всей историей до подготовки продолжения.
 
-Если точная историческая custom-GPT conversation закреплена за устаревшей
-моделью, Browser owner может использовать только официальный
-`Branch in new chat` от точного Pro-ответа Alex. Новая ветка становится
-канонической лишь после проверки идентичности custom GPT, полной истории до
-этого ответа, отдельного target URL и видимой модели `ChatGPT 5.6 Pro`.
-Миграция сохраняется append-only, после чего
-`pro-model-recovery-requeue` без event ID возвращает все доказанно
-восстановленные blockers в durable очередь.
+История Pro-ветки теперь восстанавливается из SQLite и append-only JSONL.
+Старые custom-GPT URL и migration records сохраняются только как audit trail.
+Команда совместимости `pro-model-recovery-requeue` без event ID возвращает в
+durable очередь старые model, conversation и screenshot blockers, устраненные
+локальным skill.
 
 Событие от настроенного `user_id` является собственным ходом Alex, а не
 входящей работой. Watcher импортирует точный текст и метаданные цепочки как ход
@@ -188,7 +182,7 @@ scheduled run создает отдельную задачу и может ос�
    резервирует repair incident либо, при его отсутствии, X queue и возвращает
    единственный `dispatch` вместе с точным `route`.
 7. Победивший relay делает один direct `send_message_to_thread` с override Sol
-   High без отдельного live-чтения owner thread. Codex ставит follow-up в
+   Max без отдельного live-чтения owner thread. Codex ставит follow-up в
    очередь или направляет его в активный turn.
 8. При ошибке доставки relay выполняет `release-handoff` со своим точным
    reservation token и завершается. Очередь остается pending. Соседний
@@ -213,8 +207,9 @@ scheduled run создает отдельную задачу и может ос�
 
 - Idle: ноль model tokens, ноль Browser-вкладок, ноль новых задач.
 - Short: одна X-вкладка.
-- Pro: одна X-вкладка, одна ChatGPT-вкладка, одна активная generation.
-- Только Sol High принимает публикационные решения и пишет short.
+- Pro: одна X-вкладка, локальный skill и ноль ChatGPT-вкладок.
+- Только Sol принимает публикационные решения. Локальный Pro route всегда
+  требует effort `max`.
 - Luna не анализирует X и не формулирует ответы.
 - Ресурсный guard ставит Browser на паузу, но не удаляет очередь.
 - Лимиты renderer считаются эквивалентами по 256 МиБ RSS, при этом сырое
@@ -241,7 +236,7 @@ scheduled run создает отдельную задачу и может ос�
 1. Поставьте старую X automation на паузу.
 2. Запустите один реальный unresolved event без передачи его ID модели.
 3. Подтвердите естественное обнаружение watcher.
-4. Подтвердите один relay-turn и один Sol High owner-turn.
+4. Подтвердите один relay-turn и один Sol Max owner-turn.
 5. Проверьте verified X URL, exact history и durable resolution.
 6. Проверьте, что event исчез из очереди.
 7. Выполните пустой цикл dispatcher и убедитесь, что число задач и helper

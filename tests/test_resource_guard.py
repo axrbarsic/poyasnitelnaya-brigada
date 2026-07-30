@@ -525,6 +525,62 @@ class ResourceGuardTests(unittest.TestCase):
 
         self.assertEqual(resource_guard.assess(sample, limits), [])
 
+    def test_high_free_envelope_uses_recovery_renderer_limit(self) -> None:
+        sample = resource_guard.ResourceSample(
+            codex_rss_mb=2859,
+            renderer_count=7,
+            node_repl_count=1,
+            mcp_process_count=1,
+            free_percent=48,
+            swap_used_mb=1470,
+            node_repl_rss_mb=15,
+            mcp_process_rss_mb=23,
+        )
+        limits = {
+            "memory_guard_max_codex_rss_mb": 2200,
+            "memory_guard_max_renderer_count": 5,
+            "memory_guard_max_node_repl_count": 6,
+            "memory_guard_max_mcp_process_count": 12,
+            "memory_guard_min_free_percent": 20,
+            "memory_guard_max_swap_used_mb": 896,
+            "memory_guard_high_free_recovery_percent": 35,
+            "memory_guard_high_free_recovery_codex_rss_mb": 3200,
+            "memory_guard_high_free_recovery_renderer_count": 8,
+            "memory_guard_high_free_recovery_helper_rss_mb": 512,
+        }
+
+        self.assertEqual(resource_guard.assess(sample, limits), [])
+
+    def test_high_free_envelope_blocks_above_recovery_renderer_limit(
+        self,
+    ) -> None:
+        sample = resource_guard.ResourceSample(
+            codex_rss_mb=2859,
+            renderer_count=9,
+            node_repl_count=1,
+            mcp_process_count=1,
+            free_percent=48,
+            swap_used_mb=1470,
+            node_repl_rss_mb=15,
+            mcp_process_rss_mb=23,
+        )
+        limits = {
+            "memory_guard_max_codex_rss_mb": 2200,
+            "memory_guard_max_renderer_count": 5,
+            "memory_guard_max_node_repl_count": 6,
+            "memory_guard_max_mcp_process_count": 12,
+            "memory_guard_min_free_percent": 20,
+            "memory_guard_max_swap_used_mb": 896,
+            "memory_guard_high_free_recovery_percent": 35,
+            "memory_guard_high_free_recovery_codex_rss_mb": 3200,
+            "memory_guard_high_free_recovery_renderer_count": 8,
+            "memory_guard_high_free_recovery_helper_rss_mb": 512,
+        }
+
+        reasons = resource_guard.assess(sample, limits)
+
+        self.assertTrue(any("renderer_count" in reason for reason in reasons))
+
     def test_high_free_envelope_still_blocks_large_helper_rss(self) -> None:
         sample = resource_guard.ResourceSample(
             codex_rss_mb=2550,

@@ -9,7 +9,7 @@
 </p>
 
 Reliable X reply autopilot with token-free detection, durable conversation
-memory, Sol High reasoning, and verified Browser publication.
+memory, Sol Max local-skill reasoning, and verified Browser publication.
 
 <p align="center">
   <img src="docs/assets/system-flow-en.png"
@@ -17,13 +17,14 @@ memory, Sol High reasoning, and verified Browser publication.
        width="430">
 </p>
 
-> Deployment status on 2026-07-26: the terminal-first path passed a live
-> canary. The persistent in-app Sol High Browser owner processed three events,
-> then the Luna Low event relay independently detected and handed off the next
-> organic event. All four replies were published, verified, and durably
-> resolved. The external app-server is no longer used as the relay. The old
-> `x` automation remains paused until the installed LaunchAgent gets its final
-> verification.
+> Deployment status on 2026-07-30: the inbound terminal-first path runs through
+> a Luna Low relay and one persistent Sol Max Browser owner. The explainer route
+> moved from the custom GPT to a local versioned skill. Generation no longer
+> opens ChatGPT and instead uses Sol Max, exact SQLite history, and a
+> deterministic 4000 Unicode code-point contract.
+> Scheduled outbound now runs in the standalone local `x-15` cron instead of a
+> heartbeat attached to the busy owner task. Atomic `outbound_cycle.py`
+> prevents overlapping runs and tracks bounded catch-up safely.
 
 ## License and attribution
 
@@ -67,7 +68,7 @@ content decisions:
 - The supervisor may stop only a Desktop process that it launched itself, and
   only after the queue is empty, the owner lease is gone, and a grace period
   expires. It never closes a user-opened Desktop.
-- The Sol High owner opens the real X thread in the authenticated Codex
+- The Sol Max owner opens the real X thread in the authenticated Codex
   Browser, checks context and sources, prevents duplicates, and publishes one
   response per eligible event.
 - The dispatcher accepts success only after every dispatched event ID leaves
@@ -75,11 +76,16 @@ content decisions:
 - A reply posted manually by Alex is still an `alex` turn. When someone
   continues that branch, the owner restores the manual parent and full live
   context, persists them, and only then prepares the next reply.
-- Long follow-ups can continue in the exact historical custom GPT conversation.
+- Explainer targets and follow-ups run locally through the versioned
+  `poyasnitelnaya-brigada` skill in Sol Max with exact durable history.
+- A local explainer reply contains exactly 4000 Unicode code points and passes
+  deterministic source and composer validation before publication.
 - SQLite and append-only JSONL preserve conversation history and audit evidence.
 
 Start with [the autopilot setup guide](docs/autopilot-setup.md) to adapt the
-system to another X account and Codex task.
+system to another X account and Codex task. The
+[local explainer skill contract](docs/local-explainer-skill.md) documents the
+Sol Max, exact-length, history, and recovery rules.
 
 The complete executable project uses one canonical directory. See
 [the project layout contract](docs/project-layout.md) and
@@ -124,11 +130,12 @@ It does not:
 When Alex explicitly grants standing autopilot authority, a model-free
 LaunchAgent checks the durable queue. Only a ready queue starts Desktop when
 needed. One existing in-app Luna Low heartbeat sends a reserved wake to the
-persistent Sol High Browser owner through the Codex app thread API after the
+persistent Sol Max Browser owner through the Codex app thread API after the
 durable terminal and quiet-period gate. Mobile Remote, local Desktop, and the
 automated Browser owner use one durable thread. If another turn starts during
 delivery, Codex queues or steers the follow-up, while the global owner claim
-still serializes publication. Sol High remains the only publication brain.
+still serializes publication. Sol remains the only publication brain, and the
+local explainer route always runs with Max reasoning.
 
 With `mandatory_response_mode=true`, every eligible available event inside the
 requested lookback receives exactly one reply. Support, sarcasm, jokes, insults,
@@ -407,7 +414,7 @@ python3 scripts/autopilot_bridge.py \
 ```
 
 If `dispatch` is true, the ready-only Luna relay sends the prompt to the pinned
-Sol High owner. The owner claims and marks the work as started:
+Sol Max owner. The owner claims and marks the work as started:
 
 ```bash
 python3 scripts/autopilot_bridge.py \
@@ -439,9 +446,9 @@ python3 scripts/autopilot_bridge.py \
 
 An empty queue exits without a model or Browser. A non-empty claim contains
 only eligible event metadata and the standing contract. The pinned Browser
-owner reads exact conversation history from SQLite, the append-only ledger, and
-recorded custom GPT URLs. The watcher, dispatcher, and relay never post
-directly.
+owner reads exact conversation history from SQLite and the append-only ledger.
+Historical custom GPT URLs remain audit metadata only. The watcher, dispatcher,
+and relay never post directly.
 
 `scripts/autopilot_resume.py` is a fail-closed retirement guard. It always
 exits nonzero and never claims an event or starts Codex. This prevents an old
@@ -481,9 +488,10 @@ Invalid timestamps, missing attachment metadata, and append-only history
 conflicts remain pending and make the command fail closed.
 
 Run expiry once at the start of a response cycle. Do not rerun it while a
-reply is being researched or Pro is thinking. After the cutoff is fixed, every
-new direct reply belongs to that active cycle until Alex stops it, even if an
-earlier target later becomes older than the initial lookback interval.
+reply is being researched or a local explainer draft is being generated. After
+the cutoff is fixed, every new direct reply belongs to that active cycle until
+Alex stops it, even if an earlier target later becomes older than the initial
+lookback interval.
 
 The Browser owner must open every remaining queued status, inspect the full
 reply subtree, classify text and media in context, and durably resolve it.
@@ -532,19 +540,18 @@ runs are idempotent. A `published` handoff additionally requires
 whose parent is the resolved event.
 
 Use `blocked` only for an actionable event whose terminal mandatory workflow
-dependency is unavailable, and include an allowed `blocker_code`. For example,
-a follow-up to a Pro reply is blocked when its
-exact historical ChatGPT conversation URL cannot be recovered and opening a
-new conversation would violate the continuity contract. It is not an ordinary
-skip. The Browser handoff marker must be
+dependency is unavailable, and include an allowed `blocker_code`. Legacy
+ChatGPT conversation, model, and screenshot blockers are no longer terminal
+because the local skill does not depend on those resources. The Browser handoff
+marker must be
 `durable_blocked_pending_root_resolve`, and `blocked` must not include a reply
 URL.
 
-Use the narrowest terminal code. `required_pro_model_unavailable` means the
-exact historical conversation exists but cannot use the required Pro model.
-`target_screenshot_unavailable` means repeated verified capture attempts could
-not produce the mandatory clean target-only screenshot and no contract-safe
-fallback exists. A transient Browser or capture error remains queued and must
+Use the narrowest terminal code. The historical
+`required_pro_model_unavailable`, `missing_historical_pro_conversation`, and
+`target_screenshot_unavailable` records are requeued by the compatibility
+command `pro-model-recovery-requeue`. A transient Browser or source error
+remains queued and must
 not use either terminal code.
 
 If live X proves that Alex already answered before the current audit, use
@@ -649,7 +656,7 @@ python3 scripts/autopilot_supervisor.py \
 The supervisor remains silent while healthy. A stale or failing poll receives
 one allowlisted LaunchAgent kickstart. A persistent or nonrepairable failure
 becomes one durable incident. Dispatcher and the existing Luna relay deliver
-that incident to the existing Sol High owner. Reservation, claim, cooldown,
+that incident to the existing Sol Max owner. Reservation, claim, cooldown,
 and a required completion report prevent duplicate wakes and false success.
 
 ```bash
@@ -666,7 +673,8 @@ files cannot grow without bound.
 SQLite stores an append-only conversation graph for both self-authored and Pro
 follow-ups. Each turn contains the exact public X text, status ID, parent status
 ID, URL, actor, author, provenance, timestamp, and factual source URLs. Pro
-chains also retain the exact ChatGPT conversation URL.
+chains may also retain an exact legacy ChatGPT conversation URL as historical
+audit metadata. Local generation never opens that URL.
 
 Import one JSON object, an array, or JSONL snapshots:
 
@@ -704,7 +712,7 @@ The `macos/` directory contains five LaunchAgent templates whose intervals come
 from `config.json`: poll, supervisor, session janitor, event dispatcher, and
 Codex CLI updater. The idle terminal path is entirely model-free. A ready queue
 starts Codex Desktop when needed, then the existing in-app Luna relay wakes the
-pinned Sol High Browser owner. The janitor archives historical service tasks
+pinned Sol Max Browser owner. The janitor archives historical service tasks
 and recovers orphaned claims without creating a Codex task or spending model
 tokens.
 

@@ -1,6 +1,6 @@
 ---
 name: x-twitter-operator
-description: Reliable operation of X/Twitter and related authenticated browser tabs through Codex Browser, including search, thread inspection, replies, duplicate prevention, multi-tab ownership, external fact checking, long ChatGPT Pro generation, follow-up continuity, monitoring, posting verification, and recovery after stale or unavailable browser sessions. Use whenever Alex asks Codex to read, search, scroll, monitor, reply, publish, delete, or otherwise act on X/Twitter, or to coordinate X with ChatGPT or another browser tab.
+description: Reliable operation of X/Twitter through Codex Browser, including search, thread inspection, replies, duplicate prevention, local «Пояснительная бригада» generation, external fact checking, follow-up continuity, monitoring, posting verification, and recovery after stale or unavailable browser sessions. Use whenever Alex asks Codex to read, search, scroll, monitor, reply, publish, delete, or otherwise act on X/Twitter.
 ---
 
 # X / Twitter Operator
@@ -13,20 +13,21 @@ Treat browser state as a single-owner resource.
 2. Keep every authenticated UI mutation in that session.
 3. Use parallel sessions only for read-only research, source verification, candidate triage, or draft preparation.
 4. Never expect a child session to inherit an existing Browser binding, claimed tab, login state, or persistent JavaScript runtime.
-5. Never let two sessions operate the same X or ChatGPT tab concurrently.
+5. Never let two sessions operate the same X tab concurrently.
 
 Read and follow the bundled `browser:control-in-app-browser` skill before Browser work. If Alex explicitly selects the built-in Browser, do not silently switch to Chrome, Computer Use, Playwright CLI, or another browser.
 
 ## Cost-aware model routing
 
-Keep the Browser owner and final publication brain on `gpt-5.6-sol` with `high` reasoning.
+Keep the Browser owner and final publication brain on `gpt-5.6-sol`.
 
-- Every standalone reply written without «Пояснительная бригада» must be authored and final-checked by Sol High.
-- Only Sol High may decide the live target, resolve contextual ambiguity, classify `short`/`pro`/`satirical-media`/`already-answered`, operate authenticated tabs, validate the final composer, or publish.
+- Every standalone reply written without «Пояснительная бригада» must be authored and final-checked by Sol High or stronger.
+- Every turn that may invoke `poyasnitelnaya-brigada` must run on Sol Max. Do not generate its output in High and do not delegate its writing to another model.
+- Only Sol may decide the live target, resolve contextual ambiguity, classify `short`/`pro`/`satirical-media`/`already-answered`, operate authenticated tabs, validate the final composer, or publish.
 - Use deterministic scripts before any model for ledger lookup, state counting, exact duplicate IDs, Unicode length, forbidden-character scans, and queue timestamps.
 - Use Luna Low only for bounded read-only mechanical work on supplied artifacts. It must not browse, research, draft replies, interpret context, or mutate state.
 - Use Terra Medium only for one bounded read-only research packet from current primary sources. It must not draft the final reply, personalize political messaging, operate authenticated tabs, or mutate state.
-- Treat helper output as evidence. Sol High must inspect the live thread, decide, write, validate, and publish.
+- Treat helper output as evidence. Sol must inspect the live thread, decide, write, validate, and publish.
 - Do not spawn a helper merely to wait. Do not fan out overlapping work because every subagent consumes its own tokens.
 - Give helpers only target-local context, exact inputs, required output, and a stop condition. Do not fork the full conversation for mechanical or research work.
 
@@ -57,10 +58,10 @@ Complete this sequence before a batch:
 2. Query deferred tools for a purpose-built X connector. Use it only if it supports the required operation and Alex did not explicitly require Browser.
 3. In the Browser owner session, reuse an existing browser binding. Do not initialize a second runtime when one exists.
 4. Discover open tabs and claim them by origin and purpose, never by array position.
-5. Build a role map such as `x-main`, `chatgpt-pro-1`, and `research-1`.
+5. Build a role map such as `x-main` and `research-1`.
 6. Verify the X account identity expected for the task. Alex's default posting account is `@axrbarsic`.
 7. Run a read-only test: inspect the current X tab and confirm its URL and page state.
-8. Create an in-run ledger containing target post ID, target URL, author, reply type, duplicate-check result, bot session URL when applicable, publication state, and reply URL.
+8. Create an in-run ledger containing target post ID, target URL, author, reply type, duplicate-check result, generation skill and model when applicable, publication state, and reply URL.
 
 If the read-only test fails, do not begin research that assumes later publication will work.
 
@@ -69,10 +70,6 @@ If the read-only test fails, do not begin research that assumes later publicatio
 Use the smallest stable tab set:
 
 - One primary X tab.
-- One ChatGPT tab by default.
-- One additional ChatGPT tab for each concurrent Pro request only when parallel waiting materially helps.
-- Never run more than three simultaneous «Пояснительная бригада»
-  conversations. A fourth Pro target waits for a slot.
 - Optional research tabs only when a connector or direct web lookup cannot cover the source.
 
 Reuse tabs instead of opening duplicates. Do not close or navigate a tab owned by another session. When a tab binding becomes stale, discard only that binding and reacquire the tab from the existing browser. Do not reinitialize the browser for an ordinary stale-tab error.
@@ -81,13 +78,12 @@ Before switching a tab, record its role and current URL. After switching, verify
 
 On Alex's 8 GB iMac, let the resource guard choose efficiency, balanced, or
 performance automatically. The profile controls whether Browser work may
-start, never the quality of Sol High reasoning or fact checking:
+start, never the required quality of Sol reasoning or fact checking:
 
 - idle dispatcher checks own zero Browser tabs and use no model;
 - short work owns one X tab;
-- open ChatGPT only after the Pro route is proven;
-- Pro work owns one X tab, one ChatGPT tab, and one generation;
-- at most one active Pro conversation at a time;
+- Pro work owns one X tab and generates locally through
+  `poyasnitelnaya-brigada` in the Sol Max owner turn;
 - `initial-audit-next --conversations 1`, never routine `status --full`;
 - no helper session for waiting, polling, or mechanical age filtering;
 - close old backlog with one
@@ -147,7 +143,7 @@ For each X target:
    repeated claims, and messages without a factual thesis.
 6. Classify the response:
    - `short`: simple claim that can be answered clearly with verified facts.
-   - `pro`: long, technical, historically dense, or apparently well-argued claim that benefits from the custom GPT.
+   - `pro`: long, technical, historically dense, or apparently well-argued claim that uses the local `poyasnitelnaya-brigada` skill.
    - `satirical-media`: experimental safe visual response to a pure insult.
    - `already-answered`: an exact direct child reply from `@axrbarsic` already
      exists for this event.
@@ -189,19 +185,16 @@ Use two independent checks immediately before every publication:
 
 The X display name is not provenance. An account named «Пояснительная
 бригада» may still contain a self-authored Sol reply. Determine `short` or
-`pro` only from the durable ledger, source session, payload record, or exact
-ChatGPT conversation URL. Never invent a historical Pro conversation from the
-display name.
+`pro` only from the durable ledger, exact conversation turns, source session,
+or payload record. Never infer provenance from the display name.
 
-When Alex manually publishes a reply created in the custom GPT and the local
-parent turn has no proven provenance, never default it to `short`. Search the
-durable ledger first. If no mapping exists, search ChatGPT history using the
-exact published Alex text and original X target. Treat it as `pro` only after
-one exact conversation proves both the target screenshot and immutable output.
-Record that exact conversation URL and import the Alex parent with
-`provenance=pro` before routing the inbound follow-up. If no exact match exists,
-record the negative recovery check before classifying the parent as manual or
-Sol `short`.
+When Alex manually publishes a reply created by «Пояснительная бригада» and the
+local parent turn has no proven provenance, never default it to `short`. Search
+the durable ledger and exact local evidence first. Treat it as `pro` only when
+the exact published text and original X target match a recorded skill output.
+Import the exact Alex parent with `provenance=pro` before routing the inbound
+follow-up. If no exact match exists, record the negative recovery check before
+classifying the parent as manual or Sol `short`.
 
 When practical, also search the account's replies using the target author or a distinctive phrase. Treat every prior bot-generated reply as an `@axrbarsic` reply.
 
@@ -211,7 +204,9 @@ If any check is uncertain, do not publish until resolved. Never count a skipped 
 
 Perform a live internet check before drafting every factual X reply, even when the claim seems familiar. Verify unstable or contested claims against current evidence. Prefer primary and authoritative sources, including official documents, courts, international organizations, election monitors, and original statistics.
 
-Keep this research local. Never forward sources, fact checks, summaries, or conclusions to «Пояснительная бригада». Its input is governed only by the screenshot-only contract below.
+For a `pro` reply, use the verified research directly while applying
+`poyasnitelnaya-brigada`. The skill and final publication brain are the same
+Sol Max turn, so no external bot handoff exists.
 
 Keep replies focused on claims, evidence, logic, and contradictions. Do not:
 
@@ -237,7 +232,7 @@ For an experimental satirical visual reply to a pure insult:
 - inspect the generated image before attachment;
 - keep factual rebuttal and primary-source support in text when the target
   contains a factual claim;
-- fall back to a Sol High text reply if the bot, image, or context check fails.
+- fall back to a Sol text reply if the bot, image, or context check fails.
 
 ## Text validation
 
@@ -247,10 +242,13 @@ Before filling the composer, validate the source text:
 python3 <skill-dir>/scripts/validate_reply.py --file /path/to/reply.txt --max 4000
 ```
 
-For the Pro contract:
+For the local «Пояснительная бригада» contract:
 
 ```bash
-python3 <skill-dir>/scripts/validate_reply.py --file /path/to/reply.txt --max 4000
+python3 <skill-dir>/scripts/validate_reply.py \
+  --file /path/to/reply.txt \
+  --strip-one-final-newline \
+  --exact 4000
 ```
 
 Resolve `<skill-dir>` as the directory containing this `SKILL.md`.
@@ -261,49 +259,38 @@ After filling the actual X composer, read its DOM value and repeat the length an
 
 ## Пояснительная бригада
 
-Use the custom GPT only for `pro` targets.
+Use the local `poyasnitelnaya-brigada` skill only for `pro` targets.
 
-- For every new X target, start a new ChatGPT conversation.
-- Before sending content, verify the visible model label is exactly `ChatGPT 5.6 Pro`.
-- Send exactly one tightly cropped screenshot containing only the target X post. Include the author, post text, attached media, and quoted post only when they belong to the target post.
-- Keep the ChatGPT composer completely empty. The submitted turn must contain zero text code points.
-- Never add instructions, captions, greetings, source links, fact checks, length requirements, punctuation, or any other text. The custom GPT already contains its own prompt.
-- Let Pro think as long as needed, including more than ten minutes.
-- Never click `Ответить сейчас` and never interrupt reasoning.
-- Bind the output to the exact submitted screenshot turn. Never reuse a global last assistant answer or `last .markdown.prose`; an older completed answer does not satisfy a newer pending screenshot.
-- Treat the bot output as immutable. Do not edit, shorten, expand, reorder, correct, or append anything.
-- Accept any non-empty output up to and including 4000 Unicode code points. Reject 4001 or more code points, U+2014, and U+2013.
-- Never reject, regenerate, pad, or alter an otherwise valid output merely because it is shorter than 4000 code points.
-- If a new-target output violates the contract, discard it and start a fresh conversation with the same screenshot-only submission. Do not send a correction request or explain the validation failure.
-- If a user replies to an existing bot-generated X answer, return to the exact canonical ChatGPT conversation for that chain. Continue there so the bot retains the discussion history.
-- For a follow-up, submit exactly one tightly cropped screenshot of the new reply in that historical conversation, with zero text code points.
-- If a follow-up output is invalid, keep the same historical conversation and resubmit only the same screenshot. Do not add correction instructions.
-- After a validated Pro reply is published and its X reply URL plus ChatGPT conversation URL are durably recorded, archive that ChatGPT conversation to remove sidebar clutter.
-- Keep conversations in `thinking` or `ready` state unarchived. Never archive while generation, validation, or publication verification is incomplete.
-- When a follow-up arrives, open the recorded canonical conversation URL. If ChatGPT requires it, unarchive that exact conversation, verify that the prior exchange is present, and continue there.
-- If the exact historical custom-GPT conversation is pinned to an older model, the only permitted new URL is an official `Branch in new chat` migration from the exact Pro-generated Alex answer. Accept it only after proving the same custom GPT identity, complete history through that answer, visible `ChatGPT 5.6 Pro`, and an append-only migration record. Never use a blank, copied, or manually recreated replacement conversation.
-- Before resolving `required_pro_model_unavailable`, durably record the exact
-  historical ChatGPT conversation URL and import the exact published Alex
-  parent with `provenance=pro`.
-- After the follow-up is validated and its X publication is verified, archive the same conversation again and update the ledger.
-- Never delete a «Пояснительная бригада» conversation. Archived history is required for later follow-ups.
-- If a clean target-only screenshot cannot be attached with an empty composer, mark the Pro target `blocked`. Never fall back to pasted text.
+- Require `gpt-5.6-sol` with reasoning effort `max` before invoking the skill.
+- Never open ChatGPT, the custom GPT, or a ChatGPT conversation for generation.
+- For a new target, give the skill the exact live author, complete target text,
+  quoted material that belongs to the target, relevant media meaning, verified
+  primary-source research, and the durable X chain.
+- For a follow-up to any historical `pro` answer, load the complete exact local
+  chain with `history-show` and apply the same skill to the new turn. An old
+  `chatgpt_conversation_url` is archival metadata only and must not be opened.
+- Generate one publication-ready Russian monologue of exactly 4000 Unicode code
+  points. Revise the draft semantically until deterministic validation passes.
+  Do not pad with filler.
+- Validate with:
 
-Read [references/pro-explainer-contract.md](references/pro-explainer-contract.md) before using the custom GPT.
+  ```bash
+  python3 <skill-dir>/scripts/validate_reply.py \
+    --file /path/to/reply.txt \
+    --strip-one-final-newline \
+    --exact 4000
+  ```
 
-## Waiting and monitoring
+  Then validate the actual X composer value again.
+- Record `provenance=pro`, `generation_skill=poyasnitelnaya-brigada`,
+  `generation_model=gpt-5.6-sol`, `reasoning_effort=max`, source URLs, target
+  URL, exact text hash, and verified reply URL in durable evidence.
+- Store every exact X turn in the existing SQLite and JSONL history. Local
+  conversation history, not a browser chat, is the canonical continuation
+  memory.
 
-Maintain an explicit Pro queue:
-
-- target X URL;
-- ChatGPT conversation URL;
-- submission time;
-- current state: `thinking`, `ready`, `invalid`, `published`, or `blocked`;
-- measured length, maximum-length result, and forbidden-character result.
-
-While Pro is thinking, the Browser owner may work on short X targets in the primary X tab. Parallel research sessions may gather sources, but must not operate authenticated tabs.
-
-Poll the Pro queue from the Browser owner session while it continues independent short work. Do not create standalone scheduled tasks for Pro polling because each standalone run creates another Codex task. If an in-chat schedule is explicitly required, attach it to the existing Browser owner task, stop it when the queue is empty, and archive completed technical runs.
+Read [references/pro-explainer-contract.md](references/pro-explainer-contract.md)
+before using the local skill.
 
 ## Token-free mention monitoring
 
@@ -339,16 +326,16 @@ without supplying target IDs.
   eligible replies receive exact stored history plus an age-policy skip without
   Browser or model use.
 - Fix the cutoff once. Do not rerun expiry during the active cycle. Continue
-  every newly arriving eligible reply and keep an active Pro target alive until
-  resolved, even after its original timestamp passes the initial cutoff.
+  every newly arriving eligible reply until resolved, even after its original
+  timestamp passes the initial cutoff.
 - Never put X credentials in config, logs, Git, task prompts, or process
   arguments. Use the native Keychain helper.
 - Do not install or load LaunchAgents until replay tests, live deduplication,
   controlled failure, recovery, and Browser comparison are all green.
 - The watcher may detect and queue work, but it must never draft or publish.
-  Sol High and the Browser owner retain classification and publication.
-- A queued Pro follow-up must return to the exact recorded historical
-  «Пояснительная бригада» conversation.
+  Sol and the Browser owner retain classification and publication.
+- A queued Pro follow-up must load the exact recorded local X history and use
+  `poyasnitelnaya-brigada` in Sol Max.
 - Run poll, watchdog, janitor, and the Python event dispatcher every minute on
   the 8 GB iMac. Empty, leased, voice-paused, and resource-deferred checks stop
   without a model, Browser, or new Codex task.
@@ -357,15 +344,14 @@ without supplying target IDs.
   chooses repair or X and returns one unambiguous `dispatch` plus `route`.
   The command atomically reserves one handoff without a model. After a
   reservation, Luna calls the direct Codex app tool exactly once with
-  `gpt-5.6-sol` and `high`, without reading owner status. A delivery failure
+  `gpt-5.6-sol` and `max`, without reading owner status. A delivery failure
   releases the exact reservation without touching the queue. The
   pinned Sol owner atomically claims the batch and executes the queued or
   steered wake prompt.
 - In normal unattended idle, supervisor-owned Desktop is closed and Luna does
   not run. If Alex intentionally keeps Desktop open, the heartbeat still
   performs its small scheduled gate, but it never wakes Sol for an empty queue.
-- Keep zero Browser tabs while idle, one X tab for short work, and add one
-  ChatGPT tab only for a proven Pro route.
+- Keep zero Browser tabs while idle and one X tab for short or Pro work.
 - Close all task-owned tabs and finish normally. The model-free session
   janitor archives the task after its minimum age. `notLoaded` alone is not
   proof that a live owner died.
@@ -378,7 +364,7 @@ installing, diagnosing, or operating the local watcher.
 
 ## Publication transaction
 
-Treat each reply as a transaction:
+Treat each reply or multi-part reply thread as one transaction:
 
 1. Reopen or verify the exact target.
 2. Repeat duplicate checks.
@@ -388,7 +374,16 @@ Treat each reply as a transaction:
 6. Confirm the target and account once more.
 7. Click the exact reply control once.
 8. Verify that the composer cleared and the new reply appears in the thread or account search.
-9. Record the reply URL and final state in the ledger.
+9. For a multi-part payload, open the verified reply URL, publish the next
+   exact part as its child, and repeat until the complete chain is verified.
+10. Record every part index, exact text hash, status ID, parent status ID, and
+    reply URL in the ledger.
+
+Run the queue gate and duplicate check immediately before the first part.
+After the first part is published, finish the already-started thread transaction
+without interleaving unrelated work. If a later part fails, record
+`partial_thread_unverified`, preserve every verified part URL, and resume only
+from the first missing part after proving the existing prefix.
 
 Do not report publication success after a click alone. A timeout or unchanged composer means `unverified`, not `published`.
 
@@ -425,7 +420,7 @@ During long work, report verified progress after meaningful batches and at least
 - duplicates skipped;
 - short replies published;
 - Pro replies published;
-- Pro replies still thinking;
+- Pro drafts rejected by exact validation;
 - blockers.
 
 At completion, distinguish `published`, `skipped`, `unverified`, and `blocked`. Never inflate the completed count.

@@ -1107,37 +1107,66 @@ def check_contract(
         )
     )
 
-    skill = contract.get("skill", {})
-    source_skill = resolve_project_path(root, str(skill["source"]))
-    installed_skill = resolve_home_path(home, str(skill["installed"]))
-    if not source_skill.is_dir() or not installed_skill.is_dir():
-        skill_ok = False
-        details = {
-            "source_exists": source_skill.is_dir(),
-            "installed_exists": installed_skill.is_dir(),
-        }
-    else:
-        source_digest = tree_digest(source_skill)
-        installed_digest = tree_digest(installed_skill)
-        skill_ok = source_digest == installed_digest
-        details = {
-            "source_sha256": source_digest,
-            "installed_sha256": installed_digest,
-        }
-    checks.append(
-        Check(
-            "deployment.x_skill",
-            "pass" if skill_ok else "fail",
-            (
-                "Установленный X skill совпадает с Git-копией."
-                if skill_ok
-                else "Установленный X skill расходится с Git-копией."
-            ),
-            "После проверки скопируй skill-backup/x-twitter-operator в "
-            "~/.codex/skills/x-twitter-operator.",
-            details,
+    configured_skills = contract.get("skills")
+    if configured_skills is None:
+        legacy_skill = contract.get("skill", {})
+        configured_skills = [
+            {
+                "id": "x_skill",
+                "display_name": "X skill",
+                **legacy_skill,
+            }
+        ]
+    if not isinstance(configured_skills, list) or not configured_skills:
+        raise ValueError("Contract skills must be a non-empty array")
+    for skill in configured_skills:
+        if not isinstance(skill, dict):
+            raise ValueError("Each contract skill must be an object")
+        skill_id = str(skill.get("id", "")).strip()
+        if not skill_id:
+            raise ValueError("Each contract skill requires an id")
+        display_name = str(
+            skill.get("display_name", skill_id)
+        ).strip()
+        source_value = str(skill["source"])
+        installed_value = str(skill["installed"])
+        source_skill = resolve_project_path(root, source_value)
+        installed_skill = resolve_home_path(home, installed_value)
+        if not source_skill.is_dir() or not installed_skill.is_dir():
+            skill_ok = False
+            details = {
+                "source": source_value,
+                "installed": installed_value,
+                "source_exists": source_skill.is_dir(),
+                "installed_exists": installed_skill.is_dir(),
+            }
+        else:
+            source_digest = tree_digest(source_skill)
+            installed_digest = tree_digest(installed_skill)
+            skill_ok = source_digest == installed_digest
+            details = {
+                "source": source_value,
+                "installed": installed_value,
+                "source_sha256": source_digest,
+                "installed_sha256": installed_digest,
+            }
+        checks.append(
+            Check(
+                f"deployment.{skill_id}",
+                "pass" if skill_ok else "fail",
+                (
+                    f"Установленный {display_name} совпадает с Git-копией."
+                    if skill_ok
+                    else (
+                        f"Установленный {display_name} расходится "
+                        "с Git-копией."
+                    )
+                ),
+                f"После проверки скопируй {source_value} в "
+                f"~/{installed_value.lstrip('/')}.",
+                details,
+            )
         )
-    )
 
     personality = contract.get("personality", {})
     policy_path = resolve_project_path(

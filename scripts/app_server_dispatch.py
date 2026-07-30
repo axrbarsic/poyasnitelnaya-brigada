@@ -37,7 +37,7 @@ OWNER_PROMPT = """Служебное пробуждение X автопилот
 .codex/config.toml, полный skill x-twitter-operator и только требуемые им
 references. Затем выполни `python3 scripts/autopilot_bridge.py --config
 config.json started --claim-token CLAIM_TOKEN` и дословно исполни prompt из
-claim как единственный Browser owner на Sol High. После durable history и
+claim как единственный Browser owner на Sol Max. После durable history и
 durable resolve всех заявленных событий выполни `python3
 scripts/autopilot_bridge.py --config config.json completed --claim-token
 CLAIM_TOKEN`. При ошибке до durable resolve выполни `python3
@@ -48,7 +48,7 @@ Browser-вкладки, не самоархивируйся и не запуск
 RELAY_PROMPT = """Ты только событийный ретранслятор X автопилота.
 Не используй Browser, shell или файлы. Сначала через `tool_search` найди прямой
 Codex app tool `codex_app.send_message_to_thread`, затем ровно один раз вызови
-его для threadId `{owner_thread_id}`, model `gpt-5.6-sol`, thinking `high` и
+его для threadId `{owner_thread_id}`, model `gpt-5.6-sol`, thinking `max` и
 передай ему следующий prompt дословно:
 
 <owner_prompt>

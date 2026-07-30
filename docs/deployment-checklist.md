@@ -47,7 +47,7 @@
   its live relay gate succeeds.
 - [x] Confirm the loaded poll, watchdog, and janitor complete with exit code 0.
 - [x] Confirm the retired CLI launcher exits nonzero before claiming an event.
-- [x] Create and pin the Sol High Codex Desktop Browser owner.
+- [x] Create the Sol Max Codex Desktop Browser owner.
 - [x] Pause the five-minute Luna Low dispatcher automation.
 - [x] Prove that direct app-server Browser ownership fails closed because the
   external runtime has no Codex Desktop Browser session.
@@ -65,19 +65,25 @@
   creates no task, and starts no helper bundle.
 - [x] Confirm every transient relay process exits after a terminal relay
   outcome, including a failed handoff.
-- [ ] Delete the old automation through the official Codex automation API.
-  It remains `PAUSED`: the current Desktop build returns
-  `No handler registered` for `codex_app.automation_update`, so deployment
-  does not bypass the official API by deleting its files directly.
+- [x] Keep the retired dispatcher automation `x` paused as a recovery marker.
+  The current Desktop build exposes the official `automation_update` tool, and
+  automation state is changed only through that tool.
+- [x] Pause the retired outbound heartbeat `x-pro-15`.
+- [x] Create the standalone local cron `x-15` on `gpt-5.6-sol` with effort
+  `max`, a 15-minute interval, and the versioned `macos/x-15.prompt.txt`.
+- [x] Prove one independent `x-15` run publishes a locally generated,
+  deterministically validated 4000-code-point reply without opening ChatGPT.
+- [x] Protect `x-15` with the atomic `outbound_cycle.py` lease and bounded
+  two-target catch-up contract.
 - [x] Confirm real new replies create exact queue items.
 - [x] Acknowledge the event only after the existing X workflow records its
   disposition.
-- [x] Keep all publishing inside the claimed Sol High Browser run.
+- [x] Keep all publishing inside the claimed Sol Max Browser run.
 - [x] Confirm four naturally rediscovered events produce one dispatcher claim.
 - [x] Confirm a second dispatcher run inside the lease does not start a
   duplicate Sol turn.
 - [x] Confirm efficiency, balanced, and performance modes are selected in live
-  resource samples without changing Sol High quality.
+  resource samples without changing Sol Max quality.
 - [x] Confirm unit coverage makes active voice and the post-voice hold defer
   Browser work while the durable queue remains available.
 - [x] Confirm the dispatcher process lock stops a second manual or launchd

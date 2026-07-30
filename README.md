@@ -20,12 +20,14 @@
        width="430">
 </p>
 
-> Статус deployment на 2026-07-26: terminal-first контур прошел живой canary.
-> Постоянный in-app Sol High Browser owner обработал три события, затем
-> событийный Luna Low relay сам обнаружил и передал следующее органическое
-> событие. Все четыре ответа опубликованы, проверены и durably resolved.
-> Внешний app-server больше не используется как relay. Старая automation `x`
-> остается на паузе до финальной проверки установленного LaunchAgent.
+> Статус deployment на 2026-07-30: входящий terminal-first контур работает
+> через Luna Low relay и постоянный Sol Max Browser owner. Маршрут
+> «Пояснительной бригады» перенесен из custom GPT в локальный versioned skill.
+> Генерация больше не открывает ChatGPT, использует Sol Max, точную SQLite
+> history и детерминированный контракт ровно на 4000 Unicode code points.
+> Периодический outbound вынесен из heartbeat занятой owner-сессии в
+> самостоятельный local cron `x-15`. Атомарный `outbound_cycle.py` не допускает
+> перекрытия запусков и безопасно учитывает bounded catch-up.
 
 ## Лицензия и авторство
 
@@ -63,10 +65,11 @@
    turn. Ошибка доставки освобождает точную reservation командой
    `release-handoff`. Reservation с TTL и глобальный owner claim не позволяют
    двум heartbeat создать двух Browser-owner.
-9. Sol High открывает живую ветку X, анализирует текст и изображения, проверяет
+9. Sol Max открывает живую ветку X, анализирует текст и изображения, проверяет
    первичные источники, историю диалога и отсутствие дубля.
-10. Короткий ответ пишет Sol High. Длинный follow-up может продолжаться только в
-   точной исторической сессии кастомного GPT.
+10. Короткий ответ пишет Sol. Маршрут «Пояснительной бригады» выполняется
+    локальным skill в Sol Max и возвращает один ответ ровно на 4000 Unicode
+    code points. ChatGPT и custom GPT для генерации не открываются.
 11. После публикации сохраняются точный URL, текст, источники и durable
    disposition. Только после этого событие исчезает из очереди.
 12. После пустой очереди supervisor закрывает только тот Desktop, который сам
@@ -84,7 +87,7 @@
 история больше не может скрыть такую ветку.
 
 Watcher и dispatcher сами никогда ничего не публикуют. Авторизованным Browser
-управляет только одна задача Sol High.
+управляет только одна задача Sol Max.
 
 ## Зачем такое разделение
 
@@ -111,7 +114,7 @@ Watcher и dispatcher сами никогда ничего не публикую
   не останавливает очередь. При реальной перегрузке очередь остается
   нетронутой.
 - Автоматический профиль выбирает экономный, сбалансированный или
-  производительный режим, но не снижает качество Sol High и фактчекинга.
+  производительный режим, но не снижает качество Sol Max и фактчекинга.
 - Активный голосовой разговор переводит guard в экономный режим и ставит
   тяжелую Browser-работу на паузу. Минутный watcher продолжает складывать
   события в очередь, а пятиминутный защитный хвост закрывает паузы между
@@ -122,7 +125,7 @@ Watcher и dispatcher сами никогда ничего не публикую
 - Безмодельный supervisor раз в минуту запускает системный doctor. Зеленое
   состояние никого не будит. Stale poll получает один allowlisted
   `launchctl kickstart`; повторный провал создает один durable incident и
-  передает его существующей Sol High owner-сессии через тот же Luna relay.
+  передает его существующей Sol Max owner-сессии через тот же Luna relay.
 - Repair incident имеет reservation, claim token, cooldown и обязательный
   отчет. Одинаковая поломка не создает минутный шторм модельных пробуждений.
 - Событийный relay использует одну существующую heartbeat-сессию и одну
@@ -205,30 +208,28 @@ python3 xmention_watcher.py --config config.json status
 используют короткое перекрытие и дедупликацию по неизменяемому X ID.
 
 После этого установите пять LaunchAgent, один in-app Luna relay heartbeat и
-одну закрепленную сессию Sol High
-по
-[русскому руководству автопилота](docs/autopilot-setup.ru.md) и
+одну закрепленную сессию Sol Max по
+[русскому руководству автопилота](docs/autopilot-setup.ru.md),
+[контракту локального skill](docs/local-explainer-skill.ru.md) и
 [deployment checklist](docs/deployment-checklist.md). Для iMac с 8 ГБ отдельно
 прочитайте [контракт памяти и жизненного цикла](docs/memory-operations.ru.md).
 
 ## Важные контракты
 
-- Idle run не открывает Browser. Short использует одну X-вкладку. ChatGPT
-  открывается только после доказанного Pro route.
-- На iMac с 8 GB памяти одновременно работает максимум одна Pro generation.
-- Публикационные решения принимает только Sol High.
-- Новая Pro-цель начинает новую conversation.
-- Follow-up к Pro продолжает точную историческую conversation.
-- Если историческая conversation закреплена за старой моделью, допускается
-  только официальный `Branch in new chat` от точного Pro-ответа Alex. Browser
-  обязан подтвердить ту же идентичность custom GPT, полную историю до этого
-  ответа и видимую модель `ChatGPT 5.6 Pro`. Source URL и target URL
-  сохраняются append-only как проверенная миграция.
-- После такой миграции `pro-model-recovery-requeue` возвращает все подходящие
-  model blockers в очередь без ручной передачи event ID.
-- В custom GPT отправляется только screenshot цели и 0 символов текста.
-- Ответ custom GPT переносится без смыслового редактирования.
-- Разрешенная длина X ответа: от 1 до 4000 Unicode code points.
+- Idle run не открывает Browser. Любой ответ использует не более одной
+  task-owned X-вкладки.
+- Публикационные решения принимает только Sol. Локальный skill
+  `poyasnitelnaya-brigada` всегда требует `gpt-5.6-sol` и effort `max`.
+- Новая Pro-цель и каждый Pro follow-up получают полную точную историю из
+  SQLite и append-only JSONL. Browser-сессия ChatGPT для памяти не нужна.
+- Старые `chatgpt_conversation_url` и migration records сохраняются только как
+  исторический audit trail и больше не являются runtime dependency.
+- Команда `pro-model-recovery-requeue` сохранена для совместимости. Теперь она
+  возвращает в очередь старые model, conversation и screenshot blockers,
+  которые устранил локальный skill, без ручной передачи event ID.
+- Ответ локальной «Пояснительной бригады» содержит ровно 4000 Unicode code
+  points, проходит `validate_reply.py --exact 4000` и публикуется без
+  смыслового редактирования.
 - Перед публикацией проверяются дубль, parent status, composer и фактический URL.
 - Media-only ответ классифицируется относительно точного parent, а незнакомый
   мем проверяется по интернет-источникам.
@@ -236,12 +237,10 @@ python3 xmention_watcher.py --config config.json status
   другой контрактный ресурс недоступен.
 - Terminal `blocked` требует точного `blocker_code`. Временная ошибка Browser,
   Pro, rate limit или валидации остается в очереди для повтора.
-- `required_pro_model_unavailable` используется, только если точная
-  историческая conversation существует, но требуемая Pro-модель в ней
-  недоступна.
-- `target_screenshot_unavailable` используется только после повторных
-  проверенных попыток, когда обязательный чистый screenshot цели невозможно
-  получить и безопасного контрактного обхода нет.
+- `required_pro_model_unavailable`, `missing_historical_pro_conversation` и
+  `target_screenshot_unavailable` являются историческими blocker codes.
+  Локальный skill устранил эти runtime-зависимости и адресно requeue старые
+  записи.
 - `memory-audit` проверяет целостность SQLite, foreign keys, стабильные X user
   ID, точную историю, resolutions и карантин candidate corpus. Пока официальный
   архив готовится, нормальный статус равен `archive_pending`.

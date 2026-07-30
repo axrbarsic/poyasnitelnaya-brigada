@@ -28,8 +28,8 @@
   "memory_guard_helper_recovery_codex_rss_mb": 2000,
   "memory_guard_helper_recovery_total_rss_mb": 512,
   "memory_guard_high_free_recovery_percent": 35,
-  "memory_guard_high_free_recovery_codex_rss_mb": 2700,
-  "memory_guard_high_free_recovery_renderer_count": 5,
+  "memory_guard_high_free_recovery_codex_rss_mb": 3200,
+  "memory_guard_high_free_recovery_renderer_count": 8,
   "memory_guard_high_free_recovery_helper_rss_mb": 512,
   "memory_guard_profiles": {
     "efficiency": {
@@ -58,7 +58,7 @@
     }
   },
   "memory_guard_hard_caps": {
-    "memory_guard_max_codex_rss_mb": 2700,
+    "memory_guard_max_codex_rss_mb": 3200,
     "memory_guard_max_renderer_count": 8,
     "memory_guard_max_node_repl_count": 10,
     "memory_guard_max_mcp_process_count": 20,
