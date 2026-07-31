@@ -23,7 +23,7 @@ Keep the Browser owner and final publication brain on `gpt-5.6-sol`.
 
 - Every standalone reply written without «Пояснительная бригада» must be authored and final-checked by Sol High or stronger.
 - Every turn that may invoke `poyasnitelnaya-brigada` must run on Sol Max. Do not generate its output in High and do not delegate its writing to another model.
-- Only Sol may decide the live target, resolve contextual ambiguity, classify `short`/`pro`/`satirical-media`/`already-answered`, operate authenticated tabs, validate the final composer, or publish.
+- Only Sol may decide the live target, resolve contextual ambiguity, classify `short`/`local-max`/`satirical-media`/`already-answered`, operate authenticated tabs, validate the final composer, or publish.
 - Use deterministic scripts before any model for ledger lookup, state counting, exact duplicate IDs, Unicode length, forbidden-character scans, and queue timestamps.
 - Use Luna Low only for bounded read-only mechanical work on supplied artifacts. It must not browse, research, draft replies, interpret context, or mutate state.
 - Use Terra Medium only for one bounded read-only research packet from current primary sources. It must not draft the final reply, personalize political messaging, operate authenticated tabs, or mutate state.
@@ -42,8 +42,8 @@ Distinguish analysis from publication.
 - If Alex explicitly grants standing autopilot authority, treat later queued
   eligible replies and conversation continuations as the same bounded reply
   workflow until Alex revokes it.
-  This standing authority covers contextual inspection, fact checking, short or
-  Pro routing, publication, verification, and durable resolution. It does not
+  This standing authority covers contextual inspection, fact checking, short
+  or local Sol Max routing, publication, verification, and durable resolution. It does not
   cover likes, reposts, follows, direct messages, unrelated original posts, or
   deletion of existing posts.
 - Delete or replace an existing post only when Alex explicitly authorizes that exact effect.
@@ -82,7 +82,7 @@ start, never the required quality of Sol reasoning or fact checking:
 
 - idle dispatcher checks own zero Browser tabs and use no model;
 - short work owns one X tab;
-- Pro work owns one X tab and generates locally through
+- Local Sol Max work owns one X tab and generates locally through
   `poyasnitelnaya-brigada` in the Sol Max owner turn;
 - `initial-audit-next --conversations 1`, never routine `status --full`;
 - no helper session for waiting, polling, or mechanical age filtering;
@@ -143,15 +143,15 @@ For each X target:
    repeated claims, and messages without a factual thesis.
 6. Classify the response:
    - `short`: simple claim that can be answered clearly with verified facts.
-   - `pro`: long, technical, historically dense, or apparently well-argued claim that uses the local `poyasnitelnaya-brigada` skill.
+   - `local-max`: long, technical, historically dense, or apparently well-argued claim that uses the local `poyasnitelnaya-brigada` skill.
    - `satirical-media`: experimental safe visual response to a pure insult.
    - `already-answered`: an exact direct child reply from `@axrbarsic` already
      exists for this event.
 7. Never use content quality as a reason for `skip`. A `skip` resolution is
    valid only for `already-answered` and requires an imported exact Alex child
    turn plus its canonical URL. A deleted, restricted, or contract-blocked
-   target uses a precise terminal blocker code. Temporary Browser, Pro, rate,
-   or validation failures remain queued for retry.
+   target uses a precise terminal blocker code. Temporary Browser, local
+   generation, rate, or validation failures remain queued for retry.
 
 ## Cross-thread commenter memory
 
@@ -185,16 +185,20 @@ Use two independent checks immediately before every publication:
 
 The X display name is not provenance. An account named «Пояснительная
 бригада» may still contain a self-authored Sol reply. Determine `short` or
-`pro` only from the durable ledger, exact conversation turns, source session,
-or payload record. Never infer provenance from the display name.
+`local-max` only from the durable ledger, exact conversation turns, source
+session, or payload record. Never infer provenance from the display name.
 
-When Alex manually publishes a reply created by «Пояснительная бригада» and the
-local parent turn has no proven provenance, never default it to `short`. Search
-the durable ledger and exact local evidence first. Treat it as `pro` only when
-the exact published text and original X target match a recorded skill output.
-Import the exact Alex parent with `provenance=pro` before routing the inbound
-follow-up. If no exact match exists, record the negative recovery check before
-classifying the parent as manual or Sol `short`.
+When Alex manually publishes a reply created by «Пояснительная бригада», keep
+origin provenance separate from continuation mode. Never rewrite an unknown
+manual origin as `provenance=pro`. Read the deterministic
+`manual_parent_continuation` profile from the claim payload. A proven local-max
+origin, at least 500 Unicode code points, at least three paragraphs, or at
+least one source URL routes the follow-up to local `poyasnitelnaya-brigada`
+with complete SQLite history. A concise exact parent with none of those signals
+may use Sol `short`. If the profile says `pending_exact_parent_restore`, restore
+and durably import the exact live X parent first, then apply the same adaptive
+classification. Preserve `manual_unknown` when origin remains unproven. Never
+open ChatGPT web for either route.
 
 When practical, also search the account's replies using the target author or a distinctive phrase. Treat every prior bot-generated reply as an `@axrbarsic` reply.
 
@@ -204,7 +208,7 @@ If any check is uncertain, do not publish until resolved. Never count a skipped 
 
 Perform a live internet check before drafting every factual X reply, even when the claim seems familiar. Verify unstable or contested claims against current evidence. Prefer primary and authoritative sources, including official documents, courts, international organizations, election monitors, and original statistics.
 
-For a `pro` reply, use the verified research directly while applying
+For a `local-max` reply, use the verified research directly while applying
 `poyasnitelnaya-brigada`. The skill and final publication brain are the same
 Sol Max turn, so no external bot handoff exists.
 
@@ -248,7 +252,8 @@ For the local «Пояснительная бригада» contract:
 python3 <skill-dir>/scripts/validate_reply.py \
   --file /path/to/reply.txt \
   --strip-one-final-newline \
-  --exact 4000
+  --non-empty \
+  --max 4000
 ```
 
 Resolve `<skill-dir>` as the directory containing this `SKILL.md`.
@@ -261,43 +266,45 @@ For the X DraftJS contenteditable composer, the canonical DOM value is the
 ordered sequence of elements with `data-block="true"`: take each block's
 `textContent` and join the blocks with one literal `\n`. Do not validate raw
 `innerText`, because it can insert a presentation-only extra newline between
-DraftJS blocks and falsely turn an exact 4000-code-point draft into 4005.
+DraftJS blocks and falsely report a source over the publication limit.
 Record the block count, reconstructed code-point count, exact source match,
 and forbidden-character scan in evidence.
 
 ## Пояснительная бригада
 
-Use the local `poyasnitelnaya-brigada` skill only for `pro` targets.
+Use the local `poyasnitelnaya-brigada` skill only for `local-max` targets.
 
 - Require `gpt-5.6-sol` with reasoning effort `max` before invoking the skill.
 - Never open ChatGPT, the custom GPT, or a ChatGPT conversation for generation.
 - For a new target, give the skill the exact live author, complete target text,
   quoted material that belongs to the target, relevant media meaning, verified
   primary-source research, and the durable X chain.
-- For a follow-up to any historical `pro` answer, load the complete exact local
-  chain with `history-show` and apply the same skill to the new turn. An old
+- For a follow-up whose parent has legacy `provenance=pro`, load the complete
+  exact local chain with `history-show` and apply the same skill to the new turn. An old
   `chatgpt_conversation_url` is archival metadata only and must not be opened.
-- Generate one publication-ready Russian monologue of exactly 4000 Unicode code
-  points. Revise the draft semantically until deterministic validation passes.
-  Do not pad with filler.
+- Generate one non-empty publication-ready Russian monologue of at most 4000
+  Unicode code points. Do not target the maximum and do not pad with filler.
 - Validate with:
 
   ```bash
   python3 <skill-dir>/scripts/validate_reply.py \
     --file /path/to/reply.txt \
     --strip-one-final-newline \
-    --exact 4000
+    --non-empty \
+    --max 4000
   ```
 
   Then validate the actual X composer value again.
-- Record `provenance=pro`, `generation_skill=poyasnitelnaya-brigada`,
+- Record `generation_profile=local_sol_max`,
+  `generation_skill=poyasnitelnaya-brigada`,
   `generation_model=gpt-5.6-sol`, `reasoning_effort=max`, source URLs, target
-  URL, exact text hash, and verified reply URL in durable evidence.
+  URL, exact text hash, and verified reply URL in durable evidence. Keep
+  `provenance=pro` only as the legacy database compatibility marker.
 - Store every exact X turn in the existing SQLite and JSONL history. Local
   conversation history, not a browser chat, is the canonical continuation
   memory.
 
-Read [references/pro-explainer-contract.md](references/pro-explainer-contract.md)
+Read [references/local-sol-max-explainer-contract.md](references/local-sol-max-explainer-contract.md)
 before using the local skill.
 
 ## Token-free mention monitoring
@@ -342,7 +349,7 @@ without supplying target IDs.
   controlled failure, recovery, and Browser comparison are all green.
 - The watcher may detect and queue work, but it must never draft or publish.
   Sol and the Browser owner retain classification and publication.
-- A queued Pro follow-up must load the exact recorded local X history and use
+- A queued local Sol Max follow-up must load the exact recorded local X history and use
   `poyasnitelnaya-brigada` in Sol Max.
 - Run poll, watchdog, janitor, and the Python event dispatcher every minute on
   the 8 GB iMac. Empty, leased, voice-paused, and resource-deferred checks stop
@@ -359,7 +366,7 @@ without supplying target IDs.
 - In normal unattended idle, supervisor-owned Desktop is closed and Luna does
   not run. If Alex intentionally keeps Desktop open, the heartbeat still
   performs its small scheduled gate, but it never wakes Sol for an empty queue.
-- Keep zero Browser tabs while idle and one X tab for short or Pro work.
+- Keep zero Browser tabs while idle and one X tab for short or local Sol Max work.
 - Close all task-owned tabs and finish normally. The model-free session
   janitor archives the task after its minimum age. `notLoaded` alone is not
   proof that a live owner died.
@@ -427,8 +434,8 @@ During long work, report verified progress after meaningful batches and at least
 - candidates checked;
 - duplicates skipped;
 - short replies published;
-- Pro replies published;
-- Pro drafts rejected by exact validation;
+- local Sol Max replies published;
+- local Sol Max drafts rejected by exact validation;
 - blockers.
 
 At completion, distinguish `published`, `skipped`, `unverified`, and `blocked`. Never inflate the completed count.

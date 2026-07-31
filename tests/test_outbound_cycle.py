@@ -25,6 +25,13 @@ class OutboundCycleTests(unittest.TestCase):
         self.assertIn("gpt-5.6-sol", prompt)
         self.assertIn("reasoning effort max", prompt)
         self.assertIn("target_limit", prompt)
+        self.assertIn("scripts/verify_x_note_tweet.py", prompt)
+        self.assertIn("scripts/build_outbound_history.py", prompt)
+        self.assertIn("history-import", prompt)
+        self.assertIn("history-show <TARGET_STATUS_ID>", prompt)
+        self.assertIn("--non-empty --max 4000", prompt)
+        self.assertNotIn("--exact 4000", prompt)
+        self.assertIn("valid=true", prompt)
         for command in ("claim", "started", "renew", "completed", "failed"):
             self.assertIn(
                 f"scripts/outbound_cycle.py --state "

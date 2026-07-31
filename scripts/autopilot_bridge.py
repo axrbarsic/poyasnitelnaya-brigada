@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sqlite3
 import sys
 import uuid
@@ -25,6 +26,130 @@ try:
 except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import xmention_watcher as watcher  # type: ignore[no-redef]
+
+
+LOCAL_MAX_TURN_PROVENANCE = {
+    "pro",
+    "local_sol_max_and_live_x_dom",
+    "poyasnitelnaya_brigada_local_sol_max",
+    "poyasnitelnaya_brigada_local_sol_max_and_live_x_dom",
+}
+SOURCE_URL_PATTERN = re.compile(r"https?://[^\s]+")
+
+
+def replied_to_status_id(payload: dict[str, Any]) -> str | None:
+    references = payload.get("referenced_tweets") or []
+    if not isinstance(references, list):
+        return None
+    for reference in references:
+        if not isinstance(reference, dict):
+            continue
+        if reference.get("type") != "replied_to":
+            continue
+        status_id = str(reference.get("id", "")).strip()
+        if status_id.isdigit():
+            return status_id
+    return None
+
+
+def manual_parent_continuation_profile(
+    connection: sqlite3.Connection,
+    event_id: str,
+    *,
+    configured_user_id: str,
+) -> dict[str, Any] | None:
+    """Classify how to continue an exact Alex parent without guessing origin."""
+
+    event = connection.execute(
+        """
+        SELECT in_reply_to_user_id, payload_json
+        FROM events
+        WHERE event_id = ?
+        """,
+        (event_id,),
+    ).fetchone()
+    if event is None:
+        return None
+    try:
+        payload = json.loads(str(event["payload_json"]))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    parent_status_id = replied_to_status_id(payload)
+    if parent_status_id is None:
+        return None
+    is_direct_reply = (
+        bool(configured_user_id)
+        and str(event["in_reply_to_user_id"] or "") == configured_user_id
+    )
+    parent = connection.execute(
+        """
+        SELECT actor, exact_text, provenance
+        FROM conversation_turns
+        WHERE status_id = ?
+        """,
+        (parent_status_id,),
+    ).fetchone()
+    if parent is None:
+        if not is_direct_reply:
+            return None
+        return {
+            "parent_status_id": parent_status_id,
+            "parent_history_status": "missing_exact_alex_parent",
+            "parent_origin_provenance": "unknown",
+            "origin_proven": False,
+            "recommended_route": "pending_exact_parent_restore",
+            "required_action": (
+                "restore_exact_live_x_parent_then_classify_adaptively"
+            ),
+            "chatgpt_web_allowed": False,
+        }
+    if str(parent["actor"]) != "alex":
+        return None
+
+    exact_text = str(parent["exact_text"] or "")
+    provenance = str(parent["provenance"] or "").strip()
+    paragraphs = [
+        value.strip()
+        for value in re.split(r"\n\s*\n", exact_text)
+        if value.strip()
+    ]
+    source_url_count = len(SOURCE_URL_PATTERN.findall(exact_text))
+    proven_local_max = provenance in LOCAL_MAX_TURN_PROVENANCE
+    substantive = (
+        len(exact_text) >= 500
+        or len(paragraphs) >= 3
+        or source_url_count >= 1
+    )
+    adaptive_local_max = proven_local_max or substantive
+    if proven_local_max:
+        basis = "proven_local_max_origin"
+    elif substantive:
+        basis = "adaptive_manual_parent_content"
+    else:
+        basis = "concise_manual_parent_content"
+    return {
+        "parent_status_id": parent_status_id,
+        "parent_history_status": "exact_alex_parent",
+        "parent_origin_provenance": provenance or "manual_unknown",
+        "origin_proven": bool(provenance),
+        "content_profile": {
+            "code_points": len(exact_text),
+            "paragraph_count": len(paragraphs),
+            "source_url_count": source_url_count,
+            "substantive": substantive,
+        },
+        "adaptive_local_max": adaptive_local_max,
+        "recommended_route": "local-max" if adaptive_local_max else "short",
+        "continuation_basis": basis,
+        "required_action": (
+            "use_complete_local_history_and_poyasnitelnaya_brigada"
+            if adaptive_local_max
+            else "use_complete_local_history_and_sol_short"
+        ),
+        "chatgpt_web_allowed": False,
+    }
 
 
 def resolve_path(config_path: Path, value: str) -> Path:
@@ -313,6 +438,13 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
                 **event,
                 "commenter_memory": memory,
             }
+            parent_profile = manual_parent_continuation_profile(
+                connection,
+                event_id,
+                configured_user_id=watcher_config.user_id,
+            )
+            if parent_profile is not None:
+                enriched_event["manual_parent_continuation"] = parent_profile
             existing_resolution = connection.execute(
                 """
                 SELECT disposition, reason, blocker_code, resolved_at
@@ -415,14 +547,6 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
             "event_ids": [],
         }
     guard = resource_guard.check(config_path)
-    if guard.get("defer"):
-        return {
-            "status": "resource_deferred",
-            "dispatch": False,
-            "pending_count": len(event_ids),
-            "event_ids": event_ids,
-            "resource_guard": guard,
-        }
     if queue["owner_busy"] or queue["leased_count"]:
         return {
             "status": "leased_waiting",
@@ -431,6 +555,14 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
             "event_ids": event_ids,
             "owner_busy": queue["owner_busy"],
             "leased_count": queue["leased_count"],
+            "resource_guard": guard,
+        }
+    if guard.get("defer"):
+        return {
+            "status": "resource_deferred",
+            "dispatch": False,
+            "pending_count": len(event_ids),
+            "event_ids": event_ids,
             "resource_guard": guard,
         }
     return {
@@ -485,7 +617,21 @@ def mark_completed(
         )
     finished = autopilot_dispatch.finish(state_file, claim_token)
     if finished["finished"] != event_ids:
-        raise ValueError("claim state changed before completion")
+        state_warning = (
+            "dispatcher cleared claim state after durable resolution; "
+            "completion reconciled against the database"
+        )
+        combined_warning = (
+            f"{warning}; {state_warning}" if warning else state_warning
+        )
+        reconciled = reconcile_completed(
+            config_path,
+            event_ids,
+            warning=combined_warning,
+        )
+        reconciled["requested_claim_token"] = claim_token
+        reconciled["reconciled"] = True
+        return reconciled
     status = "completed_with_warning" if warning else "completed"
     write_health(
         config_path,
@@ -558,7 +704,7 @@ def reconcile_completed(
         "status": status,
         "claim_token": recovery_token,
         "event_ids": requested,
-        "pending_count": 0,
+        "pending_count": len(pending_ids),
         "warning": warning,
     }
 
@@ -587,6 +733,33 @@ def mark_started(config_path: Path, claim_token: str) -> dict[str, Any]:
         "status": "work_in_progress",
         "claim_token": claim_token,
         "event_ids": event_ids,
+    }
+
+
+def renew_claim(
+    config_path: Path,
+    claim_token: str,
+    *,
+    lease_seconds: int,
+) -> dict[str, Any]:
+    """Renew one exact Browser-owner claim without absorbing new events."""
+
+    _, state_file = autopilot_dispatch.load_paths(config_path)
+    renewed = autopilot_dispatch.renew(
+        state_file,
+        claim_token,
+        lease_seconds=lease_seconds,
+    )
+    event_ids = [str(value) for value in renewed["event_ids"]]
+    write_health(
+        config_path,
+        status="work_in_progress",
+        event_ids=event_ids,
+        claim_token=claim_token,
+    )
+    return {
+        "status": "work_in_progress",
+        **renewed,
     }
 
 
@@ -625,6 +798,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("claim")
     started = subparsers.add_parser("started")
     started.add_argument("--claim-token", required=True)
+    renew = subparsers.add_parser("renew")
+    renew.add_argument("--claim-token", required=True)
     completed = subparsers.add_parser("completed")
     completed.add_argument("--claim-token", required=True)
     completed.add_argument("--warning")
@@ -662,6 +837,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif arguments.command == "started":
         result = mark_started(arguments.config, arguments.claim_token)
+    elif arguments.command == "renew":
+        result = renew_claim(
+            arguments.config,
+            arguments.claim_token,
+            lease_seconds=arguments.lease_seconds,
+        )
     elif arguments.command == "completed":
         result = mark_completed(
             arguments.config,

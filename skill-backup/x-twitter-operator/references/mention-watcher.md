@@ -131,8 +131,8 @@ When the queue becomes non-empty:
    history across other stored conversations.
 5. It checks the ledger for the parent publication type and generation
    provenance.
-6. A follow-up to a prior Pro reply continues through the local explainer skill
-   with the complete exact X history.
+6. A follow-up to a prior local Sol Max reply continues through the local
+   explainer skill with the complete exact X history.
 7. A follow-up to a short reply is classified by Sol using the complete
    ordered X chain, exact earlier reply text, and prior source URLs.
 8. Before any `resolve`, including `skip`, append and import the exact inspected
@@ -190,10 +190,10 @@ disposition created by the current resolution handoff. If an invalid skip
 already contains a reply URL, append a corrected handoff with
 `supersedes_invalid_handoff=true`; never rewrite the old line.
 
-Historical Pro conversation URLs are no longer runtime dependencies. Restore
-the exact X chain from SQLite and append-only JSONL, then continue through the
-local `poyasnitelnaya-brigada` skill. Keep old ChatGPT URLs as audit metadata.
-Do not create a replacement ChatGPT conversation.
+Historical ChatGPT Pro conversation URLs are no longer runtime dependencies.
+Restore the exact X chain from SQLite and append-only JSONL, then continue
+through the local `poyasnitelnaya-brigada` skill. Keep old ChatGPT URLs as audit
+metadata. Do not create a replacement ChatGPT conversation.
 
 If Alex explicitly expands the response scope or a blocked dependency is later
 recovered, keep the old ledger entry unchanged. Append a replacement handoff
@@ -225,17 +225,18 @@ missing expanded attachment metadata, invalid stored payloads, and append-only
 history conflicts stay pending.
 
 Run expiry exactly once when a cycle begins. After that, process every new
-direct reply and preserve active short or Pro chains until resolved.
+direct reply and preserve active short or local Sol Max chains until resolved.
 Never rerun expiry to age out an event that is queued, being researched, or
-waiting for Pro.
+waiting for local Sol Max generation.
 
 While a historical audit is still running, every newly polled direct reply is
 a hot-wave priority. After completing each live conversation branch, call
 `initial-audit-next` again before opening another old branch. Process newly
 created events first and preserve their exact parent chain so a fast dialogue
-does not become stale. A queued Pro event that has not passed local generation
-and validation must remain unresolved, but it must not prevent processing other
-fresh short or already-answered events returned in the same newest-first batch.
+does not become stale. A queued local Sol Max event that has not passed local
+generation and validation must remain unresolved, but it must not prevent
+processing other fresh short or already-answered events returned in the same
+newest-first batch.
 
 ## Initial audit
 
@@ -307,14 +308,16 @@ authority for queued eligible replies.
    no Browser, no `list_threads`, and no task archival. Finish normally before
    opening Browser. Never self-archive the current active run.
 8. For eligible IDs, atomically record one global 30-minute owner lease before
-   Browser work. A newly arriving event must wait for this owner.
+   Browser work. Renew the exact claim every 15 minutes during a long run.
+   Renewal must preserve the original event set, while newly arriving events
+   wait for the next owner.
 9. Include only eligible event IDs, canonical URLs, local state paths, and the
    standing workflow contract. The owner must read exact history from
    SQLite and the append-only ledger.
 10. Mark the claim `started`, execute the returned prompt in the same Sol turn,
    and remove the lease only if work fails before durable resolution.
-11. Use one X tab for all reply work. A Pro route uses the local explainer skill
-   and opens no ChatGPT tab.
+11. Use one X tab for all reply work. A local Sol Max route uses the local
+    explainer skill and opens no ChatGPT tab.
 12. Never let the watcher, dispatcher, or relay publish. Sol must perform
     live context inspection, fact checking, duplicate prevention, routing,
     composer validation, publication, URL verification, history storage, and
@@ -398,9 +401,10 @@ line. Append one metadata record:
 {"snapshot_type":"chain_provenance_correction","chain_id":"STATUS_ID","corrected_provenance":"short","correction_reason":"Exact reason"}
 ```
 
-Use `short`, `pro`, or `mixed` only after checking the canonical chain. The
-importer pre-scans this correction and still rolls back the entire file on any
-remaining conflict.
+Use the legacy database enum `short`, `pro`, or `mixed` only after checking the
+canonical chain. Here `pro` is a compatibility value for the local Sol Max
+route, not a ChatGPT model. The importer pre-scans this correction and still
+rolls back the entire file on any remaining conflict.
 
 After every completed response batch:
 

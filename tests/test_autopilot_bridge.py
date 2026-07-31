@@ -22,6 +22,7 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.config.write_text(
             json.dumps(
                 {
+                    "user_id": "16337609",
                     "wake_file": "var/wake-request.json",
                     "autopilot_state_file": "var/autopilot-dispatch.json",
                     "autopilot_health_file": "var/autopilot-health.json",
@@ -53,14 +54,16 @@ class AutopilotBridgeTests(unittest.TestCase):
         result = autopilot_bridge.claim(self.config, lease_seconds=1800)
 
         self.assertTrue(result["dispatch"])
-        self.assertIn(
-            "запрещено молча считать его",
-            result["prompt"],
-        )
+        self.assertIn("разделяй происхождение", result["prompt"])
+        self.assertIn("хода и способ продолжения", result["prompt"])
         self.assertIn("poyasnitelnaya-brigada", result["prompt"])
         self.assertIn("gpt-5.6-sol", result["prompt"])
         self.assertIn("reasoning_effort=max", result["prompt"])
-        self.assertIn("ровно 4000 Unicode", result["prompt"])
+        self.assertIn("одним непустым целостным", result["prompt"])
+        self.assertIn("4000 Unicode code points", result["prompt"])
+        self.assertIn("--non-empty --max 4000", result["prompt"])
+        self.assertIn("scripts/verify_x_note_tweet.py", result["prompt"])
+        self.assertIn("valid=true", result["prompt"])
         self.assertNotIn("Жди готовый ответ до", result["prompt"])
 
     def test_claim_exposes_auditable_resolution_recovery(self) -> None:
@@ -384,6 +387,13 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertIn("`377` или `Ложкин`", result["prompt"])
         self.assertIn("`commenter_memory`", result["prompt"])
         self.assertIn('"commenter_memory":', result["prompt"])
+        self.assertIn("Выбери short, local-max", result["prompt"])
+        self.assertIn(
+            "не означает модель ChatGPT Pro",
+            result["prompt"],
+        )
+        self.assertNotIn("Выбери short, Pro", result["prompt"])
+        self.assertNotIn("обычного Pro route", result["prompt"])
         self.assertNotIn("сделай один свежий poll", result["prompt"])
         self.assertNotIn("\u2013", result["prompt"])
         self.assertNotIn("\u2014", result["prompt"])
@@ -580,7 +590,148 @@ class AutopilotBridgeTests(unittest.TestCase):
             "восстанови полную ветку и историю",
             result["prompt"],
         )
+        self.assertIn('"manual_parent_continuation"', result["prompt"])
+        self.assertIn('"recommended_route":"short"', result["prompt"])
+        self.assertIn('"chatgpt_web_allowed":false', result["prompt"])
         self.assertIn(current["event_id"], result["prompt"])
+
+    def test_substantive_manual_parent_adapts_to_local_max(self) -> None:
+        watcher_config = watcher.load_config(self.config)
+        connection = watcher.connect_database(watcher_config.database)
+        current = self.event()
+        parent_id = "2081050000000000101"
+        payload = {
+            "id": current["event_id"],
+            "author_id": "901",
+            "text": "Reply to Alex manual explainer",
+            "created_at": current["created_at"],
+            "conversation_id": current["conversation_id"],
+            "in_reply_to_user_id": watcher_config.user_id,
+            "referenced_tweets": [
+                {"type": "replied_to", "id": parent_id}
+            ],
+        }
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO events(
+                    event_id, author_id, username, created_at,
+                    conversation_id, in_reply_to_user_id, is_reply,
+                    payload_json, first_seen_at, delivery_state
+                ) VALUES(?, '901', 'Timyr316661', ?, ?, ?, 1, ?, ?, 'queued')
+                """,
+                (
+                    current["event_id"],
+                    current["created_at"],
+                    current["conversation_id"],
+                    watcher_config.user_id,
+                    json.dumps(payload, sort_keys=True),
+                    watcher.isoformat(),
+                ),
+            )
+        substantive = (
+            "Первый подробный абзац о проверяемом тезисе.\n\n"
+            "Второй абзац сохраняет аргументы и контекст.\n\n"
+            "Третий абзац содержит источник: https://example.org/report"
+        )
+        watcher.import_history_snapshot(
+            connection,
+            {
+                "chain_id": current["conversation_id"],
+                "root_status_id": current["conversation_id"],
+                "provenance": "short",
+                "turns": [
+                    {
+                        "status_id": parent_id,
+                        "actor": "alex",
+                        "author": "@axrbarsic",
+                        "url": f"https://x.com/axrbarsic/status/{parent_id}",
+                        "exact_text": substantive,
+                        "provenance": "self_authored_official_api",
+                    }
+                ],
+            },
+        )
+
+        profile = autopilot_bridge.manual_parent_continuation_profile(
+            connection,
+            current["event_id"],
+            configured_user_id=watcher_config.user_id,
+        )
+        chain = connection.execute(
+            "SELECT provenance FROM conversation_chains WHERE chain_id = ?",
+            (current["conversation_id"],),
+        ).fetchone()
+        connection.close()
+
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(profile["recommended_route"], "local-max")
+        self.assertEqual(
+            profile["continuation_basis"],
+            "adaptive_manual_parent_content",
+        )
+        self.assertEqual(
+            profile["parent_origin_provenance"],
+            "self_authored_official_api",
+        )
+        self.assertTrue(profile["content_profile"]["substantive"])
+        self.assertFalse(profile["chatgpt_web_allowed"])
+        self.assertEqual(chain["provenance"], "short")
+
+    def test_missing_direct_parent_requires_exact_restore(self) -> None:
+        watcher_config = watcher.load_config(self.config)
+        connection = watcher.connect_database(watcher_config.database)
+        current = self.event()
+        parent_id = "2081050000000000201"
+        payload = {
+            "id": current["event_id"],
+            "author_id": "901",
+            "text": "Reply to unseen Alex parent",
+            "created_at": current["created_at"],
+            "conversation_id": current["conversation_id"],
+            "in_reply_to_user_id": watcher_config.user_id,
+            "referenced_tweets": [
+                {"type": "replied_to", "id": parent_id}
+            ],
+        }
+        with connection:
+            connection.execute(
+                """
+                INSERT INTO events(
+                    event_id, author_id, username, created_at,
+                    conversation_id, in_reply_to_user_id, is_reply,
+                    payload_json, first_seen_at, delivery_state
+                ) VALUES(?, '901', 'Timyr316661', ?, ?, ?, 1, ?, ?, 'queued')
+                """,
+                (
+                    current["event_id"],
+                    current["created_at"],
+                    current["conversation_id"],
+                    watcher_config.user_id,
+                    json.dumps(payload, sort_keys=True),
+                    watcher.isoformat(),
+                ),
+            )
+
+        profile = autopilot_bridge.manual_parent_continuation_profile(
+            connection,
+            current["event_id"],
+            configured_user_id=watcher_config.user_id,
+        )
+        connection.close()
+
+        self.assertIsNotNone(profile)
+        assert profile is not None
+        self.assertEqual(
+            profile["parent_history_status"],
+            "missing_exact_alex_parent",
+        )
+        self.assertEqual(
+            profile["recommended_route"],
+            "pending_exact_parent_restore",
+        )
+        self.assertFalse(profile["chatgpt_web_allowed"])
 
     def test_claim_includes_official_archive_alex_reply_memory(self) -> None:
         watcher_config = watcher.load_config(self.config)
@@ -848,6 +999,44 @@ class AutopilotBridgeTests(unittest.TestCase):
             (self.root / "var" / "autopilot-dispatch.json").exists()
         )
 
+    def test_gate_keeps_active_owner_when_resource_guard_defers(self) -> None:
+        self.write_events([self.event()])
+        first = autopilot_bridge.claim(self.config, lease_seconds=1800)
+        autopilot_bridge.mark_started(self.config, first["claim_token"])
+        payload = json.loads(self.config.read_text(encoding="utf-8"))
+        payload.update(
+            {
+                "memory_guard_enabled": True,
+                "memory_guard_max_codex_rss_mb": 1000,
+                "memory_guard_max_renderer_count": 8,
+                "memory_guard_max_node_repl_count": 6,
+                "memory_guard_max_mcp_process_count": 10,
+                "memory_guard_min_free_percent": 12,
+            }
+        )
+        self.config.write_text(json.dumps(payload), encoding="utf-8")
+        original_collect = resource_guard.collect
+        resource_guard.collect = lambda: resource_guard.ResourceSample(
+            codex_rss_mb=2500,
+            renderer_count=9,
+            node_repl_count=4,
+            mcp_process_count=6,
+            free_percent=20,
+        )
+        try:
+            result = autopilot_bridge.gate(
+                self.config,
+                lease_seconds=1800,
+            )
+        finally:
+            resource_guard.collect = original_collect
+
+        self.assertFalse(result["dispatch"])
+        self.assertEqual(result["status"], "leased_waiting")
+        self.assertTrue(result["owner_busy"])
+        self.assertEqual(result["leased_count"], 1)
+        self.assertTrue(result["resource_guard"]["defer"])
+
     def test_completed_with_warning_is_success_after_queue_resolves(self) -> None:
         self.write_events([self.event()])
         first = autopilot_bridge.claim(self.config, lease_seconds=1800)
@@ -893,6 +1082,90 @@ class AutopilotBridgeTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "completed_with_warning")
         self.assertEqual(result["event_ids"], [self.event()["event_id"]])
+
+    def test_completed_reconciles_dispatcher_cleanup_after_resolution(
+        self,
+    ) -> None:
+        current = self.event()
+        self.write_events([current])
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+        autopilot_bridge.mark_started(
+            self.config,
+            claimed["claim_token"],
+        )
+        self.write_events([])
+        state_path = self.root / "var" / "autopilot-dispatch.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["owner"] = None
+        state["events"][current["event_id"]] = {"dispatch_count": 1}
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        database = self.root / "var" / "watcher.sqlite3"
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute(
+                """
+                INSERT INTO event_resolutions(
+                    event_id, disposition, reason, evidence_json, resolved_at
+                )
+                VALUES(?, 'published', 'verified', '[]', ?)
+                """,
+                (current["event_id"], watcher.isoformat()),
+            )
+
+        result = autopilot_bridge.mark_completed(
+            self.config,
+            claimed["claim_token"],
+        )
+
+        self.assertEqual(result["status"], "completed_with_warning")
+        self.assertEqual(result["event_ids"], [current["event_id"]])
+        self.assertEqual(
+            result["requested_claim_token"],
+            claimed["claim_token"],
+        )
+        self.assertTrue(result["reconciled"])
+        self.assertIn("durable resolution", result["warning"])
+
+    def test_reconciled_completion_reports_unrelated_new_pending_event(
+        self,
+    ) -> None:
+        current = self.event()
+        self.write_events([current])
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+        autopilot_bridge.mark_started(
+            self.config,
+            claimed["claim_token"],
+        )
+        new_event = self.event()
+        new_event["event_id"] = "2081050000000000301"
+        new_event["event_url"] = (
+            "https://x.com/Timyr316661/status/2081050000000000301"
+        )
+        self.write_events([new_event])
+        state_path = self.root / "var" / "autopilot-dispatch.json"
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        state["owner"] = None
+        state["events"][current["event_id"]] = {"dispatch_count": 1}
+        state_path.write_text(json.dumps(state), encoding="utf-8")
+        database = self.root / "var" / "watcher.sqlite3"
+        with closing(sqlite3.connect(database)) as connection, connection:
+            connection.execute(
+                """
+                INSERT INTO event_resolutions(
+                    event_id, disposition, reason, evidence_json, resolved_at
+                )
+                VALUES(?, 'published', 'verified', '[]', ?)
+                """,
+                (current["event_id"], watcher.isoformat()),
+            )
+
+        result = autopilot_bridge.mark_completed(
+            self.config,
+            claimed["claim_token"],
+        )
+
+        self.assertEqual(result["pending_count"], 1)
+        self.assertEqual(result["event_ids"], [current["event_id"]])
+
 
     def test_failed_handoff_releases_claim_for_immediate_retry(self) -> None:
         self.write_events([self.event()])

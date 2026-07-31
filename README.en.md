@@ -17,14 +17,14 @@ memory, Sol Max local-skill reasoning, and verified Browser publication.
        width="430">
 </p>
 
-> Deployment status on 2026-07-30: the inbound terminal-first path runs through
+> Deployment status on 2026-07-31: the inbound terminal-first path runs through
 > a Luna Low relay and one persistent Sol Max Browser owner. The explainer route
 > moved from the custom GPT to a local versioned skill. Generation no longer
 > opens ChatGPT and instead uses Sol Max, exact SQLite history, and a
-> deterministic 4000 Unicode code-point contract.
-> Scheduled outbound now runs in the standalone local `x-15` cron instead of a
-> heartbeat attached to the busy owner task. Atomic `outbound_cycle.py`
-> prevents overlapping runs and tracks bounded catch-up safely.
+> deterministic 4000 Unicode code-point upper bound with no length padding.
+> Scheduled outbound belongs to the standalone local `x-15` cron instead of a
+> heartbeat attached to the busy owner task. It is intentionally paused until
+> the inbound queue is clear and Alex explicitly resumes outbound search.
 
 ## License and attribution
 
@@ -78,14 +78,15 @@ content decisions:
   context, persists them, and only then prepares the next reply.
 - Explainer targets and follow-ups run locally through the versioned
   `poyasnitelnaya-brigada` skill in Sol Max with exact durable history.
-- A local explainer reply contains exactly 4000 Unicode code points and passes
-  deterministic source and composer validation before publication.
+- A local explainer reply is non-empty, contains at most 4000 Unicode code
+  points, does not target the limit, and passes deterministic source and
+  composer validation before publication.
 - SQLite and append-only JSONL preserve conversation history and audit evidence.
 
 Start with [the autopilot setup guide](docs/autopilot-setup.md) to adapt the
 system to another X account and Codex task. The
 [local explainer skill contract](docs/local-explainer-skill.md) documents the
-Sol Max, exact-length, history, and recovery rules.
+Sol Max, maximum-length, history, and recovery rules.
 
 The complete executable project uses one canonical directory. See
 [the project layout contract](docs/project-layout.md) and
@@ -390,7 +391,7 @@ python3 xmention_watcher.py --config config.json poll
 
 The optional dispatcher gives queued event IDs a 30-minute lease and returns
 one compact JSON claim. It prevents duplicate task wakeups while the Browser
-owner is working or a Pro response is still thinking.
+owner is working or a local-max response is still being prepared.
 
 ```bash
 python3 scripts/autopilot_dispatch.py \
@@ -670,11 +671,11 @@ files cannot grow without bound.
 
 ## Conversation history
 
-SQLite stores an append-only conversation graph for both self-authored and Pro
-follow-ups. Each turn contains the exact public X text, status ID, parent status
-ID, URL, actor, author, provenance, timestamp, and factual source URLs. Pro
-chains may also retain an exact legacy ChatGPT conversation URL as historical
-audit metadata. Local generation never opens that URL.
+SQLite stores an append-only conversation graph for both self-authored and
+local-max follow-ups. Each turn contains the exact public X text, status ID,
+parent status ID, URL, actor, author, provenance, timestamp, and factual source
+URLs. Legacy chains may also retain an exact ChatGPT conversation URL as
+historical audit metadata. Local generation never opens that URL.
 
 Import one JSON object, an array, or JSONL snapshots:
 
@@ -740,7 +741,7 @@ python3 -m unittest discover -s tests -v
 
 `skill-backup/x-twitter-operator` is a restorable snapshot of the installed
 Codex skill contract that governs detection, Browser ownership, duplicate
-checks, Pro continuity, and publication. Mutable runtime data remains under
+checks, local-max continuity, and publication. Mutable runtime data remains under
 the ignored `var/` directory in the same canonical project root. Credentials
 remain in macOS Keychain, and official X archive ZIP files remain in the
 separate archive vault.

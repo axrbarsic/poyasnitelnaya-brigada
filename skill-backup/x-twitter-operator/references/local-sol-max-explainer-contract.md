@@ -2,8 +2,9 @@
 
 ## Маршрутизация
 
-Использовать `poyasnitelnaya-brigada` для каждого нового `pro` target и каждого
-продолжения цепочки, в которой точный родитель Alex имеет `provenance=pro`.
+Использовать `poyasnitelnaya-brigada` для каждого нового `local-max` target и
+каждого продолжения цепочки, в которой точный родитель Alex имеет legacy
+database marker `provenance=pro`.
 
 До генерации доказать:
 
@@ -59,7 +60,7 @@ SQLite, JSONL history и verified X URLs.
 
 Skill должен вернуть один прямой русский ответ автору:
 
-- ровно 4000 Unicode code points;
+- непустой текст не длиннее 4000 Unicode code points;
 - один целостный монолог;
 - без метатекста, заголовка и code fence;
 - без U+2013, U+2014, NBSP, zero-width и внутренних citation markers;
@@ -67,8 +68,8 @@ Skill должен вернуть один прямой русский отве�
 - с жёстким разбором тезисов, но без угроз, личного унижения и атак на
   защищённые признаки.
 
-Черновик разрешено содержательно редактировать до прохождения точного контракта.
-Запрещено добивать длину бессмысленным наполнителем.
+Черновик разрешено содержательно редактировать до прохождения контракта.
+Запрещено стремиться к верхнему пределу или увеличивать текст ради длины.
 
 ## Детерминированная проверка
 
@@ -78,7 +79,8 @@ Skill должен вернуть один прямой русский отве�
 python3 <x-twitter-operator-dir>/scripts/validate_reply.py \
   --file <reply-file> \
   --strip-one-final-newline \
-  --exact 4000
+  --non-empty \
+  --max 4000
 ```
 
 После заполнения X composer повторить ту же проверку по фактическому DOM value.
@@ -87,8 +89,8 @@ Composer обязан совпадать с validated source byte-for-byte.
 Для DraftJS composer фактическое значение восстанавливается из упорядоченных
 элементов `[data-block="true"]`: взять `textContent` каждого блока и соединить
 блоки одним литеральным `\n`. Raw `innerText` не использовать, потому что он
-может добавить служебный перенос между блоками и ложно превратить точные 4000
-code points в 4005. В evidence записать block count, code points, exact match и
+может добавить служебный перенос между блоками и ложно показать превышение
+лимита. В evidence записать block count, code points, exact match и
 проверку запрещённых символов.
 
 ## Publication transaction
@@ -104,11 +106,32 @@ code points в 4005. В evidence записать block count, code points, exac
 Нажать Reply один раз. Успех требует canonical reply URL и видимый полный текст.
 Таймаут после клика является `unverified`, пока live X не докажет результат.
 
+Для long post с URL получить официальный X API `note_tweet`, заменить t.co
+диапазоны из `note_tweet.entities.urls` на `expanded_url` в обратном порядке
+offset и доказать точное совпадение с validated source. Rendered `innerText`
+может содержать переносы и многоточия оформления ссылок, поэтому не является
+доказательством точной длины.
+
+В этом проекте выполнить:
+
+```bash
+python3 scripts/verify_x_note_tweet.py \
+  --config config.json \
+  --status-id <REPLY_STATUS_ID> \
+  --parent-status-id <TARGET_STATUS_ID> \
+  --file <reply-file> \
+  --strip-one-final-newline \
+  --max 4000
+```
+
+Успех требует `valid=true`. Полный JSON-отчет сохранить в task evidence до
+durable resolve или outbound `completed`.
+
 ## Durable history
 
 После подтверждённой публикации записать:
 
-- `provenance=pro`;
+- `generation_profile=local_sol_max`;
 - `generation_skill=poyasnitelnaya-brigada`;
 - `generation_model=gpt-5.6-sol`;
 - `reasoning_effort=max`;
@@ -119,8 +142,30 @@ code points в 4005. В evidence записать block count, code points, exac
 - verified reply URL и status ID;
 - timezone-aware generation and verification timestamps.
 
+В SQLite сохранить `provenance=pro` только как legacy compatibility marker.
+Он не означает, что ответ создавался моделью ChatGPT Pro или через веб.
+
 Импортировать точные `user` и `alex` turns в существующую conversation chain.
 Только после exact history и durable resolve событие считается завершённым.
+
+Для новой outbound-цели построить точный двухходовый snapshot из завершённого
+`evidence.json`, импортировать его и проверить цепочку:
+
+```bash
+python3 scripts/build_outbound_history.py \
+  --evidence <evidence.json> \
+  --output <conversation-history.jsonl> \
+  --max 4000
+python3 xmention_watcher.py --config config.json history-import \
+  --file <conversation-history.jsonl>
+python3 xmention_watcher.py --config config.json history-show <TARGET_STATUS_ID>
+```
+
+Builder обязан закрыться с ошибкой при неверном parent, неканоническом reply
+URL, пустом или превышающем лимит тексте, запрещённом Unicode, отсутствующем
+файле или конфликте
+append-only snapshot. Нельзя считать outbound-публикацию durable до успешного
+импорта точных target и Alex turns.
 
 ## Ошибки
 

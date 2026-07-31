@@ -112,7 +112,8 @@ Single-owner work:
 - publication verification.
 
 The local `poyasnitelnaya-brigada` route never opens ChatGPT or a custom GPT.
-Its exact 4000-code-point output is generated inside the Sol Max owner turn.
+Its non-empty output, capped at 4000 code points, is generated inside the Sol
+Max owner turn without padding toward the limit.
 Additional research sessions must return data to the owner instead of operating
 authenticated tabs.
 

@@ -20,10 +20,10 @@
 - Keep the Browser owner on `gpt-5.6-sol` with reasoning effort `max`.
 - Only the Browser owner may operate authenticated tabs, classify a live
   target, author a short reply, validate the composer, or publish.
-- Idle runs own zero Browser tabs. Short and Pro replies use one X tab.
-  The Pro route generates locally and owns zero ChatGPT tabs. Open ChatGPT
-  only for an explicitly authorized visual-bot route such as `377` or
-  `Ложкин`, never for «Пояснительная бригада».
+- Idle runs own zero Browser tabs. Short and local Sol Max replies use one X
+  tab. The local Sol Max route owns zero ChatGPT tabs. Open ChatGPT only for an
+  explicitly authorized visual-bot route such as `377` or `Ложкин`, never for
+  «Пояснительная бригада».
 - Close every task-owned Browser tab before the scheduled run ends. Never close
   a user-owned tab.
 - One global owner lease covers the whole queue. A new event must wait while
@@ -35,9 +35,17 @@
 - Generate every «Пояснительная бригада» reply locally with the tracked
   `poyasnitelnaya-brigada` skill. Never open ChatGPT or the custom GPT for this
   route. The active owner must be `gpt-5.6-sol` with reasoning effort `max`.
-- A local «Пояснительная бригада» reply contains exactly 4000 Unicode code
-  points after removing one technical final newline. Validate it with
-  `skill-backup/x-twitter-operator/scripts/validate_reply.py --exact 4000`.
+- A local «Пояснительная бригада» reply is non-empty and contains at most 4000
+  Unicode code points after removing one technical final newline. Do not target
+  the limit or pad the answer. Validate it with
+  `skill-backup/x-twitter-operator/scripts/validate_reply.py --non-empty --max
+  4000`.
+- Read-only research and draft preparation may run in parallel when explicitly
+  authorized. Authenticated X inspection, composer work, publication, official
+  verification, durable import, and resolution remain one ordered Browser-owner
+  transaction.
+- Keep `x-15` paused while inbound replies are waiting. Resume it only after the
+  inbound queue is empty and Alex explicitly authorizes outbound search again.
 - Treat helper results as evidence. Sol performs the final live-context
   decision and publication transaction.
 

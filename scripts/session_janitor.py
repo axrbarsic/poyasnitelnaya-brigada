@@ -17,12 +17,26 @@ from pathlib import Path
 from typing import Any, TextIO
 
 try:
-    from scripts import autopilot_dispatch
+    from scripts import autopilot_dispatch, outbound_cycle
 except ModuleNotFoundError:
     import autopilot_dispatch  # type: ignore[no-redef]
+    import outbound_cycle  # type: ignore[no-redef]
 
 
-AUTOMATION_TITLE = "X: автопилот ответов"
+AUTOMATION_IDENTITIES = (
+    ("x", "X: автопилот ответов"),
+    ("x-relay", "X: событийный relay"),
+    (
+        "x-15",
+        "X: локальная Пояснительная бригада, автономный 15 минут",
+    ),
+    (
+        "x-pro-15",
+        "X: локальная Пояснительная бригада каждые 15 минут",
+    ),
+)
+AUTOMATION_TITLE = AUTOMATION_IDENTITIES[0][1]
+OUTBOUND_AUTOMATION_ID = "x-15"
 ARCHIVABLE_STATUSES = {"idle", "notLoaded", "systemError"}
 ACTIVE_STATUS = "active"
 HELPER_COMMAND_MARKERS = (
@@ -82,12 +96,22 @@ def status_type(thread: dict[str, Any]) -> str | None:
     return status.get("type") if isinstance(status, dict) else None
 
 
+def matches_automation_identity(
+    thread: dict[str, Any],
+    automation_id: str,
+    title: str,
+) -> bool:
+    name = thread.get("name")
+    preview = str(thread.get("preview", ""))
+    return name == title and preview.startswith(
+        f"Automation: {title}\nAutomation ID: {automation_id}\n"
+    )
+
+
 def matches_automation(thread: dict[str, Any]) -> bool:
-    return (
-        thread.get("name") == AUTOMATION_TITLE
-        and str(thread.get("preview", "")).startswith(
-            f"Automation: {AUTOMATION_TITLE}\nAutomation ID: x\n"
-        )
+    return any(
+        matches_automation_identity(thread, automation_id, title)
+        for automation_id, title in AUTOMATION_IDENTITIES
     )
 
 
@@ -105,9 +129,27 @@ def owner_age_seconds(
     return max(0.0, (current - claimed_at).total_seconds())
 
 
+def owner_lease_remaining_seconds(
+    owner: dict[str, Any] | None,
+    *,
+    now: datetime | None = None,
+) -> float | None:
+    if owner is None:
+        return None
+    lease_expires_at = autopilot_dispatch.parse_time(
+        owner.get("lease_expires_at")
+    )
+    if lease_expires_at is None:
+        return None
+    current = now or datetime.now(timezone.utc)
+    return (lease_expires_at - current).total_seconds()
+
+
 def owning_automation_thread(
     threads: list[dict[str, Any]],
     owner: dict[str, Any],
+    *,
+    identities: tuple[tuple[str, str], ...] = AUTOMATION_IDENTITIES,
 ) -> dict[str, Any] | None:
     claimed_at = autopilot_dispatch.parse_time(owner.get("claimed_at"))
     if claimed_at is None:
@@ -116,7 +158,10 @@ def owning_automation_thread(
     candidates = [
         thread
         for thread in threads
-        if matches_automation(thread)
+        if any(
+            matches_automation_identity(thread, automation_id, title)
+            for automation_id, title in identities
+        )
         and isinstance(thread.get("createdAt"), int)
         and isinstance(thread.get("updatedAt"), int)
         and int(thread["createdAt"]) <= claimed_epoch
@@ -125,6 +170,29 @@ def owning_automation_thread(
     if not candidates:
         return None
     return max(candidates, key=lambda thread: int(thread["createdAt"]))
+
+
+def active_outbound_owner(
+    config_path: Path,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any] | None:
+    config = autopilot_dispatch.read_json(config_path)
+    state_path = autopilot_dispatch.resolve_path(
+        config_path,
+        str(
+            config.get(
+                "outbound_cycle_state_file",
+                "var/outbound-cycle.json",
+            )
+        ),
+    )
+    state = outbound_cycle.load_state(state_path)
+    owner = state.get("owner")
+    if not isinstance(owner, dict):
+        return None
+    current = now or datetime.now(timezone.utc)
+    return owner if outbound_cycle.owner_is_active(owner, current) else None
 
 
 def owning_thread_is_live(
@@ -141,6 +209,30 @@ def owning_thread_is_live(
     return (
         isinstance(updated_at, int)
         and now_epoch - updated_at < freshness_seconds
+    )
+
+
+def owner_recovery_allowed(
+    owner: dict[str, Any],
+    owning_thread: dict[str, Any] | None,
+    *,
+    now: datetime,
+    orphan_owner_seconds: int,
+) -> bool:
+    now_epoch = int(now.timestamp())
+    if owning_thread_is_live(
+        owning_thread,
+        now_epoch=now_epoch,
+        freshness_seconds=orphan_owner_seconds,
+    ):
+        return False
+    lease_remaining = owner_lease_remaining_seconds(owner, now=now)
+    if lease_remaining is not None:
+        return lease_remaining <= 0
+    age_seconds = owner_age_seconds(owner, now=now)
+    return (
+        age_seconds is not None
+        and age_seconds >= orphan_owner_seconds
     )
 
 
@@ -309,6 +401,8 @@ def run_janitor(
     config = autopilot_dispatch.read_json(config_path)
     state_path, owner = owner_snapshot(config_path)
     age_seconds = owner_age_seconds(owner)
+    lease_remaining_seconds = owner_lease_remaining_seconds(owner)
+    outbound_owner = active_outbound_owner(config_path)
     cli_path = str(config.get("codex_cli_path", "codex"))
     process = subprocess.Popen(
         [cli_path, "app-server", "--stdio"],
@@ -344,55 +438,75 @@ def run_janitor(
             },
         )
         receive(process.stdout, 1)
-        cursor: str | None = None
         request_id = 2
-        while True:
-            send(
-                process.stdin,
-                request_id,
-                "thread/list",
-                {
-                    "archived": False,
-                    "cursor": cursor,
-                    "limit": page_limit,
-                    "searchTerm": AUTOMATION_TITLE,
-                    "sortDirection": "desc",
-                    "sortKey": "updated_at",
-                    "sourceKinds": ["vscode"],
-                    "useStateDbOnly": True,
-                },
-            )
-            result = receive(process.stdout, request_id)
-            request_id += 1
-            data = result.get("data", [])
-            if not isinstance(data, list):
-                raise RuntimeError("thread/list data is not an array")
-            all_threads.extend(
-                item for item in data if isinstance(item, dict)
-            )
-            matched.extend(
-                {
-                    "id": str(item.get("id", "")),
-                    "name": item.get("name"),
-                    "status": status_type(item),
-                    "thread_source": item.get("threadSource"),
-                    "source": item.get("source"),
-                    "preview": str(item.get("preview", ""))[:120],
-                    "created_at": item.get("createdAt"),
-                    "updated_at": item.get("updatedAt"),
-                }
-                for item in data
-                if isinstance(item, dict)
-                and item.get("name") == AUTOMATION_TITLE
-            )
-            next_cursor = result.get("nextCursor")
-            if not isinstance(next_cursor, str) or not next_cursor:
-                break
-            cursor = next_cursor
+        seen_thread_ids: set[str] = set()
+        for _, title in AUTOMATION_IDENTITIES:
+            cursor: str | None = None
+            while True:
+                send(
+                    process.stdin,
+                    request_id,
+                    "thread/list",
+                    {
+                        "archived": False,
+                        "cursor": cursor,
+                        "limit": page_limit,
+                        "searchTerm": title,
+                        "sortDirection": "desc",
+                        "sortKey": "updated_at",
+                        "sourceKinds": ["vscode"],
+                        "useStateDbOnly": True,
+                    },
+                )
+                result = receive(process.stdout, request_id)
+                request_id += 1
+                data = result.get("data", [])
+                if not isinstance(data, list):
+                    raise RuntimeError("thread/list data is not an array")
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    thread_id = str(item.get("id", ""))
+                    if not thread_id or thread_id in seen_thread_ids:
+                        continue
+                    seen_thread_ids.add(thread_id)
+                    all_threads.append(item)
+                    if not matches_automation(item):
+                        continue
+                    matched.append(
+                        {
+                            "id": thread_id,
+                            "name": item.get("name"),
+                            "status": status_type(item),
+                            "thread_source": item.get("threadSource"),
+                            "source": item.get("source"),
+                            "preview": str(item.get("preview", ""))[:120],
+                            "created_at": item.get("createdAt"),
+                            "updated_at": item.get("updatedAt"),
+                        }
+                    )
+                next_cursor = result.get("nextCursor")
+                if not isinstance(next_cursor, str) or not next_cursor:
+                    break
+                cursor = next_cursor
 
         owning_thread = (
             owning_automation_thread(all_threads, owner)
             if owner is not None
+            else None
+        )
+        outbound_identity = tuple(
+            identity
+            for identity in AUTOMATION_IDENTITIES
+            if identity[0] == OUTBOUND_AUTOMATION_ID
+        )
+        outbound_thread = (
+            owning_automation_thread(
+                all_threads,
+                outbound_owner,
+                identities=outbound_identity,
+            )
+            if outbound_owner is not None
             else None
         )
         protected_ids = {
@@ -403,6 +517,8 @@ def run_janitor(
         }
         if owning_thread is not None:
             protected_ids.add(str(owning_thread.get("id", "")))
+        if outbound_thread is not None:
+            protected_ids.add(str(outbound_thread.get("id", "")))
 
         if bool(config.get("session_janitor_reap_helpers", True)):
             try:
@@ -447,17 +563,30 @@ def run_janitor(
             archived.append(thread_id)
 
         if owner is not None:
-            if owning_thread_is_live(
+            current_time = datetime.now(timezone.utc)
+            thread_is_live = owning_thread_is_live(
                 owning_thread,
-                now_epoch=int(time.time()),
+                now_epoch=int(current_time.timestamp()),
                 freshness_seconds=orphan_owner_seconds,
-            ):
+            )
+            if thread_is_live:
                 return {
                     "status": "owner_busy",
                     "owner_age_seconds": (
                         round(age_seconds, 1)
                         if age_seconds is not None
                         else None
+                    ),
+                    "owner_lease_remaining_seconds": (
+                        round(lease_remaining_seconds, 1)
+                        if lease_remaining_seconds is not None
+                        else None
+                    ),
+                    "owner_lease_expires_at": owner.get(
+                        "lease_expires_at"
+                    ),
+                    "owner_last_renewed_at": owner.get(
+                        "last_renewed_at"
                     ),
                     "active_thread_ids": [
                         str(owning_thread.get("id", ""))
@@ -473,13 +602,29 @@ def run_janitor(
                     "archived": archived,
                     "candidates": candidates,
                 }
-            if age_seconds is None or age_seconds < orphan_owner_seconds:
+            if not owner_recovery_allowed(
+                owner,
+                owning_thread,
+                now=current_time,
+                orphan_owner_seconds=orphan_owner_seconds,
+            ):
                 return {
                     "status": "owner_busy",
                     "owner_age_seconds": (
                         round(age_seconds, 1)
                         if age_seconds is not None
                         else None
+                    ),
+                    "owner_lease_remaining_seconds": (
+                        round(lease_remaining_seconds, 1)
+                        if lease_remaining_seconds is not None
+                        else None
+                    ),
+                    "owner_lease_expires_at": owner.get(
+                        "lease_expires_at"
+                    ),
+                    "owner_last_renewed_at": owner.get(
+                        "last_renewed_at"
                     ),
                     "active_thread_ids": [],
                     "owner_thread_status": (
@@ -509,6 +654,17 @@ def run_janitor(
         return {
             "status": "completed",
             "apply": apply,
+            "outbound_owner_active": outbound_owner is not None,
+            "outbound_owner_expires_at": (
+                outbound_owner.get("expires_at")
+                if outbound_owner is not None
+                else None
+            ),
+            "outbound_thread_id": (
+                str(outbound_thread.get("id", ""))
+                if outbound_thread is not None
+                else None
+            ),
             "helper_candidates": helper_candidates,
             "helpers_terminated": helpers_terminated,
             "helper_survivors": helper_survivors,

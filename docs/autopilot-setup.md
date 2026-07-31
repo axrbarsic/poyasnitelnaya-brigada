@@ -32,7 +32,7 @@ authenticated Browser always belongs to the persistent in-app owner.
 > Current deployment status, 2026-07-30: the persistent Sol Max owner and Luna
 > Low relay pass doctor with zero failures. The explainer route now runs as a
 > local skill without ChatGPT, uses exact durable history, and validates one
-> reply of exactly 4000 Unicode code points.
+> non-empty reply capped at 4000 Unicode code points without length padding.
 >
 > The same live checkpoint also ran an isolated empty cycle through the real
 > dispatcher entry point. It returned `idle`; task IDs, relay and owner turns,
@@ -56,7 +56,7 @@ Official architecture references:
 | Event dispatcher LaunchAgent | 1 minute | none while idle | Gate, Desktop launch, managed shutdown |
 | In-app relay heartbeat | while Desktop is open | Luna Low | Reservation and one owner message |
 | Pinned Browser owner | per event | Sol Max | Claim, Browser, sources, publication |
-| Local explainer skill | Pro only | Sol Max | Exact 4000-point reply, history, sources |
+| Local explainer skill | local-max only | Sol Max | Reply capped at 4000 points, history, sources |
 | Codex CLI updater | 6 hours | none without update | Version, SHA-256, doctor, history |
 
 Idle terminal monitoring spends zero model tokens and creates no task. The
@@ -126,8 +126,14 @@ Browser owners. The restorable heartbeat prompt is tracked in
 A reply posted manually by Alex is an `alex` turn. If somebody answers it, the
 Browser owner restores the exact live branch, stores any previously unseen
 manual reply, and uses the complete history before drafting the continuation.
+Origin and continuation mode are separate. The claim payload includes a
+`manual_parent_continuation` profile built from the exact stored parent. A
+proven local-max origin, 500 or more Unicode code points, three or more
+paragraphs, or at least one source URL selects the local explainer skill. A
+concise parent without those signals may remain Sol short. Unknown manual
+origin stays unknown, and neither route opens ChatGPT web.
 
-Pro history now comes from SQLite and append-only JSONL. Historical custom-GPT
+Local-max history now comes from SQLite and append-only JSONL. Historical custom-GPT
 URLs and migration records remain audit metadata only. The compatibility
 command `pro-model-recovery-requeue` restores legacy model, conversation, and
 screenshot blockers to the durable queue without receiving an event ID.
@@ -184,6 +190,9 @@ dispatcher, then delete it through the official `automation_update` API.
 9. The owner loads `x-twitter-operator`, opens the minimum tabs, performs double
    dedupe, and executes the publication transaction.
 10. After exact history and durable resolution, the owner runs `completed`.
+    If dispatcher cleanup has already removed that lease, `completed`
+    automatically reconciles only after proving a zero pending queue and a
+    durable SQLite resolution for every claimed event.
 11. If Desktop was supervisor-launched, an empty queue and cleared owner lease
     start a grace timer before that exact managed PID is stopped.
 
@@ -197,8 +206,8 @@ count as a stalled relay.
 
 - Idle: zero model tokens, zero Browser tabs, zero new tasks.
 - Short: one X tab.
-- Pro: one X tab, the local skill, and zero ChatGPT tabs.
-- Only Sol makes publication decisions. The local Pro route always requires
+- Local-max: one X tab, the local skill, and zero ChatGPT tabs.
+- Only Sol makes publication decisions. The local-max route always requires
   reasoning effort `max`.
 - Luna never analyzes X content or drafts responses.
 - The resource guard pauses Browser work without deleting queued events.

@@ -27,7 +27,8 @@ Browser owner восстанавливает точный target и релева
 Skill возвращает только прямой ответ автору:
 
 - один целостный русский монолог;
-- ровно 4000 Unicode code points;
+- непустой текст не длиннее 4000 Unicode code points, без стремления занять
+  весь лимит;
 - без U+2013, U+2014, NBSP, zero-width и внутренних citation markers;
 - с холодным фактчеком и прямыми URL источников;
 - с жестким разбором тезиса, но без угроз и атак на защищенные признаки.
@@ -38,15 +39,60 @@ Skill возвращает только прямой ответ автору:
 python3 skill-backup/x-twitter-operator/scripts/validate_reply.py \
   --file var/evidence/browser-owner/SESSION/reply.txt \
   --strip-one-final-newline \
-  --exact 4000
+  --non-empty \
+  --max 4000
 ```
 
 Фактический X composer должен совпадать с validated source byte-for-byte.
+После публикации официальный X API `note_tweet` раскрывается через
+`expanded_url` и снова сравнивается с исходником. Визуальный `innerText` не
+используется для точной длины, потому что X добавляет переносы и многоточия к
+отображаемым ссылкам.
+
+Проект выполняет эту проверку командой:
+
+```bash
+python3 scripts/verify_x_note_tweet.py \
+  --config config.json \
+  --status-id <REPLY_STATUS_ID> \
+  --parent-status-id <TARGET_STATUS_ID> \
+  --file var/evidence/browser-owner/SESSION/reply.txt \
+  --strip-one-final-newline \
+  --max 4000
+```
+
+Durable завершение разрешено только при `valid=true`.
+
+После подтверждённой публикации точная локальная история из двух turns
+строится из того же evidence-объекта и импортируется в базу watcher:
+
+```bash
+python3 scripts/build_outbound_history.py \
+  --evidence var/evidence/browser-owner/SESSION/evidence.json \
+  --output var/evidence/browser-owner/SESSION/conversation-history.jsonl \
+  --max 4000
+python3 xmention_watcher.py --config config.json history-import \
+  --file var/evidence/browser-owner/SESSION/conversation-history.jsonl
+python3 xmention_watcher.py --config config.json history-show TARGET_STATUS_ID
+```
+
+Builder закрывается с ошибкой при неверном parent, неканоническом reply URL,
+пустом ответе, превышении 4000 code points, запрещённом Unicode, отсутствующем
+локальном файле или конфликте с существующим snapshot. Импортированные target и Alex
+turns становятся канонической памятью продолжения.
+
+Ручные Alex parents используют тот же локальный путь продолжения. Autopilot
+честно сохраняет их origin provenance, затем выбирает режим по точному
+сохраненному тексту. Содержательный parent, то есть не меньше 500 code points,
+три абзаца, одна source URL либо доказанный local-max origin, продолжается этим
+skill по полной SQLite истории. Беседа ChatGPT не восстанавливается.
 
 ## Автономный 15-минутный цикл
 
-Outbound работает как самостоятельная local cron automation `x-15` на
-`gpt-5.6-sol` с effort `max`. Старый heartbeat `x-pro-15` поставлен на паузу.
+Outbound реализован как самостоятельная local cron automation `x-15` на
+`gpt-5.6-sol` с effort `max`. Сейчас `x-15` и старый heartbeat `x-pro-15`
+поставлены на паузу. `x-15` нельзя возобновлять до пустой входящей очереди и
+отдельного разрешения Alex.
 Heartbeat, привязанный к занятой основной задаче, может накопить пробуждения,
 но не выполнить их параллельно. Самостоятельный cron получает отдельный run и
 поэтому не зависит от длительности текущего диалога Alex с owner-сессией.
@@ -83,9 +129,10 @@ python3 scripts/outbound_cycle.py \
 Prompt или параметры `x-15` нельзя менять поверх активного run. Сначала cron
 ставится на паузу официальным `automation_update`, затем все уже запущенные
 задачи `x-15` должны завершиться, а `outbound_cycle.py status` должен показать
-`owner=null`. Только после этого обновляется prompt, выполняются doctor и
-адресный canary, затем cron возвращается в `ACTIVE`. Такой порядок не дает
-старому Browser owner пересечься с первым run нового контракта.
+`owner=null`. Только после этого обновляется prompt и выполняются doctor и
+адресный canary. Cron остаётся `PAUSED`, пока Alex отдельно не разрешит
+возобновление после очистки входящей очереди. Такой порядок не дает старому
+Browser owner пересечься с первым run нового контракта.
 
 ## Память и продолжения
 

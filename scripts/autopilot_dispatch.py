@@ -353,6 +353,56 @@ def claim(
         }
 
 
+def renew(
+    state_file: Path,
+    claim_token: str,
+    *,
+    lease_seconds: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Extend one exact active claim without changing its event set."""
+
+    if lease_seconds <= 0:
+        raise ValueError("lease_seconds must be positive")
+    current_time = now or utc_now()
+    with locked_state(state_file):
+        state = load_state(state_file)
+        owner = state.get("owner")
+        if not isinstance(owner, dict) or owner.get("claim_token") != claim_token:
+            raise ValueError("claim token is not the active global owner")
+        event_ids = [str(value) for value in owner.get("event_ids", [])]
+        if not event_ids:
+            raise ValueError("active owner has no event ids")
+        state_events = state["events"]
+        for event_id in event_ids:
+            record = state_events.get(event_id)
+            if (
+                not isinstance(record, dict)
+                or record.get("claim_token") != claim_token
+            ):
+                raise ValueError(
+                    f"claim state is inconsistent for event {event_id}"
+                )
+
+        renewed_at = isoformat(current_time)
+        lease_expires_at = isoformat(
+            current_time + timedelta(seconds=lease_seconds)
+        )
+        owner["last_renewed_at"] = renewed_at
+        owner["lease_expires_at"] = lease_expires_at
+        for event_id in event_ids:
+            state_events[event_id]["last_dispatched_at"] = renewed_at
+        state["updated_at"] = renewed_at
+        atomic_write_json(state_file, state)
+        return {
+            "claim_token": claim_token,
+            "event_ids": event_ids,
+            "renewed_at": renewed_at,
+            "lease_expires_at": lease_expires_at,
+            "lease_seconds": lease_seconds,
+        }
+
+
 def release(state_file: Path, claim_token: str) -> dict[str, Any]:
     with locked_state(state_file):
         state = load_state(state_file)
@@ -466,6 +516,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("claim")
     release_parser = subparsers.add_parser("release")
     release_parser.add_argument("--claim-token", required=True)
+    renew_parser = subparsers.add_parser("renew")
+    renew_parser.add_argument("--claim-token", required=True)
     subparsers.add_parser("status")
     subparsers.add_parser("snapshot")
     return parser
@@ -482,6 +534,12 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif arguments.command == "release":
         result = release(state_file, arguments.claim_token)
+    elif arguments.command == "renew":
+        result = renew(
+            state_file,
+            arguments.claim_token,
+            lease_seconds=arguments.lease_seconds,
+        )
     elif arguments.command == "status":
         result = status(
             wake_file,

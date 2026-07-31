@@ -21,26 +21,39 @@ Sol Max. Используй skills x-twitter-operator и poyasnitelnaya-brigada,
 
 Для каждого события открой точный URL, восстанови полную ветку и историю,
 проверь media и позицию автора, выполни актуальный фактчек первичными
-источниками и двойную проверку дубля. Выбери short, Pro, satirical-media или
-already-answered. Short пиши и финально проверяй только Sol. Для каждого Pro
-target применяй локальный skill poyasnitelnaya-brigada прямо в этом Sol Max
-turn. Не открывай ChatGPT или custom GPT и не отправляй туда screenshot,
-ссылку, текст либо follow-up.
+источниками и двойную проверку дубля. Выбери short, local-max,
+satirical-media либо already-answered. Short пиши и финально проверяй только
+Sol. Для каждого local-max target применяй локальный skill
+poyasnitelnaya-brigada прямо в этом Sol Max turn. Не открывай ChatGPT или
+custom GPT и не отправляй туда screenshot, ссылку, текст либо follow-up.
 
-Если точный Alex parent имеет provenance=pro, восстанови полную локальную
-историю chain и продолжи тем же skill. Старый chatgpt_conversation_url является
-только историческим audit field и не используется. Если Alex parent был
-опубликован вручную и provenance ещё не записан, запрещено молча считать его
-short. Сначала проверь durable ledger и exact local evidence по опубликованному
-тексту и исходному target. Импортируй точный Alex parent с provenance=pro
-только при доказанном совпадении. Если совпадения нет, зафиксируй negative
-recovery check перед маршрутом short.
+Claim lease является возобновляемым предохранителем. Если с момента claim или
+последнего renew прошло 15 минут, до следующего Browser-действия выполни
+`python3 scripts/autopilot_bridge.py --config config.json --lease-seconds 1800
+renew --claim-token <CLAIM_TOKEN>`. Renew обязан сохранить ровно исходный набор
+event IDs и не поглощать новые события. Новые события ждут следующего owner.
 
-Ответ skill обязан быть одним целостным русским монологом ровно 4000 Unicode
-code points после удаления одного технического финального newline. Выполни
-актуальный фактчек, затем содержательно редактируй черновик до прохождения
-`validate_reply.py --exact 4000 --strip-one-final-newline`. Не добивай длину
-бессмысленным наполнителем. До публикации докажи
+Если точный Alex parent имеет внутренний legacy marker `provenance=pro`,
+восстанови полную локальную историю chain и продолжи тем же skill. Этот marker
+сохраняется только ради совместимости схемы и не означает модель ChatGPT Pro.
+Старый chatgpt_conversation_url является только историческим audit field и не
+используется. Если Alex parent был опубликован вручную, разделяй происхождение
+хода и способ продолжения. Не переписывай неизвестное происхождение в
+`provenance=pro`. Поле `manual_parent_continuation` содержит детерминированный
+профиль точного локального parent. При `recommended_route=local-max` продолжай
+ветку локальным skill по полной SQLite истории, даже если происхождение parent
+осталось `manual_unknown`. При `recommended_route=short` используй Sol short.
+Если указан `pending_exact_parent_restore`, сначала восстанови точный live X
+parent, импортируй его как честный manual Alex turn и повтори адаптивную
+классификацию. Признаки local-max: доказанный local skill origin, не менее 500
+code points, не менее трех абзацев либо хотя бы одна source URL. Ни один из
+этих маршрутов не разрешает ChatGPT web.
+
+Ответ skill обязан быть одним непустым целостным русским монологом не длиннее
+4000 Unicode code points после удаления одного технического финального
+newline. Выполни актуальный фактчек, затем проверь черновик командой
+`validate_reply.py --non-empty --max 4000 --strip-one-final-newline`. Не
+стремись занять весь лимит и не увеличивай текст ради длины. До публикации докажи
 generation_skill=poyasnitelnaya-brigada, generation_model=gpt-5.6-sol и
 reasoning_effort=max.
 
@@ -73,8 +86,8 @@ exact history доказывают уже существующий прямой 
 к этому event. Тогда укажи `existing_alex_reply_url`,
 `alex_history_status=exact_alex_turn_appended` и не публикуй дубль. Технический
 `blocked` допустим только с terminal blocker_code, разрешенным watcher. Ошибки
-Browser, временный Pro failure и rate limit не являются terminal blocker:
-событие остается в очереди для повтора.
+Browser, временный сбой local-max генерации и rate limit не являются terminal
+blocker: событие остается в очереди для повтора.
 
 Если событие содержит `resolution_recovery`, это аудируемый повтор после
 устранения прежнего blocker. В durable handoff обязательно укажи
@@ -97,11 +110,17 @@ mention_reply_to_axrbarsic=true.
 Публикуй без дополнительного одобрения только релевантные ответы в рамках
 ранее разрешенного X workflow. Не ставь лайки, не делай репосты, подписки,
 личные сообщения, новые исходные посты и удаления. После каждой публикации
-проверь точный URL, сохрани полную историю в watcher и durable resolve. На
-iMac 8 GB открывай только одну вкладку X. Вкладку ChatGPT открывай только для
+проверь точный URL и parent. Для local-max route обязательно выполни
+`python3 scripts/verify_x_note_tweet.py --config config.json --status-id
+<REPLY_STATUS_ID> --parent-status-id <TARGET_STATUS_ID> --file <reply-file>
+--strip-one-final-newline --max 4000`. Продолжай только при `valid=true`:
+восстановленный официальный `note_tweet` обязан byte-for-byte совпасть с
+validated source. Сохрани JSON-отчет проверки, полную историю в watcher и
+durable resolve. На iMac 8 GB открывай только одну вкладку X. Вкладку ChatGPT
+открывай только для
 явно разрешённого satirical-media route отдельного визуального бота. Для
-обычного Pro route ChatGPT запрещён. После terminal результата закрой все
-принадлежащие этой задаче Browser-вкладки. После обработки закончи.
+обычного local-max route ChatGPT запрещён. После terminal результата закрой
+все принадлежащие этой задаче Browser-вкладки. После обработки закончи.
 Следующий X API poll выполняет LaunchAgent. Не
 создавай автоматики, задачи или Browser helpers. В финале укажи event ID,
 disposition и verified reply URL.

@@ -123,6 +123,60 @@ class AutopilotDispatchTests(unittest.TestCase):
             [first_event["event_id"]],
         )
 
+    def test_renew_extends_exact_claim_without_absorbing_new_event(self) -> None:
+        first_event = self.event("2080998938828501439")
+        second_event = self.event("2080998938828501440")
+        self.write_events([first_event])
+        now = datetime(2026, 7, 25, 13, 0, tzinfo=timezone.utc)
+        first = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            now=now,
+        )
+        self.write_events([first_event, second_event])
+
+        renewed = autopilot_dispatch.renew(
+            self.state_file,
+            first["claim_token"],
+            lease_seconds=1800,
+            now=now + timedelta(minutes=25),
+        )
+        overlapping = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            now=now + timedelta(minutes=31),
+        )
+
+        self.assertEqual(renewed["event_ids"], [first_event["event_id"]])
+        self.assertEqual(
+            renewed["lease_expires_at"],
+            "2026-07-25T13:55:00Z",
+        )
+        self.assertFalse(overlapping["dispatch"])
+        self.assertEqual(
+            overlapping["active_event_ids"],
+            [first_event["event_id"]],
+        )
+        state = autopilot_dispatch.read_json(self.state_file)
+        self.assertNotIn(second_event["event_id"], state["events"])
+
+    def test_renew_rejects_non_owner_token(self) -> None:
+        self.write_events([self.event()])
+        autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+        )
+
+        with self.assertRaisesRegex(ValueError, "active global owner"):
+            autopilot_dispatch.renew(
+                self.state_file,
+                "wrong-token",
+                lease_seconds=1800,
+            )
+
     def test_new_event_is_claimed_after_owner_finishes(self) -> None:
         first_event = self.event("2080998938828501439")
         second_event = self.event("2080998938828501440")

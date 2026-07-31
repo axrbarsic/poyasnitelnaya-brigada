@@ -113,7 +113,8 @@ an ordinary duplicate or stale handoff cannot overwrite a decision.
 
 `blocked` is not a content classification and not a synonym for `skip`. In
 mandatory response mode it requires an allowed terminal `blocker_code`.
-Temporary Browser, Pro, rate, and validation failures remain queued for retry.
+Temporary Browser, local-max generation, rate, and validation failures remain
+queued for retry.
 
 `mandatory-response-requeue` selects recent content-based skips and previously
 ignored mention replies with no exact direct Alex child reply, records their
@@ -148,12 +149,16 @@ filtering.
 
 The same SQLite database stores append-only conversation chains:
 
-- one chain row maps the root X status, short or Pro provenance, ledger
-  reference, and any legacy ChatGPT conversation URL as audit metadata only;
+- one chain row maps the root X status, short provenance or the legacy `pro`
+  compatibility marker, ledger reference, and any legacy ChatGPT conversation
+  URL as audit metadata only;
 - an Alex reply posted manually is still an `alex` turn. When a later mention
   points to it, the Browser owner must restore that exact live parent and the
   surrounding subtree before drafting, then persist the manual turn before the
   new disposition;
+- manual origin provenance remains separate from continuation mode. The claim
+  payload deterministically routes a substantive exact parent to the local
+  explainer skill while preserving unknown origin as unknown;
 - one turn row stores exact public X text, parent status, actor, author, URL,
   timestamps, and provenance;
 - source rows map factual replies to the primary sources used to prepare them;
@@ -225,7 +230,10 @@ contradiction claim, or factual conclusion.
   only after an authenticated read-only preflight succeeds.
 - `work_in_progress` survives overlapping empty dispatcher checks. `completed`
   requires every claimed ID to leave the wake queue. A postflight warning never
-  overwrites a durable resolution with failure.
+  overwrites a durable resolution with failure. If dispatcher cleanup removes
+  the lease after durable resolution but before the owner's terminal call,
+  `completed` automatically reconciles only after the wake queue is empty and
+  SQLite contains a resolution for every claimed event. It never republishes.
 - Generic acknowledgement rejects eligible replies. Only a durable `resolve`
   operation can remove them from the X workflow.
 - `resolve` requires the exact inspected event turn in conversation history.

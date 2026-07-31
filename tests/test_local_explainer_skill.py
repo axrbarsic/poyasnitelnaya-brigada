@@ -30,7 +30,7 @@ X_OPERATOR_SKILL = (
 
 
 class LocalExplainerSkillTests(unittest.TestCase):
-    def test_skill_declares_strict_runtime_and_exact_length_contract(
+    def test_skill_declares_strict_runtime_and_maximum_length_contract(
         self,
     ) -> None:
         skill = SKILL.read_text(encoding="utf-8")
@@ -38,11 +38,13 @@ class LocalExplainerSkillTests(unittest.TestCase):
 
         self.assertIn("gpt-5.6-sol", skill)
         self.assertIn("reasoning effort `max`", skill)
-        self.assertIn("3999, 4001", skill)
-        self.assertIn("code_points=4000", skill)
-        self.assertIn("--exact 4000", skill)
+        self.assertIn("не более 4000 Unicode code points", skill)
+        self.assertIn("--non-empty --max 4000", skill)
+        self.assertNotIn("--exact 4000", skill)
+        self.assertNotIn("ровно 4000", skill)
         self.assertIn("Never open ChatGPT or the custom GPT", skill)
-        self.assertIn("ровно 4000 Unicode code points", interface)
+        self.assertIn("не превышать 4000 Unicode code points", interface)
+        self.assertIn("Не увеличивай текст ради длины", interface)
 
     def test_x_operator_uses_draftjs_block_value_for_composer_gate(
         self,
@@ -53,11 +55,15 @@ class LocalExplainerSkillTests(unittest.TestCase):
         self.assertIn("`innerText`", skill)
         self.assertIn("presentation-only extra newline", skill)
 
-    def test_validator_accepts_only_exactly_4000_code_points(self) -> None:
+    def test_validator_accepts_non_empty_reply_up_to_4000_code_points(
+        self,
+    ) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             reply = Path(temporary) / "reply.txt"
             for length, expected_returncode in (
-                (3999, 1),
+                (0, 1),
+                (1, 0),
+                (3999, 0),
                 (4000, 0),
                 (4001, 1),
             ):
@@ -69,7 +75,8 @@ class LocalExplainerSkillTests(unittest.TestCase):
                             str(VALIDATOR),
                             "--file",
                             str(reply),
-                            "--exact",
+                            "--non-empty",
+                            "--max",
                             "4000",
                         ],
                         check=False,
@@ -85,7 +92,7 @@ class LocalExplainerSkillTests(unittest.TestCase):
                     self.assertEqual(payload["code_points"], length)
                     self.assertEqual(
                         payload["valid"],
-                        length == 4000,
+                        1 <= length <= 4000,
                     )
 
 

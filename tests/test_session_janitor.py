@@ -71,6 +71,63 @@ class SessionJanitorTests(unittest.TestCase):
 
         self.assertEqual(age, 300.0)
 
+    def test_owner_lease_remaining_honors_renewed_expiry(self) -> None:
+        remaining = session_janitor.owner_lease_remaining_seconds(
+            {
+                "claimed_at": "2026-07-26T09:00:00Z",
+                "last_renewed_at": "2026-07-26T09:15:00Z",
+                "lease_expires_at": "2026-07-26T09:45:00Z",
+            },
+            now=datetime(2026, 7, 26, 9, 20, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(remaining, 1500.0)
+
+    def test_unexpired_lease_protects_missing_owner_thread(self) -> None:
+        allowed = session_janitor.owner_recovery_allowed(
+            {
+                "claimed_at": "2026-07-26T09:00:00Z",
+                "last_renewed_at": "2026-07-26T09:15:00Z",
+                "lease_expires_at": "2026-07-26T09:45:00Z",
+            },
+            None,
+            now=datetime(2026, 7, 26, 9, 20, 0, tzinfo=timezone.utc),
+            orphan_owner_seconds=300,
+        )
+
+        self.assertFalse(allowed)
+
+    def test_expired_lease_allows_stale_owner_recovery(self) -> None:
+        allowed = session_janitor.owner_recovery_allowed(
+            {
+                "claimed_at": "2026-07-26T09:00:00Z",
+                "last_renewed_at": "2026-07-26T09:15:00Z",
+                "lease_expires_at": "2026-07-26T09:45:00Z",
+            },
+            None,
+            now=datetime(2026, 7, 26, 9, 45, 1, tzinfo=timezone.utc),
+            orphan_owner_seconds=300,
+        )
+
+        self.assertTrue(allowed)
+
+    def test_live_owner_thread_blocks_recovery_after_lease_expiry(self) -> None:
+        allowed = session_janitor.owner_recovery_allowed(
+            {
+                "claimed_at": "2026-07-26T09:00:00Z",
+                "lease_expires_at": "2026-07-26T09:30:00Z",
+            },
+            {
+                "id": "owner",
+                "status": {"type": "active"},
+                "updatedAt": 0,
+            },
+            now=datetime(2026, 7, 26, 9, 45, 1, tzinfo=timezone.utc),
+            orphan_owner_seconds=300,
+        )
+
+        self.assertFalse(allowed)
+
     def test_active_automation_match_requires_exact_preview(self) -> None:
         exact = {
             "name": session_janitor.AUTOMATION_TITLE,
@@ -85,6 +142,110 @@ class SessionJanitorTests(unittest.TestCase):
         self.assertTrue(session_janitor.matches_automation(exact))
         self.assertFalse(session_janitor.matches_automation(manual))
         self.assertEqual(session_janitor.status_type(exact), "active")
+
+    def test_x15_automation_match_requires_exact_id_and_title(self) -> None:
+        title = dict(session_janitor.AUTOMATION_IDENTITIES)["x-15"]
+        exact = {
+            "name": title,
+            "preview": (
+                f"Automation: {title}\n"
+                "Automation ID: x-15\n"
+            ),
+            "status": {"type": "idle"},
+        }
+        wrong_id = {
+            **exact,
+            "preview": (
+                f"Automation: {title}\n"
+                "Automation ID: unrelated\n"
+            ),
+        }
+        wrong_title = {**exact, "name": "X: похожее имя"}
+
+        self.assertTrue(session_janitor.matches_automation(exact))
+        self.assertFalse(session_janitor.matches_automation(wrong_id))
+        self.assertFalse(session_janitor.matches_automation(wrong_title))
+
+    def test_active_outbound_owner_uses_x15_lease(self) -> None:
+        with TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config_path = root / "config.json"
+            state_path = root / "outbound-cycle.json"
+            config_path.write_text(
+                json.dumps(
+                    {"outbound_cycle_state_file": state_path.name}
+                ),
+                encoding="utf-8",
+            )
+            owner = {
+                "claim_token": "outbound-claim",
+                "claimed_at": "2026-07-26T09:00:00Z",
+                "expires_at": "2026-07-26T09:30:00Z",
+                "status": "work_in_progress",
+                "target_limit": 1,
+            }
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "version": 1,
+                        "catchup_remaining": 0,
+                        "adjustments": [],
+                        "runs": [],
+                        "owner": owner,
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            active = session_janitor.active_outbound_owner(
+                config_path,
+                now=datetime(
+                    2026, 7, 26, 9, 20, 0, tzinfo=timezone.utc
+                ),
+            )
+            expired = session_janitor.active_outbound_owner(
+                config_path,
+                now=datetime(
+                    2026, 7, 26, 9, 31, 0, tzinfo=timezone.utc
+                ),
+            )
+
+        self.assertEqual(active, owner)
+        self.assertIsNone(expired)
+
+    def test_outbound_owner_maps_only_to_x15_task(self) -> None:
+        title = dict(session_janitor.AUTOMATION_IDENTITIES)["x-15"]
+        x15 = {
+            "id": "x15-owner",
+            "name": title,
+            "preview": (
+                f"Automation: {title}\n"
+                "Automation ID: x-15\n"
+            ),
+            "createdAt": 100,
+            "updatedAt": 200,
+            "status": {"type": "notLoaded"},
+        }
+        inbound = {
+            "id": "inbound-owner",
+            "name": session_janitor.AUTOMATION_TITLE,
+            "preview": (
+                "Automation: X: автопилот ответов\n"
+                "Automation ID: x\n"
+            ),
+            "createdAt": 120,
+            "updatedAt": 200,
+            "status": {"type": "notLoaded"},
+        }
+
+        owning = session_janitor.owning_automation_thread(
+            [inbound, x15],
+            {"claimed_at": "1970-01-01T00:02:30Z"},
+            identities=(("x-15", title),),
+        )
+
+        self.assertIsNotNone(owning)
+        self.assertEqual(owning["id"], "x15-owner")
 
     def test_owner_maps_to_latest_task_created_before_claim(self) -> None:
         base = {
@@ -241,6 +402,64 @@ class SessionJanitorTests(unittest.TestCase):
         )
 
         self.assertEqual(candidates, [10, 11, 12])
+
+    def test_x15_thread_and_helpers_are_archivable(self) -> None:
+        title = dict(session_janitor.AUTOMATION_IDENTITIES)["x-15"]
+        thread = {
+            "id": "x15-done",
+            "name": title,
+            "threadSource": "automation",
+            "preview": (
+                f"Automation: {title}\n"
+                "Automation ID: x-15\n"
+            ),
+            "createdAt": 100,
+            "updatedAt": 120,
+            "status": {"type": "notLoaded"},
+        }
+        active = {
+            **thread,
+            "id": "x15-active",
+            "createdAt": 200,
+            "updatedAt": 490,
+            "status": {"type": "active"},
+        }
+        processes = [
+            {
+                "pid": 40,
+                "ppid": 1,
+                "started_at": 100,
+                "command": "/path/cua_node/bin/node_repl",
+            },
+            {
+                "pid": 41,
+                "ppid": 40,
+                "started_at": 100,
+                "command": "child",
+            },
+            {
+                "pid": 50,
+                "ppid": 1,
+                "started_at": 200,
+                "command": "/path/cua_node/bin/node_repl",
+            },
+        ]
+
+        eligible = session_janitor.eligible_threads(
+            [thread, active],
+            now=500,
+            minimum_age_seconds=120,
+        )
+        helpers = session_janitor.helper_process_candidates(
+            processes,
+            [thread, active],
+            now_epoch=500,
+            grace_seconds=120,
+            protected_ids=set(),
+        )
+
+        self.assertEqual([item["id"] for item in eligible], ["x15-done"])
+        self.assertEqual(helpers, [40, 41])
 
     def test_process_parser_reads_mac_lstart(self) -> None:
         parsed = session_janitor.parse_processes(

@@ -34,7 +34,8 @@ Browser всегда принадлежит постоянной owner-сесс�
 > Текущее состояние deployment на 2026-07-30: постоянный Sol Max owner и Luna
 > Low relay проходят doctor без FAIL. Маршрут «Пояснительной бригады»
 > выполняется локальным skill без ChatGPT, использует exact durable history и
-> проверяет один ответ ровно на 4000 Unicode code points.
+> проверяет непустой ответ не длиннее 4000 Unicode code points без искусственного
+> увеличения текста.
 >
 > В том же live checkpoint изолированный пустой цикл прошёл через настоящий
 > entry point dispatcher и вернул `idle`. Task IDs, relay и owner turns,
@@ -58,7 +59,7 @@ Browser всегда принадлежит постоянной owner-сесс�
 | Event dispatcher LaunchAgent | 1 минута | нет при idle | Gate, запуск и managed shutdown Desktop |
 | In-app relay heartbeat | пока Desktop открыт | Luna Low | Reservation и одно сообщение owner |
 | Закрепленный Browser owner | по событию | Sol Max | Claim, Browser, фактчек, публикация |
-| Локальный skill «Пояснительная бригада» | только Pro | Sol Max | Ровно 4000 code points, история, источники |
+| Локальный skill «Пояснительная бригада» | только local-max | Sol Max | Не более 4000 code points, история, источники |
 | Codex CLI updater | 6 часов | нет без update | Version check, SHA-256, doctor, журнал |
 
 Пустой terminal monitoring не расходует model tokens и не создает задач.
@@ -129,8 +130,14 @@ reservation в состояние `claimed`. Atomic reservation и глобал�
 Ручной ответ Alex считается ходом `alex`. Если на него отвечают, Browser owner
 поднимает точную живую ветку, сохраняет ранее не импортированный ручной ответ и
 использует его вместе со всей историей до подготовки продолжения.
+Происхождение хода и способ продолжения разделены. Claim payload содержит
+профиль `manual_parent_continuation`, построенный по точному сохраненному
+parent. Доказанный local-max origin, 500 или больше Unicode code points, три
+или больше абзацев либо хотя бы одна source URL выбирают локальный skill.
+Краткий parent без этих признаков может остаться Sol short. Неизвестное ручное
+происхождение остается неизвестным, и ни один маршрут не открывает ChatGPT web.
 
-История Pro-ветки теперь восстанавливается из SQLite и append-only JSONL.
+История local-max ветки теперь восстанавливается из SQLite и append-only JSONL.
 Старые custom-GPT URL и migration records сохраняются только как audit trail.
 Команда совместимости `pro-model-recovery-requeue` без event ID возвращает в
 durable очередь старые model, conversation и screenshot blockers, устраненные
@@ -194,6 +201,9 @@ scheduled run создает отдельную задачу и может ос�
 10. X owner загружает `x-twitter-operator`, открывает минимум вкладок, выполняет
    double dedupe и publication transaction.
 11. После exact history и durable resolution owner выполняет `completed`.
+    Если dispatcher уже снял lease, `completed` автоматически завершает
+    reconciliation только после проверки нулевой pending queue и durable
+    SQLite resolution для каждого claimed event.
 12. Если Desktop был запущен supervisor, пустая очередь и owner=null запускают
     grace timer, после которого завершается только сохраненный managed PID.
 
@@ -207,8 +217,8 @@ scheduled run создает отдельную задачу и может ос�
 
 - Idle: ноль model tokens, ноль Browser-вкладок, ноль новых задач.
 - Short: одна X-вкладка.
-- Pro: одна X-вкладка, локальный skill и ноль ChatGPT-вкладок.
-- Только Sol принимает публикационные решения. Локальный Pro route всегда
+- Local-max: одна X-вкладка, локальный skill и ноль ChatGPT-вкладок.
+- Только Sol принимает публикационные решения. Локальный local-max route всегда
   требует effort `max`.
 - Luna не анализирует X и не формулирует ответы.
 - Ресурсный guard ставит Browser на паузу, но не удаляет очередь.

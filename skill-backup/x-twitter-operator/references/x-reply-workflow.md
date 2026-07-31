@@ -112,13 +112,14 @@ value.
    with primary-source support. The picture is not evidence.
 7. If generation or review fails, publish a Sol High text reply instead.
 
-### Pro reply
+### Local Sol Max reply
 
 Inspect the complete context locally, load `poyasnitelnaya-brigada`, and generate
 inside the Sol Max Browser-owner turn. Include exact durable X history and
 current primary-source research. Never open ChatGPT or the custom GPT. Produce
-one direct monologue of exactly 4000 Unicode code points and validate it
-deterministically before filling the X composer.
+one non-empty direct monologue of at most 4000 Unicode code points. Do not target
+the maximum or pad the answer. Validate it deterministically before filling the
+X composer.
 
 ## 5. Composer validation
 
@@ -137,7 +138,8 @@ Before filling a local «Пояснительная бригада» reply:
   python3 <skill-dir>/scripts/validate_reply.py \
     --file /path/to/reply.txt \
     --strip-one-final-newline \
-    --exact 4000
+    --non-empty \
+    --max 4000
   ```
 
 - confirm `generation_model=gpt-5.6-sol`;
@@ -166,8 +168,42 @@ After clicking each part:
 1. Wait for the page state to settle.
 2. Confirm the composer cleared.
 3. Locate a new thread article from `@axrbarsic`.
-4. Verify a distinctive prefix or the full text when practical.
-5. Capture the reply URL.
+4. Capture the reply URL and verify the exact parent status ID.
+5. For an X long post, fetch its official API `note_tweet`. Replace each
+   `note_tweet.entities.urls` t.co span, in reverse offset order, with its
+   `expanded_url`. The reconstructed text must be non-empty, contain at most
+   4000 Unicode code points, and match the validated source byte-for-byte.
+   In this project, run:
+
+   ```bash
+   python3 scripts/verify_x_note_tweet.py \
+     --config config.json \
+     --status-id REPLY_STATUS_ID \
+     --parent-status-id TARGET_STATUS_ID \
+     --file /path/to/reply.txt \
+     --strip-one-final-newline \
+     --max 4000
+   ```
+
+   Require `valid=true` and preserve the JSON report in task evidence.
+6. Treat rendered `innerText` as visual evidence only. X may add wrapping
+   newlines and ellipses to displayed URLs, so it is not an exact-text oracle.
+7. Verify a distinctive prefix and suffix in the live article.
+8. Build and import the exact two-turn local history from the completed
+   evidence object:
+
+   ```bash
+   python3 scripts/build_outbound_history.py \
+     --evidence /path/to/evidence.json \
+     --output /path/to/conversation-history.jsonl \
+     --max 4000
+   python3 xmention_watcher.py --config config.json history-import \
+     --file /path/to/conversation-history.jsonl
+   python3 xmention_watcher.py --config config.json history-show TARGET_STATUS_ID
+   ```
+
+   Require the exact target turn, exact Alex turn, correct parent, source URLs,
+   and legacy `provenance=pro` marker before durable completion.
 
 For a multi-part payload, the first part replies to the exact target. Open the
 verified URL of each published part and make the next part its direct child.
@@ -184,7 +220,7 @@ Maintain separate counts:
 - already-answered events with exact Alex child URLs;
 - terminal blockers;
 - short replies published;
-- Pro replies published;
+- local Sol Max replies published;
 - unverified submissions;
 - blocked targets.
 
