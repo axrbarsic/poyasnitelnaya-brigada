@@ -128,6 +128,11 @@ Watcher и dispatcher сами никогда ничего не публикую
   состояние никого не будит. Stale poll получает один allowlisted
   `launchctl kickstart`; повторный провал создает один durable incident и
   передает его существующей Sol Max owner-сессии через тот же Luna relay.
+- `HTTP 402 Payment Required` никогда не получает `kickstart`. Supervisor один
+  раз выгружает poll LaunchAgent, фиксирует `external_action_required` и не
+  создаёт повторные модельные пробуждения. Уже накопленная X очередь при этом
+  остаётся доступна owner-сессии. После пополнения X API credits оператор
+  загружает poll LaunchAgent и подтверждает один успешный live poll.
 - Repair incident имеет reservation, claim token, cooldown и обязательный
   отчет. Одинаковая поломка не создает минутный шторм модельных пробуждений.
 - Событийный relay использует одну существующую heartbeat-сессию и одну

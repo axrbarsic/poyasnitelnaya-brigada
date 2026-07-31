@@ -77,9 +77,13 @@ python3 scripts/autopilot_supervisor.py \
   run
 ```
 
-Supervisor применяет только заранее разрешенный ремонт. В первой версии это
-один `launchctl kickstart` poll LaunchAgent при stale или failing poll. После
-cooldown он повторяет read-only диагностику. Если поломка осталась, либо
+Supervisor применяет только заранее разрешенный ремонт. Для stale или failing
+poll это один `launchctl kickstart`. Биллинговый `HTTP 402` является отдельным
+внешним состоянием: supervisor выгружает poll LaunchAgent, фиксирует
+`external_action_required`, не будит модель повторно и не блокирует обработку
+уже накопленной X очереди. После пополнения credits poll нужно штатно загрузить
+и подтвердить одним успешным live poll. Для остальных сбоев после cooldown
+он повторяет read-only диагностику. Если поломка осталась, либо
 проверка относится к SQLite, очереди, Codex role, automation, skill или другому
 неоднозначному ресурсу, создается один durable incident.
 

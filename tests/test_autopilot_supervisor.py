@@ -111,6 +111,141 @@ class AutopilotSupervisorTests(unittest.TestCase):
         self.assertEqual(repair.call_count, 1)
         self.assertTrue(autopilot_supervisor.gate(self.config)["dispatch"])
 
+    def test_billing_block_suspends_poll_without_model_wake(self) -> None:
+        blocked = self.check(
+            "runtime.poll_health",
+            "fail",
+            details={
+                "health_status": "degraded",
+                "age_seconds": 181,
+                "max_age_seconds": 180,
+                "last_error_message": "X API HTTP 402 (Payment Required)",
+            },
+        )
+        suspend = mock.Mock(
+            return_value={
+                "action": "suspend_billing_blocked_poll",
+                "success": True,
+                "returncode": 0,
+                "already_unloaded": False,
+            }
+        )
+        generic_repair = mock.Mock(
+            side_effect=AssertionError("billing block must not be kicked")
+        )
+
+        first = autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now,
+            checks=[blocked],
+            repair_runner=generic_repair,
+            billing_block_runner=suspend,
+        )
+        second = autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now + timedelta(seconds=60),
+            checks=[blocked],
+            repair_runner=generic_repair,
+            billing_block_runner=suspend,
+        )
+        gate = autopilot_supervisor.gate(
+            self.config,
+            now=self.now + timedelta(seconds=61),
+        )
+
+        self.assertEqual(first["status"], "external_action_required")
+        self.assertEqual(second["status"], "external_action_required")
+        self.assertFalse(first["model_wake_required"])
+        self.assertTrue(first["external_action_required"])
+        self.assertFalse(gate["dispatch"])
+        self.assertFalse(gate["repair_pending"])
+        self.assertTrue(gate["external_action_required"])
+        suspend.assert_called_once_with()
+        generic_repair.assert_not_called()
+
+    def test_billing_block_does_not_starve_existing_x_queue(self) -> None:
+        blocked = self.check(
+            "runtime.poll_health",
+            "fail",
+            details={
+                "health_status": "billing_blocked",
+                "last_error_message": "X API HTTP 402 (Payment Required)",
+            },
+        )
+        autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now,
+            checks=[blocked],
+            billing_block_runner=mock.Mock(
+                return_value={
+                    "action": "suspend_billing_blocked_poll",
+                    "success": True,
+                    "returncode": 0,
+                }
+            ),
+        )
+        x_reservation = {
+            "status": "handoff_reserved_ready",
+            "dispatch": True,
+            "event_ids": ["synthetic-event"],
+            "reservation_token": "synthetic-reservation",
+        }
+        with mock.patch.object(
+            autopilot_supervisor.autopilot_bridge,
+            "reserve_handoff",
+            return_value=x_reservation,
+        ) as reserve_x:
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                lease_seconds=1800,
+                now=self.now + timedelta(seconds=1),
+            )
+
+        reserve_x.assert_called_once_with(
+            self.config,
+            lease_seconds=1800,
+        )
+        self.assertEqual(result["route"], "x")
+        self.assertTrue(result["dispatch"])
+
+    def test_billing_incident_clears_after_poll_recovers(self) -> None:
+        blocked = self.check(
+            "runtime.poll_health",
+            "fail",
+            details={
+                "last_error_message": "X API HTTP 402 (Payment Required)",
+            },
+        )
+        autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now,
+            checks=[blocked],
+            billing_block_runner=mock.Mock(
+                return_value={
+                    "action": "suspend_billing_blocked_poll",
+                    "success": True,
+                    "returncode": 0,
+                }
+            ),
+        )
+
+        recovered = autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now + timedelta(seconds=60),
+            checks=[self.check("runtime.poll_health", "pass")],
+        )
+
+        self.assertTrue(recovered["healthy"])
+        self.assertEqual(
+            autopilot_supervisor.gate(self.config)["status"],
+            "idle",
+        )
+
     def test_archived_heartbeat_target_is_repaired_without_model(self) -> None:
         failure = self.check(
             "automation.active_heartbeat_targets",

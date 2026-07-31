@@ -39,8 +39,10 @@ OPEN_STATUSES = {
     "claimed",
     "work_in_progress",
     "failed",
+    "external_action_required",
 }
 TERMINAL_STATUSES = {"resolved"}
+EXTERNAL_ACTION_STATUS = "external_action_required"
 REPAIRABLE_POLL_STATUSES = {
     "stale",
     "failing",
@@ -201,6 +203,8 @@ def new_incident(
 def poll_failure_is_repairable(
     failures: list[system_doctor.Check],
 ) -> bool:
+    if poll_failure_is_billing_blocked(failures):
+        return False
     if [check.identifier for check in failures] != ["runtime.poll_health"]:
         return False
     details = failures[0].details or {}
@@ -214,6 +218,36 @@ def poll_failure_is_repairable(
     return (
         str(details.get("health_status", "")) in REPAIRABLE_POLL_STATUSES
         or stale_by_age
+    )
+
+
+def poll_failure_is_billing_blocked(
+    failures: list[system_doctor.Check],
+) -> bool:
+    allowed = {
+        "runtime.poll_health",
+        f"launchagent.{POLL_LABEL}.loaded",
+    }
+    if not failures or any(
+        check.identifier not in allowed for check in failures
+    ):
+        return False
+    poll = next(
+        (
+            check
+            for check in failures
+            if check.identifier == "runtime.poll_health"
+        ),
+        None,
+    )
+    if poll is None:
+        return False
+    details = poll.details or {}
+    return (
+        str(details.get("health_status", "")) == "billing_blocked"
+        or str(details.get("last_error_message", "")).startswith(
+            "X API HTTP 402"
+        )
     )
 
 
@@ -298,6 +332,40 @@ def kickstart_poll() -> dict[str, Any]:
         "target": target,
         "success": completed.returncode == 0,
         "returncode": completed.returncode,
+        "stderr": completed.stderr.strip()[-500:],
+    }
+
+
+def suspend_billing_blocked_poll() -> dict[str, Any]:
+    target = f"gui/{os.getuid()}/{POLL_LABEL}"
+    probe = subprocess.run(
+        ["/bin/launchctl", "print", target],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if probe.returncode != 0:
+        return {
+            "action": "suspend_billing_blocked_poll",
+            "target": target,
+            "success": True,
+            "returncode": probe.returncode,
+            "already_unloaded": True,
+        }
+    completed = subprocess.run(
+        ["/bin/launchctl", "bootout", target],
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=20,
+    )
+    return {
+        "action": "suspend_billing_blocked_poll",
+        "target": target,
+        "success": completed.returncode == 0,
+        "returncode": completed.returncode,
+        "already_unloaded": False,
         "stderr": completed.stderr.strip()[-500:],
     }
 
@@ -392,6 +460,9 @@ def run_once(
     now: datetime | None = None,
     checks: list[system_doctor.Check] | None = None,
     repair_runner: Callable[[], dict[str, Any]] = kickstart_poll,
+    billing_block_runner: Callable[
+        [], dict[str, Any]
+    ] = suspend_billing_blocked_poll,
 ) -> dict[str, Any]:
     current = now or utc_now()
     config_path = config_path.expanduser().resolve()
@@ -420,6 +491,7 @@ def run_once(
                     "escalation_pending",
                     "handoff_pending",
                     "failed",
+                    EXTERNAL_ACTION_STATUS,
                 }
                 and not incident.get("canary")
                 and not incident.get("owner")
@@ -473,6 +545,61 @@ def run_once(
                 )
 
         attempts = incident.setdefault("repair_attempts", [])
+        billing_blocked = poll_failure_is_billing_blocked(failures)
+        coordination_locked = incident.get("status") in {
+            "handoff_pending",
+            "claimed",
+            "work_in_progress",
+        }
+        if billing_blocked and not coordination_locked:
+            prior_suspension = next(
+                (
+                    attempt
+                    for attempt in attempts
+                    if attempt.get("action")
+                    == "suspend_billing_blocked_poll"
+                ),
+                None,
+            )
+            if prior_suspension is None:
+                suspension = {
+                    **billing_block_runner(),
+                    "attempted_at": isoformat(current),
+                }
+                attempts.append(suspension)
+            else:
+                suspension = prior_suspension
+            if suspension.get("success") is True:
+                previous_owner = incident.pop("owner", None)
+                if isinstance(previous_owner, dict):
+                    incident["last_owner"] = previous_owner
+                incident["status"] = EXTERNAL_ACTION_STATUS
+                incident["external_action"] = {
+                    "kind": "x_api_credits_depleted",
+                    "required_action": (
+                        "Purchase X API credits, then bootstrap and verify "
+                        "the poll LaunchAgent."
+                    ),
+                    "recorded_at": isoformat(current),
+                }
+            else:
+                incident["status"] = "escalation_pending"
+            save_state(path, state)
+            return {
+                "status": str(incident["status"]),
+                "healthy": False,
+                "model_wake_required": (
+                    incident["status"] == "escalation_pending"
+                ),
+                "incident_id": incident["id"],
+                "failures": [check.identifier for check in failures],
+                "warnings": [check.identifier for check in warnings],
+                "repair_attempts": len(attempts),
+                "external_action_required": (
+                    incident["status"] == EXTERNAL_ACTION_STATUS
+                ),
+            }
+
         coordination_active = incident.get("status") in {
             "handoff_pending",
             "claimed",
@@ -576,10 +703,14 @@ def gate(
                 save_state(path, state)
         elif coordination_recovered:
             save_state(path, state)
+        external_action_required = status == EXTERNAL_ACTION_STATUS
         return {
             "status": status,
             "dispatch": status == "escalation_pending",
-            "repair_pending": status in OPEN_STATUSES,
+            "repair_pending": (
+                status in OPEN_STATUSES and not external_action_required
+            ),
+            "external_action_required": external_action_required,
             "incident_id": incident.get("id"),
             "failures": [
                 check.get("identifier")
@@ -632,10 +763,14 @@ def reserve_handoff(
             incident["handoff"] = None
             status = "escalation_pending"
         if status != "escalation_pending":
+            external_action_required = status == EXTERNAL_ACTION_STATUS
             return {
                 "status": status,
                 "dispatch": False,
-                "repair_pending": status in OPEN_STATUSES,
+                "repair_pending": (
+                    status in OPEN_STATUSES and not external_action_required
+                ),
+                "external_action_required": external_action_required,
                 "incident_id": incident["id"],
             }
 
