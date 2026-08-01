@@ -47,12 +47,13 @@ lease proves ownership, not completion. For a convoy failure, keep one writer,
 bound a claim to three oldest events, allow up to three independent read-only X
 tabs, and commit each event end-to-end before preparing the next publication.
 
-If the gate is ready but the owner never wakes, inspect the Luna trace. Use the
-callable name exposed by the current Codex tool surface. When `tool_search` is
-available, discover `codex_app__send_message_to_thread` through it. When it is
-not available but `functions.exec` exposes the callable in `ALL_TOOLS`, await
-exactly one `tools.codex_app__send_message_to_thread(...)` call and require the
-returned object to contain the exact requested `threadId`. Do not call the old
+If the gate is ready but the owner never wakes, inspect the Luna trace. A direct
+dynamic-tool call discovered through `tool_search` can remain pending inside a
+heartbeat task even while the same app callable works through `functions.exec`.
+Use one `functions.exec`, locate `codex_app__send_message_to_thread` in
+`ALL_TOOLS`, await exactly one
+`tools.codex_app__send_message_to_thread(...)` call, and require the returned
+object to contain the exact requested `threadId`. Do not call the old
 `codex_app.send_message_to_thread` handler name. Keep the queue unclaimed on
 delivery failure and let the next cycle retry.
 

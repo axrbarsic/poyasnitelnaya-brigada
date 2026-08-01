@@ -340,6 +340,8 @@ class AutopilotBridgeTests(unittest.TestCase):
 
         self.assertIn("codex_app__send_message_to_thread", prompt)
         self.assertIn("tools.codex_app__send_message_to_thread", prompt)
+        self.assertIn("Не используй `tool_search`", prompt)
+        self.assertIn("один `functions.exec`", prompt)
         self.assertIn("точный переданный `threadId`", prompt)
         self.assertIn("Не используй старое имя", prompt)
         self.assertIn("Не читай owner thread", prompt)
