@@ -32,6 +32,7 @@ def default_state() -> dict[str, Any]:
     return {
         "version": STATE_VERSION,
         "catchup_remaining": 0,
+        "last_scheduled_slot_id": None,
         "adjustments": [],
         "runs": [],
         "owner": None,
@@ -55,6 +56,9 @@ def load_state(path: Path) -> dict[str, Any]:
         payload.get("owner"), dict
     ):
         raise ValueError("owner must be an object or null")
+    slot_id = payload.setdefault("last_scheduled_slot_id", None)
+    if slot_id is not None and not isinstance(slot_id, str):
+        raise ValueError("last_scheduled_slot_id must be a string or null")
     return payload
 
 
@@ -151,11 +155,12 @@ def scheduled_slot(
     start_epoch -= start_epoch % interval_seconds
     start = datetime.fromtimestamp(start_epoch, tz=timezone.utc)
     end = start + timedelta(seconds=interval_seconds)
+    stamp = start.strftime("%Y%m%dT%H%M%SZ")
     return {
         "adjustment_id": (
-            f"scheduled-defer-{interval_minutes}m-"
-            f"{start.strftime('%Y%m%dT%H%M%SZ')}"
+            f"scheduled-defer-{interval_minutes}m-{stamp}"
         ),
+        "slot_id": f"scheduled-{interval_minutes}m-{stamp}",
         "window_start": autopilot_dispatch.isoformat(start),
         "window_end": autopilot_dispatch.isoformat(end),
     }
@@ -206,7 +211,7 @@ def defer_slot(
                     "status": "slot_already_claimed",
                     "claim_token": None,
                     "reason": explanation,
-                    "slot_id": slot["adjustment_id"],
+                    "slot_id": slot["slot_id"],
                     "catchup_added": 0,
                     "catchup_remaining": state["catchup_remaining"],
                 }
@@ -245,7 +250,7 @@ def defer_slot(
                     "catchup_consumed": 0,
                     "catchup_added": catchup_added,
                     "reason": explanation,
-                    "slot_id": slot["adjustment_id"],
+                    "slot_id": slot["slot_id"],
                 }
             )
             state["owner"] = None
@@ -254,7 +259,7 @@ def defer_slot(
         "status": "deferred" if catchup_added else "already_deferred",
         "claim_token": claim_token,
         "reason": explanation,
-        "slot_id": slot["adjustment_id"],
+        "slot_id": slot["slot_id"],
         "catchup_added": catchup_added,
         "catchup_remaining": state["catchup_remaining"],
     }
@@ -279,8 +284,200 @@ def append_expired_run(state: dict[str, Any], owner: dict[str, Any]) -> None:
             "target_limit": owner.get("target_limit"),
             "publications": [],
             "catchup_consumed": 0,
+            "slot_id": owner.get("slot_id"),
         }
     )
+
+
+def active_owner_snapshot(
+    path: Path,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Read whether an outbound owner still holds a live lease."""
+
+    checked_at = now or autopilot_dispatch.utc_now()
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        owner = state.get("owner")
+        if not isinstance(owner, dict):
+            return {"owner_busy": False}
+        if not owner_is_active(owner, checked_at):
+            append_expired_run(state, owner)
+            state["owner"] = None
+            write_state(path, state)
+            return {
+                "owner_busy": False,
+                "expired_claim_token": owner.get("claim_token"),
+            }
+        return {
+            "owner_busy": True,
+            "claim_token": owner.get("claim_token"),
+            "status": owner.get("status"),
+            "expires_at": owner.get("expires_at"),
+            "slot_id": owner.get("slot_id"),
+        }
+
+
+def claim_due(
+    path: Path,
+    *,
+    lease_seconds: int,
+    interval_minutes: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Claim at most one outbound attempt in the current schedule window."""
+
+    if lease_seconds <= 0:
+        raise ValueError("lease_seconds must be positive")
+    checked_at = now or autopilot_dispatch.utc_now()
+    slot = scheduled_slot(
+        interval_minutes=interval_minutes,
+        now=checked_at,
+    )
+    slot_id = str(slot["slot_id"])
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        owner = state.get("owner")
+        expired_owner_cleared = False
+        if isinstance(owner, dict) and owner_is_active(owner, checked_at):
+            return {
+                "status": "owner_busy",
+                "dispatch": False,
+                "claim_token": owner.get("claim_token"),
+                "expires_at": owner.get("expires_at"),
+                "target_limit": owner.get("target_limit"),
+                "slot_id": owner.get("slot_id"),
+                "catchup_remaining": state["catchup_remaining"],
+            }
+        if isinstance(owner, dict):
+            append_expired_run(state, owner)
+            state["owner"] = None
+            expired_owner_cleared = True
+        if state.get("last_scheduled_slot_id") == slot_id:
+            if expired_owner_cleared:
+                write_state(path, state)
+            return {
+                "status": "slot_already_attempted",
+                "dispatch": False,
+                "slot_id": slot_id,
+                "target_limit": 1,
+                "catchup_remaining": state["catchup_remaining"],
+            }
+
+        token = str(uuid.uuid4())
+        expires_at = checked_at + timedelta(seconds=lease_seconds)
+        state["last_scheduled_slot_id"] = slot_id
+        state["owner"] = {
+            "claim_token": token,
+            "status": "claimed",
+            "claimed_at": autopilot_dispatch.isoformat(checked_at),
+            "expires_at": autopilot_dispatch.isoformat(expires_at),
+            "target_limit": 1,
+            "slot_id": slot_id,
+            "catchup_remaining_at_claim": state["catchup_remaining"],
+        }
+        write_state(path, state)
+    return {
+        "status": "scheduled_claimed",
+        "dispatch": True,
+        "claim_token": token,
+        "reservation_token": token,
+        "expires_at": autopilot_dispatch.isoformat(expires_at),
+        "target_limit": 1,
+        "slot_id": slot_id,
+        "catchup_remaining": state["catchup_remaining"],
+    }
+
+
+def pause_slot(
+    path: Path,
+    *,
+    claim_token: str,
+    reason: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Yield an outbound claim to inbound work without creating catch-up."""
+
+    explanation = reason.strip()
+    if not explanation:
+        raise ValueError("reason must not be empty")
+    checked_at = now or autopilot_dispatch.utc_now()
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        owner = require_owner(state, claim_token=claim_token)
+        slot_id = owner.get("slot_id")
+        state["runs"].append(
+            {
+                "claim_token": claim_token,
+                "claimed_at": owner.get("claimed_at"),
+                "started_at": owner.get("started_at"),
+                "finished_at": autopilot_dispatch.isoformat(checked_at),
+                "status": "paused",
+                "target_limit": owner.get("target_limit"),
+                "publications": [],
+                "catchup_consumed": 0,
+                "catchup_added": 0,
+                "reason": explanation,
+                "slot_id": slot_id,
+            }
+        )
+        if slot_id and state.get("last_scheduled_slot_id") == slot_id:
+            state["last_scheduled_slot_id"] = None
+        state["owner"] = None
+        write_state(path, state)
+    return {
+        "status": "paused",
+        "claim_token": claim_token,
+        "reason": explanation,
+        "slot_id": slot_id,
+        "retry_when_idle": True,
+        "catchup_added": 0,
+        "catchup_remaining": state["catchup_remaining"],
+    }
+
+
+def clear_catchup(
+    path: Path,
+    *,
+    reason: str,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Discard legacy catch-up debt while retaining an audit record."""
+
+    explanation = reason.strip()
+    if not explanation:
+        raise ValueError("reason must not be empty")
+    checked_at = now or autopilot_dispatch.utc_now()
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        previous = int(state["catchup_remaining"])
+        if previous == 0:
+            return {
+                "status": "already_clear",
+                "cleared_count": 0,
+                "catchup_remaining": 0,
+            }
+        state["adjustments"].append(
+            {
+                "adjustment_id": (
+                    "catchup-clear-"
+                    f"{checked_at.strftime('%Y%m%dT%H%M%S%fZ')}"
+                ),
+                "type": "catchup_clear",
+                "count": previous,
+                "reason": explanation,
+                "created_at": autopilot_dispatch.isoformat(checked_at),
+            }
+        )
+        state["catchup_remaining"] = 0
+        write_state(path, state)
+    return {
+        "status": "catchup_cleared",
+        "cleared_count": previous,
+        "reason": explanation,
+        "catchup_remaining": 0,
+    }
 
 
 def claim(
@@ -357,6 +554,7 @@ def started(path: Path, *, claim_token: str) -> dict[str, Any]:
         "status": "work_in_progress",
         "claim_token": claim_token,
         "target_limit": owner["target_limit"],
+        "slot_id": owner.get("slot_id"),
         "catchup_remaining": state["catchup_remaining"],
     }
 
@@ -385,6 +583,7 @@ def renew(
         "claim_token": claim_token,
         "expires_at": autopilot_dispatch.isoformat(expires_at),
         "target_limit": owner["target_limit"],
+        "slot_id": owner.get("slot_id"),
         "catchup_remaining": state["catchup_remaining"],
     }
 
@@ -450,6 +649,7 @@ def completed(
                 "target_limit": target_limit,
                 "publications": list(publications),
                 "catchup_consumed": catchup_consumed,
+                "slot_id": owner.get("slot_id"),
             }
         )
         state["owner"] = None
@@ -481,6 +681,7 @@ def failed(path: Path, *, claim_token: str, reason: str) -> dict[str, Any]:
                 "publications": [],
                 "catchup_consumed": 0,
                 "reason": explanation,
+                "slot_id": owner.get("slot_id"),
             }
         )
         state["owner"] = None
@@ -500,6 +701,7 @@ def status(path: Path) -> dict[str, Any]:
         "status": "busy" if state.get("owner") else "idle",
         "owner": state.get("owner"),
         "catchup_remaining": state["catchup_remaining"],
+        "last_scheduled_slot_id": state.get("last_scheduled_slot_id"),
         "adjustment_count": len(state["adjustments"]),
         "run_count": len(state["runs"]),
         "updated_at": state.get("updated_at"),
@@ -523,7 +725,16 @@ def build_parser() -> argparse.ArgumentParser:
     catchup.add_argument("--window-start", required=True)
     catchup.add_argument("--window-end", required=True)
 
+    catchup_clear = commands.add_parser("catchup-clear")
+    catchup_clear.add_argument("--reason", required=True)
+
     commands.add_parser("claim")
+    claim_due_parser = commands.add_parser("claim-due")
+    claim_due_parser.add_argument(
+        "--interval-minutes",
+        required=True,
+        type=int,
+    )
     started_parser = commands.add_parser("started")
     started_parser.add_argument("--claim-token", required=True)
     renew_parser = commands.add_parser("renew")
@@ -543,6 +754,9 @@ def build_parser() -> argparse.ArgumentParser:
     deferred_parser.add_argument("--interval-minutes", required=True, type=int)
     deferred_parser.add_argument("--reason", required=True)
     deferred_parser.add_argument("--claim-token")
+    paused_parser = commands.add_parser("pause-slot")
+    paused_parser.add_argument("--claim-token", required=True)
+    paused_parser.add_argument("--reason", required=True)
     commands.add_parser("status")
     return parser
 
@@ -558,8 +772,16 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             window_start=arguments.window_start,
             window_end=arguments.window_end,
         )
+    if arguments.command == "catchup-clear":
+        return clear_catchup(path, reason=arguments.reason)
     if arguments.command == "claim":
         return claim(path, lease_seconds=arguments.lease_seconds)
+    if arguments.command == "claim-due":
+        return claim_due(
+            path,
+            lease_seconds=arguments.lease_seconds,
+            interval_minutes=arguments.interval_minutes,
+        )
     if arguments.command == "started":
         return started(path, claim_token=arguments.claim_token)
     if arguments.command == "renew":
@@ -589,6 +811,12 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             interval_minutes=arguments.interval_minutes,
             reason=arguments.reason,
             claim_token=arguments.claim_token,
+        )
+    if arguments.command == "pause-slot":
+        return pause_slot(
+            path,
+            claim_token=arguments.claim_token,
+            reason=arguments.reason,
         )
     if arguments.command == "status":
         return status(path)

@@ -60,11 +60,13 @@
   authorized. Authenticated X inspection, composer work, publication, official
   verification, durable import, and resolution remain one ordered Browser-owner
   transaction.
-- Run the explicitly authorized `x-15` schedule every ten minutes. Inbound
-  replies always own the single writer lane first. A tick blocked by an inbound
-  or prior outbound owner must record one idempotent deferred slot in
-  `var/outbound-cycle.json`, close without Browser mutation, and catch up later.
-  Never discard a scheduled slot merely because inbound work exists.
+- Keep the standalone `x-15` cron paused. The existing one-minute `x-relay`
+  may reserve one outbound attempt in the current ten-minute window only when
+  the inbound queue is exactly empty and both writer leases are idle. Any one
+  inbound event immediately preempts outbound before publication. Release the
+  outbound claim with `pause-slot`, never create catch-up debt, and retry only
+  after the inbound queue is fully resolved. Never compensate later for a slot
+  skipped while inbound work existed.
 - Treat helper results as evidence. Sol performs the final live-context
   decision and publication transaction.
 

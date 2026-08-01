@@ -18,12 +18,14 @@ try:
         automation_target_health,
         autopilot_bridge,
         autopilot_dispatch,
+        outbound_cycle,
         system_doctor,
     )
 except ModuleNotFoundError:
     import automation_target_health  # type: ignore[no-redef]
     import autopilot_bridge  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
+    import outbound_cycle  # type: ignore[no-redef]
     import system_doctor  # type: ignore[no-redef]
 
 
@@ -845,6 +847,38 @@ def active_x_owner_snapshot(
         }
 
 
+def outbound_state_path(config_path: Path) -> Path:
+    config = read_config(config_path)
+    return resolve_path(
+        config_path,
+        str(
+            config.get(
+                "outbound_cycle_state_file",
+                "var/outbound-cycle.json",
+            )
+        ),
+    )
+
+
+def outbound_interval_minutes(config_path: Path) -> int:
+    config = read_config(config_path)
+    value = int(config.get("outbound_cycle_interval_minutes", 10))
+    if value <= 0:
+        raise ValueError("outbound cycle interval must be positive")
+    return value
+
+
+def x_queue_is_exactly_idle(result: dict[str, Any]) -> bool:
+    return (
+        result.get("status") == "idle"
+        and result.get("dispatch") is False
+        and int(result.get("pending_count", 0)) == 0
+        and not result.get("event_ids")
+        and not result.get("owner_busy", False)
+        and int(result.get("leased_count", 0)) == 0
+    )
+
+
 def relay_reserve_handoff(
     config_path: Path,
     contract_path: Path,
@@ -852,7 +886,7 @@ def relay_reserve_handoff(
     lease_seconds: int,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Return one unambiguous repair-or-X reservation decision."""
+    """Return one repair, inbound X, or idle-only outbound decision."""
 
     config = read_config(config_path)
     contract = system_doctor.read_json(contract_path.expanduser().resolve())
@@ -910,15 +944,101 @@ def relay_reserve_handoff(
                     "route": "repair",
                 }
         return {**repair, **owner_route, "route": "repair"}
+    outbound_path = outbound_state_path(config_path)
     x_result = autopilot_bridge.reserve_handoff(
         config_path,
         lease_seconds=lease_seconds,
     )
+    if x_result.get("dispatch"):
+        outbound_owner = outbound_cycle.active_owner_snapshot(
+            outbound_path,
+            now=now,
+        )
+        if outbound_owner.get("owner_busy"):
+            reservation_token = str(
+                x_result.get("reservation_token", "")
+            )
+            autopilot_bridge.release_handoff_reservation(
+                config_path,
+                reservation_token=reservation_token,
+                reason="outbound_owner_must_pause_for_inbound",
+            )
+            return {
+                **x_result,
+                **owner_route,
+                "status": "x_waiting_for_outbound_pause",
+                "dispatch": False,
+                "repair_pending": False,
+                "route": "x",
+                "outbound_owner": outbound_owner,
+            }
+        return {
+            **x_result,
+            **owner_route,
+            "repair_pending": False,
+            "route": "x",
+        }
+    if not x_queue_is_exactly_idle(x_result):
+        return {
+            **x_result,
+            **owner_route,
+            "repair_pending": False,
+            "route": "x",
+        }
+
+    x_owner = active_x_owner_snapshot(
+        config_path,
+        lease_seconds=lease_seconds,
+        now=now,
+    )
+    if x_owner.get("owner_busy"):
+        return {
+            **x_result,
+            **owner_route,
+            **x_owner,
+            "status": "outbound_waiting_for_x_owner",
+            "dispatch": False,
+            "repair_pending": False,
+            "route": "outbound",
+        }
+
+    outbound = outbound_cycle.claim_due(
+        outbound_path,
+        lease_seconds=lease_seconds,
+        interval_minutes=outbound_interval_minutes(config_path),
+        now=now,
+    )
+    if not outbound.get("dispatch"):
+        return {
+            **outbound,
+            **owner_route,
+            "repair_pending": False,
+            "route": "outbound",
+        }
+
+    race_check = autopilot_bridge.reserve_handoff(
+        config_path,
+        lease_seconds=lease_seconds,
+    )
+    if not x_queue_is_exactly_idle(race_check):
+        outbound_cycle.pause_slot(
+            outbound_path,
+            claim_token=str(outbound["claim_token"]),
+            reason="inbound_arrived_during_outbound_reservation",
+            now=now,
+        )
+        return {
+            **race_check,
+            **owner_route,
+            "repair_pending": False,
+            "route": "x",
+            "outbound_preempted": True,
+        }
     return {
-        **x_result,
+        **outbound,
         **owner_route,
         "repair_pending": False,
-        "route": "x",
+        "route": "outbound",
     }
 
 

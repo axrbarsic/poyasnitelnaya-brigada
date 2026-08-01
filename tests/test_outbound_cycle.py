@@ -16,39 +16,19 @@ class OutboundCycleTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
-    def test_versioned_cron_prompt_uses_full_terminal_protocol(self) -> None:
+    def test_paused_cron_prompt_fails_closed_without_browser(self) -> None:
         root = Path(__file__).resolve().parents[1]
         prompt = (root / "macos/x-15.prompt.txt").read_text(
             encoding="utf-8"
         )
 
-        self.assertIn("gpt-5.6-sol", prompt)
-        self.assertIn("reasoning effort max", prompt)
-        self.assertIn("target_limit", prompt)
-        self.assertIn("scripts/verify_x_note_tweet.py", prompt)
-        self.assertIn("scripts/build_outbound_history.py", prompt)
-        self.assertIn("history-import", prompt)
-        self.assertIn("history-show <TARGET_STATUS_ID>", prompt)
-        self.assertIn("--non-empty --max 4000", prompt)
-        self.assertNotIn("--exact 4000", prompt)
-        self.assertIn("valid=true", prompt)
-        for command in (
-            "claim",
-            "started",
-            "renew",
-            "completed",
-            "failed",
-            "defer-slot",
-        ):
-            self.assertIn(
-                f"scripts/outbound_cycle.py --state "
-                f"var/outbound-cycle.json --lease-seconds 1800 {command}",
-                prompt,
-            )
-        self.assertIn("--interval-minutes 10", prompt)
-        self.assertIn("poyasnitelnaya-brigada-v2", prompt)
-        self.assertIn("расист", prompt)
-        self.assertIn("Никогда не оставляй claim без terminal", prompt)
+        self.assertIn("paused marker", prompt)
+        self.assertIn("status=PAUSED", prompt)
+        self.assertIn("macos/x-outbound-owner.prompt.txt", prompt)
+        self.assertIn("Не открывай Browser", prompt)
+        self.assertIn("не публикуй в X", prompt)
+        self.assertNotIn(" claim --", prompt)
+        self.assertNotIn(" Reply ", prompt)
 
     def test_normal_claim_serializes_one_target(self) -> None:
         first = outbound_cycle.claim(self.state, lease_seconds=1800)
@@ -58,6 +38,126 @@ class OutboundCycleTests(unittest.TestCase):
         self.assertEqual(first["target_limit"], 1)
         self.assertFalse(second["dispatch"])
         self.assertEqual(second["status"], "owner_busy")
+
+    def test_due_claim_runs_once_per_slot_and_ignores_catchup(self) -> None:
+        outbound_cycle.add_catchup(
+            self.state,
+            adjustment_id="legacy-backlog",
+            count=5,
+            reason="legacy outbound debt",
+            window_start="2026-07-30T04:41:09Z",
+            window_end="2026-07-30T10:21:43Z",
+        )
+        now = datetime(2026, 8, 1, 6, 41, tzinfo=timezone.utc)
+        first = outbound_cycle.claim_due(
+            self.state,
+            lease_seconds=1800,
+            interval_minutes=10,
+            now=now,
+        )
+        outbound_cycle.started(
+            self.state,
+            claim_token=first["claim_token"],
+        )
+        outbound_cycle.completed(
+            self.state,
+            claim_token=first["claim_token"],
+            publications=[],
+        )
+        repeated = outbound_cycle.claim_due(
+            self.state,
+            lease_seconds=1800,
+            interval_minutes=10,
+            now=now + timedelta(minutes=1),
+        )
+        next_slot = outbound_cycle.claim_due(
+            self.state,
+            lease_seconds=1800,
+            interval_minutes=10,
+            now=now + timedelta(minutes=10),
+        )
+
+        self.assertTrue(first["dispatch"])
+        self.assertEqual(first["target_limit"], 1)
+        self.assertFalse(repeated["dispatch"])
+        self.assertEqual(repeated["status"], "slot_already_attempted")
+        self.assertTrue(next_slot["dispatch"])
+        self.assertEqual(next_slot["target_limit"], 1)
+
+    def test_pause_yields_without_catchup_and_retries_when_idle(self) -> None:
+        now = datetime(2026, 8, 1, 6, 41, tzinfo=timezone.utc)
+        claimed = outbound_cycle.claim_due(
+            self.state,
+            lease_seconds=1800,
+            interval_minutes=10,
+            now=now,
+        )
+        outbound_cycle.started(
+            self.state,
+            claim_token=claimed["claim_token"],
+        )
+        paused = outbound_cycle.pause_slot(
+            self.state,
+            claim_token=claimed["claim_token"],
+            reason="inbound_writer_priority",
+            now=now + timedelta(minutes=1),
+        )
+        state = outbound_cycle.load_state(self.state)
+        retried = outbound_cycle.claim_due(
+            self.state,
+            lease_seconds=1800,
+            interval_minutes=10,
+            now=now + timedelta(minutes=2),
+        )
+
+        self.assertEqual(paused["status"], "paused")
+        self.assertEqual(paused["catchup_added"], 0)
+        self.assertEqual(paused["catchup_remaining"], 0)
+        self.assertIsNone(state["owner"])
+        self.assertIsNone(state["last_scheduled_slot_id"])
+        self.assertTrue(retried["dispatch"])
+        self.assertEqual(retried["slot_id"], claimed["slot_id"])
+
+    def test_clear_catchup_keeps_audit_and_is_idempotent(self) -> None:
+        outbound_cycle.add_catchup(
+            self.state,
+            adjustment_id="legacy-backlog",
+            count=57,
+            reason="legacy outbound debt",
+            window_start="2026-07-30T04:41:09Z",
+            window_end="2026-07-30T10:21:43Z",
+        )
+        cleared = outbound_cycle.clear_catchup(
+            self.state,
+            reason="inbound first mode has no catchup",
+        )
+        repeated = outbound_cycle.clear_catchup(
+            self.state,
+            reason="inbound first mode has no catchup",
+        )
+        state = outbound_cycle.load_state(self.state)
+
+        self.assertEqual(cleared["cleared_count"], 57)
+        self.assertEqual(cleared["catchup_remaining"], 0)
+        self.assertEqual(repeated["status"], "already_clear")
+        self.assertEqual(state["adjustments"][-1]["type"], "catchup_clear")
+
+    def test_idle_only_owner_prompt_has_no_catchup_commands(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        prompt = (root / "macos/x-outbound-owner.prompt.txt").read_text(
+            encoding="utf-8"
+        )
+        relay = (root / "macos/x-relay.prompt.txt").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("poyasnitelnaya-brigada-v2", prompt)
+        self.assertIn("pause-slot", prompt)
+        self.assertIn("pending_count=0", prompt)
+        self.assertIn("target-limit=TARGET_LIMIT", relay)
+        self.assertIn("route=outbound", relay)
+        self.assertNotIn(" catchup-add", prompt)
+        self.assertNotIn(" defer-slot --", prompt)
 
     def test_catchup_adjustment_is_idempotent_and_consumed_by_extra(self) -> None:
         arguments = {
@@ -311,6 +411,28 @@ class OutboundCycleTests(unittest.TestCase):
 
         self.assertTrue(first["dispatch"])
         self.assertTrue(second["dispatch"])
+        self.assertEqual(state["runs"][-1]["status"], "expired")
+
+    def test_owner_snapshot_clears_expired_claim(self) -> None:
+        now = datetime(2026, 7, 30, 12, 0, tzinfo=timezone.utc)
+        claimed = outbound_cycle.claim_due(
+            self.state,
+            lease_seconds=60,
+            interval_minutes=10,
+            now=now,
+        )
+        snapshot = outbound_cycle.active_owner_snapshot(
+            self.state,
+            now=now + timedelta(seconds=61),
+        )
+        state = outbound_cycle.load_state(self.state)
+
+        self.assertFalse(snapshot["owner_busy"])
+        self.assertEqual(
+            snapshot["expired_claim_token"],
+            claimed["claim_token"],
+        )
+        self.assertIsNone(state["owner"])
         self.assertEqual(state["runs"][-1]["status"], "expired")
 
 

@@ -40,6 +40,7 @@
     "skill-backup/377/SKILL.md",
     "skill-backup/377/agents/openai.yaml",
     "macos/x-relay.prompt.txt",
+    "macos/x-outbound-owner.prompt.txt",
     "macos/x-15.prompt.txt"
   ],
   "threads": {
@@ -70,7 +71,7 @@
     "outbound_local_skill": {
       "id": "x-15",
       "kind": "cron",
-      "status": "ACTIVE",
+      "status": "PAUSED",
       "rrule": "FREQ=MINUTELY;INTERVAL=10",
       "model": "gpt-5.6-sol",
       "reasoning_effort": "max",

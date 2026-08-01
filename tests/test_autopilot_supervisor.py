@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from scripts import autopilot_supervisor, system_doctor
+from scripts import autopilot_supervisor, outbound_cycle, system_doctor
 
 
 class AutopilotSupervisorTests(unittest.TestCase):
@@ -374,6 +374,165 @@ class AutopilotSupervisorTests(unittest.TestCase):
         self.assertFalse(result["repair_pending"])
         self.assertEqual(result["event_ids"], ["synthetic-event"])
         self.assertEqual(result["owner_thread_id"], "owner")
+
+    def test_relay_claims_outbound_only_when_x_is_exactly_idle(self) -> None:
+        idle = {
+            "status": "idle",
+            "dispatch": False,
+            "pending_count": 0,
+            "event_ids": [],
+        }
+        with (
+            mock.patch.object(
+                autopilot_supervisor.autopilot_bridge,
+                "reserve_handoff",
+                side_effect=[idle, idle],
+            ) as reserve_x,
+            mock.patch.object(
+                autopilot_supervisor,
+                "active_x_owner_snapshot",
+                return_value={
+                    "owner_busy": False,
+                    "active_event_ids": [],
+                },
+            ),
+        ):
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        self.assertEqual(reserve_x.call_count, 2)
+        self.assertEqual(result["route"], "outbound")
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["target_limit"], 1)
+        self.assertEqual(result["reservation_token"], result["claim_token"])
+
+    def test_inbound_handoff_never_claims_new_outbound_work(self) -> None:
+        x_reservation = {
+            "status": "handoff_reserved_ready",
+            "dispatch": True,
+            "event_ids": ["synthetic-event"],
+            "reservation_token": "synthetic-reservation",
+        }
+        with (
+            mock.patch.object(
+                autopilot_supervisor.autopilot_bridge,
+                "reserve_handoff",
+                return_value=x_reservation,
+            ),
+            mock.patch.object(
+                autopilot_supervisor.outbound_cycle,
+                "active_owner_snapshot",
+                return_value={"owner_busy": False},
+            ),
+            mock.patch.object(
+                autopilot_supervisor.outbound_cycle,
+                "claim_due",
+                side_effect=AssertionError(
+                    "outbound must wait for one inbound event"
+                ),
+            ),
+        ):
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        self.assertEqual(result["route"], "x")
+        self.assertTrue(result["dispatch"])
+
+    def test_inbound_waits_for_active_outbound_to_pause(self) -> None:
+        x_reservation = {
+            "status": "handoff_reserved_ready",
+            "dispatch": True,
+            "event_ids": ["synthetic-event"],
+            "reservation_token": "synthetic-reservation",
+        }
+        with (
+            mock.patch.object(
+                autopilot_supervisor.autopilot_bridge,
+                "reserve_handoff",
+                return_value=x_reservation,
+            ),
+            mock.patch.object(
+                autopilot_supervisor.outbound_cycle,
+                "active_owner_snapshot",
+                return_value={
+                    "owner_busy": True,
+                    "claim_token": "outbound-token",
+                    "slot_id": "scheduled-10m-test",
+                },
+            ),
+            mock.patch.object(
+                autopilot_supervisor.autopilot_bridge,
+                "release_handoff_reservation",
+                return_value={"released": True},
+            ) as release_x,
+        ):
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        release_x.assert_called_once_with(
+            self.config,
+            reservation_token="synthetic-reservation",
+            reason="outbound_owner_must_pause_for_inbound",
+        )
+        self.assertEqual(result["status"], "x_waiting_for_outbound_pause")
+        self.assertFalse(result["dispatch"])
+
+    def test_inbound_race_preempts_new_outbound_claim(self) -> None:
+        idle = {
+            "status": "idle",
+            "dispatch": False,
+            "pending_count": 0,
+            "event_ids": [],
+        }
+        inbound = {
+            "status": "handoff_reserved_ready",
+            "dispatch": True,
+            "pending_count": 1,
+            "event_ids": ["synthetic-event"],
+            "reservation_token": "synthetic-reservation",
+        }
+        with (
+            mock.patch.object(
+                autopilot_supervisor.autopilot_bridge,
+                "reserve_handoff",
+                side_effect=[idle, inbound],
+            ),
+            mock.patch.object(
+                autopilot_supervisor,
+                "active_x_owner_snapshot",
+                return_value={
+                    "owner_busy": False,
+                    "active_event_ids": [],
+                },
+            ),
+        ):
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        state = outbound_cycle.load_state(
+            self.root / "var" / "outbound-cycle.json"
+        )
+        self.assertEqual(result["route"], "x")
+        self.assertTrue(result["dispatch"])
+        self.assertTrue(result["outbound_preempted"])
+        self.assertIsNone(state["owner"])
+        self.assertIsNone(state["last_scheduled_slot_id"])
 
     def test_queue_latency_incident_yields_relay_to_x(self) -> None:
         queue_latency = self.check("runtime.queue_latency", "fail")

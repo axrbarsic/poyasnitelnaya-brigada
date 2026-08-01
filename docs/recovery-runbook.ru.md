@@ -31,8 +31,8 @@ automation, LaunchAgent, SQLite или Keychain. Он сверяет:
 - обязательные файлы каркаса;
 - главную Sol Max сессию и Luna Low relay;
 - архивный флаг, модель, минимальный effort и рабочий каталог ролей;
-- официальный heartbeat `x-relay`, самостоятельный cron `x-15` и paused
-  старые automations;
+- официальный heartbeat `x-relay`, paused cron marker `x-15` и остальные
+  retired automations;
 - пять LaunchAgent;
 - SQLite integrity, очередь и Keychain helper;
 - установленные `x-twitter-operator`, обе версии
@@ -169,10 +169,11 @@ state SQLite вручную. Закрепление worker не требуетс
 - `~/.codex/skills/377` восстановить только из `skill-backup/377`;
 - LaunchAgent перерендерить из `macos/*.plist.example` через
   `scripts/render_launchd.py`;
-- heartbeat `x-relay` и cron `x-15` восстановить только через официальный
-  `automation_update`. Для `x-15` обязательны local execution,
+- heartbeat `x-relay` и paused marker `x-15` восстановить только через
+  официальный `automation_update`. `x-relay` получает точный prompt из
+  `macos/x-relay.prompt.txt`. Для `x-15` сохраняются local execution,
   `gpt-5.6-sol`, effort `max`, 10-минутный интервал и точный prompt из
-  `macos/x-15.prompt.txt`;
+  `macos/x-15.prompt.txt`, но status обязан быть PAUSED;
 - подписанный app-like Keychain helper восстановить командой
   `scripts/install_keychain_helper.sh`. Для первого выпуска нужен Apple Account
   в Xcode и Mac provisioning profile. При миграции старого login-keychain item
@@ -182,11 +183,9 @@ state SQLite вручную. Закрепление worker не требуетс
 - live SQLite вернуть из последнего валидного snapshot только после сохранения
   копии повреждённого файла.
 
-При изменении существующего `x-15` сначала поставить его на паузу официальным
-инструментом, дождаться завершения всех уже запущенных задач этой automation и
-проверить `owner=null` через `outbound_cycle.py status`. Обновлять prompt поверх
-активного run запрещено: старый Browser owner еще может публиковать, когда
-первый run нового контракта уже получил lease.
+Перед изменением scheduler дождаться завершения старых `x-15` задач и проверить
+`owner=null` через `outbound_cycle.py status`. `x-15` не активировать: новые
+outbound claims создаёт только `x-relay` после точного idle gate.
 
 ### 5. Повторить безопасные проверки
 
@@ -203,7 +202,7 @@ python3 scripts/autopilot_bridge.py \
 Если `dispatch=false`, Browser не открывается. Если `dispatch=true`, обработка
 идёт через единственный существующий Browser owner.
 
-Состояние outbound catch-up проверяется отдельно:
+Состояние outbound scheduler проверяется отдельно:
 
 ```bash
 python3 scripts/outbound_cycle.py \
@@ -211,11 +210,10 @@ python3 scripts/outbound_cycle.py \
   --lease-seconds 1800 status
 ```
 
-Файл находится в `var/` и не восстанавливается из Git. При доказанном пропуске
-окна добавляется одна идемпотентная корректировка с уникальным ID, точным
-числом, причиной и временными границами. Нельзя вручную уменьшать счетчик или
-засчитывать неподтвержденную публикацию. Обычный run закрывает текущий слот,
-а только вторая durable публикация одного run уменьшает catch-up на единицу.
+Файл находится в `var/` и не восстанавливается из Git. Нормальный
+`catchup_remaining` равен нулю. Пропущенное из-за входящей очереди окно не
+сохраняется для последующей компенсации. При миграции старый backlog очищается
+один раз через `catchup-clear` с точной причиной и audit record.
 
 ## Управляемый характер
 

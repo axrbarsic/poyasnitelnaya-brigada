@@ -69,13 +69,13 @@
   The current Desktop build exposes the official `automation_update` tool, and
   automation state is changed only through that tool.
 - [x] Pause the retired outbound heartbeat `x-pro-15`.
-- [x] Create the standalone local cron `x-15` on `gpt-5.6-sol` with effort
-  `max`, a 10-minute interval, and the versioned `macos/x-15.prompt.txt`.
+- [x] Keep standalone local cron `x-15` PAUSED as a deployment marker with its
+  versioned prompt and route live idle-only outbound through `x-relay`.
 - [x] Prove one independent `x-15` run publishes a locally generated reply,
   deterministically capped at 4000 code points, without opening ChatGPT.
-- [x] Protect `x-15` with the atomic `outbound_cycle.py` lease and bounded
-  two-target catch-up contract.
-- [x] Record an idempotent deferred slot when the single writer lane is busy.
+- [x] Protect each relay-created outbound attempt with the atomic
+  `outbound_cycle.py` lease and a one-target limit.
+- [x] Preempt outbound on any inbound event without recording catch-up debt.
 - [x] Confirm real new replies create exact queue items.
 - [x] Acknowledge the event only after the existing X workflow records its
   disposition.

@@ -93,15 +93,14 @@ an X reply.
     applies a bounded first lookback, and reuses immutable event ID
     deduplication. X bills read endpoints per returned resource and normally
     deduplicates the same resource within one UTC day.
-23. Scheduled outbound uses the standalone local cron `x-15`, never a
-    heartbeat attached to the busy owner task. It runs on `gpt-5.6-sol` with
-    effort `max`, obtains a separate atomic lease from
-    `scripts/outbound_cycle.py`, and then checks the incoming queue. A normal run handles one
-    target. A bounded catch-up run may handle a second target sequentially in
-    the same X tab. Only a verified second publication consumes one missed
-    opportunity, so catch-up cannot force a weak or duplicate target. A tick
-    blocked by the single writer lane records an idempotent deferred 10-minute
-    slot instead of disappearing.
+23. Scheduled outbound reuses the existing one-minute `x-relay`; standalone
+    cron `x-15` remains paused. After repair and inbound routing, the relay may
+    atomically reserve one outbound attempt for the current 10-minute window
+    only when the inbound queue is exactly empty and both writer leases are
+    idle. The Sol Max owner repeats the inbound gate after target selection,
+    after generation, and immediately before publication. Any single inbound
+    event releases the outbound claim through `pause-slot`. Skipped windows do
+    not accumulate catch-up debt and are never replayed later.
 
 Each event resolution can preserve stance, confidence, media meaning, and
 multiple evidence notes. This prevents a media-only reply from disappearing
