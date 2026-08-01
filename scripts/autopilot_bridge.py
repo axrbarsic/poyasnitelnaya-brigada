@@ -15,10 +15,16 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from scripts import autopilot_contract, autopilot_dispatch, resource_guard
+    from scripts import (
+        autopilot_contract,
+        autopilot_dispatch,
+        event_dispatch,
+        resource_guard,
+    )
 except ModuleNotFoundError:
     import autopilot_contract  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
+    import event_dispatch  # type: ignore[no-redef]
     import resource_guard  # type: ignore[no-redef]
 
 try:
@@ -714,6 +720,21 @@ def mark_completed(
         reconciled["requested_claim_token"] = claim_token
         reconciled["reconciled"] = True
         return reconciled
+    pending_events = autopilot_dispatch.load_wake_events(wake_file)
+    pending_event_ids = [str(event["id"]) for event in pending_events]
+    try:
+        next_dispatch = event_dispatch.trigger_pending_events(
+            config_path,
+            pending_event_ids,
+        )
+    except (OSError, TypeError, ValueError) as error:
+        next_dispatch = {
+            "status": "dispatch_trigger_failed",
+            "triggered": False,
+            "event_ids": pending_event_ids,
+            "reason": event_dispatch.CLAIM_COMPLETED_REASON,
+            "error": f"{type(error).__name__}: {error}",
+        }
     status = "completed_with_warning" if warning else "completed"
     write_health(
         config_path,
@@ -726,7 +747,8 @@ def mark_completed(
         "status": status,
         "claim_token": claim_token,
         "event_ids": event_ids,
-        "pending_count": len(autopilot_dispatch.load_wake_events(wake_file)),
+        "pending_count": len(pending_events),
+        "next_dispatch": next_dispatch,
         "warning": warning,
     }
 
@@ -775,6 +797,20 @@ def reconcile_completed(
         )
     status = "completed_with_warning" if warning else "completed"
     recovery_token = "reconciled:" + autopilot_dispatch.isoformat()
+    pending_event_ids = sorted(pending_ids, key=int)
+    try:
+        next_dispatch = event_dispatch.trigger_pending_events(
+            config_path,
+            pending_event_ids,
+        )
+    except (OSError, TypeError, ValueError) as error:
+        next_dispatch = {
+            "status": "dispatch_trigger_failed",
+            "triggered": False,
+            "event_ids": pending_event_ids,
+            "reason": event_dispatch.CLAIM_COMPLETED_REASON,
+            "error": f"{type(error).__name__}: {error}",
+        }
     write_health(
         config_path,
         status=status,
@@ -787,6 +823,7 @@ def reconcile_completed(
         "claim_token": recovery_token,
         "event_ids": requested,
         "pending_count": len(pending_ids),
+        "next_dispatch": next_dispatch,
         "warning": warning,
     }
 

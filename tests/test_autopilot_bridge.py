@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import subprocess
 import tempfile
 import unittest
 from contextlib import closing
 from pathlib import Path
+from unittest import mock
 
 import xmention_watcher as watcher
 import candidate_corpus
@@ -1149,6 +1151,95 @@ class AutopilotBridgeTests(unittest.TestCase):
         )
         self.assertEqual(health["handoff_count"], 1)
         self.assertEqual(health["error"], "postflight poll unavailable")
+
+    def test_three_completed_batches_kick_remaining_queue_immediately(
+        self,
+    ) -> None:
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config.update(
+            {
+                "autopilot_max_claim_events": 1,
+                "event_dispatch_on_new_events": True,
+                "event_dispatch_state_file": "var/event-dispatch.json",
+            }
+        )
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        events = []
+        for offset in range(4):
+            event = dict(self.event())
+            event_id = str(int(event["event_id"]) + offset)
+            event["event_id"] = event_id
+            event["event_url"] = (
+                f"https://x.com/Timyr316661/status/{event_id}"
+            )
+            events.append(event)
+        self.write_events(events)
+        completed_process = subprocess.CompletedProcess(
+            args=[],
+            returncode=0,
+            stdout="",
+            stderr="",
+        )
+
+        with mock.patch.object(
+            autopilot_bridge.event_dispatch,
+            "DEFAULT_RUNNER",
+            return_value=completed_process,
+        ) as kick:
+            remaining = list(events)
+            for _cycle in range(3):
+                ready = autopilot_bridge.gate(
+                    self.config,
+                    lease_seconds=1800,
+                )
+                self.assertTrue(ready["dispatch"])
+                claimed = autopilot_bridge.claim(
+                    self.config,
+                    lease_seconds=1800,
+                )
+                autopilot_bridge.mark_started(
+                    self.config,
+                    claimed["claim_token"],
+                )
+                claimed_ids = set(claimed["event_ids"])
+                remaining = [
+                    event
+                    for event in remaining
+                    if event["event_id"] not in claimed_ids
+                ]
+                self.write_events(remaining)
+
+                completed = autopilot_bridge.mark_completed(
+                    self.config,
+                    claimed["claim_token"],
+                )
+
+                expected_ids = sorted(
+                    (event["event_id"] for event in remaining),
+                    key=int,
+                )
+                self.assertEqual(completed["status"], "completed")
+                self.assertEqual(completed["pending_count"], len(remaining))
+                self.assertEqual(
+                    completed["next_dispatch"]["status"],
+                    "dispatch_kicked",
+                )
+                self.assertEqual(
+                    completed["next_dispatch"]["event_ids"],
+                    expected_ids,
+                )
+                state = json.loads(
+                    (
+                        self.root / "var" / "event-dispatch.json"
+                    ).read_text(encoding="utf-8")
+                )
+                self.assertEqual(
+                    state["reason"],
+                    autopilot_bridge.event_dispatch.CLAIM_COMPLETED_REASON,
+                )
+                self.assertEqual(state["event_ids"], expected_ids)
+
+        self.assertEqual(kick.call_count, 3)
 
     def test_reconcile_completed_requires_durable_resolution(self) -> None:
         database = self.root / "var" / "watcher.sqlite3"

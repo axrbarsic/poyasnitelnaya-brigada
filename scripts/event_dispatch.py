@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Kick the model-free dispatcher immediately after a new X event."""
+"""Kick the model-free dispatcher when durable X work becomes ready."""
 
 from __future__ import annotations
 
@@ -18,6 +18,9 @@ except ModuleNotFoundError:
 
 DEFAULT_LABEL = "com.axrbarsic.xmention.dispatch"
 LABEL_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]+$")
+NEW_EVENTS_REASON = "new_poll_events"
+CLAIM_COMPLETED_REASON = "claim_completed_with_pending_queue"
+DEFAULT_RUNNER = subprocess.run
 
 
 def _state_path(config_path: Path, config: dict[str, Any]) -> Path:
@@ -32,8 +35,7 @@ def _state_path(config_path: Path, config: dict[str, Any]) -> Path:
     return raw if raw.is_absolute() else (config_path.parent / raw).resolve()
 
 
-def _event_ids(result: dict[str, Any]) -> list[str]:
-    raw_ids = result.get("new_event_ids", [])
+def _normalize_event_ids(raw_ids: Any) -> list[str]:
     if not isinstance(raw_ids, list):
         return []
     return sorted(
@@ -46,21 +48,26 @@ def _event_ids(result: dict[str, Any]) -> list[str]:
     )
 
 
-def trigger_from_poll_result(
-    config_path: Path,
-    result: dict[str, Any],
-    *,
-    live_poll: bool,
-    runner: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
-) -> dict[str, Any]:
-    """Kick launchd once for a live poll that durably queued new events."""
+def _event_ids(result: dict[str, Any]) -> list[str]:
+    return _normalize_event_ids(result.get("new_event_ids", []))
 
-    event_ids = _event_ids(result)
-    if not live_poll or not event_ids:
+
+def trigger_event_ids(
+    config_path: Path,
+    event_ids: list[str],
+    *,
+    reason: str,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> dict[str, Any]:
+    """Record and kick one bounded model-free delivery request."""
+
+    normalized_ids = _normalize_event_ids(event_ids)
+    if not normalized_ids:
         return {
             "status": "not_needed",
             "triggered": False,
-            "event_ids": event_ids,
+            "event_ids": normalized_ids,
+            "reason": reason,
         }
 
     resolved_config = config_path.expanduser().resolve()
@@ -70,7 +77,8 @@ def trigger_from_poll_result(
         return {
             "status": "disabled",
             "triggered": False,
-            "event_ids": event_ids,
+            "event_ids": normalized_ids,
+            "reason": reason,
         }
 
     label = str(
@@ -80,6 +88,21 @@ def trigger_from_poll_result(
         raise ValueError("event dispatch LaunchAgent label is invalid")
 
     requested_at = autopilot_dispatch.isoformat()
+    state_path = _state_path(resolved_config, config)
+    request_payload: dict[str, Any] = {
+        "version": 1,
+        "status": "dispatch_requested",
+        "triggered": False,
+        "reason": reason,
+        "event_ids": normalized_ids,
+        "launchagent_label": label,
+        "requested_at": requested_at,
+        "completed_at": None,
+        "elapsed_ms": 0.0,
+        "returncode": None,
+    }
+    autopilot_dispatch.atomic_write_json(state_path, request_payload)
+
     started = time.monotonic()
     command = [
         "/bin/launchctl",
@@ -90,8 +113,9 @@ def trigger_from_poll_result(
     triggered = False
     error: str | None = None
     returncode: int | None = None
+    run = runner or DEFAULT_RUNNER
     try:
-        completed = runner(
+        completed = run(
             command,
             check=False,
             capture_output=True,
@@ -111,21 +135,56 @@ def trigger_from_poll_result(
     except (OSError, subprocess.SubprocessError) as caught:
         error = f"{type(caught).__name__}: {caught}"[-500:]
 
-    payload: dict[str, Any] = {
-        "version": 1,
+    payload = {
+        **request_payload,
         "status": status,
         "triggered": triggered,
-        "event_ids": event_ids,
-        "launchagent_label": label,
-        "requested_at": requested_at,
         "completed_at": autopilot_dispatch.isoformat(),
         "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
         "returncode": returncode,
     }
     if error:
         payload["error"] = error
-    autopilot_dispatch.atomic_write_json(
-        _state_path(resolved_config, config),
-        payload,
-    )
+    autopilot_dispatch.atomic_write_json(state_path, payload)
     return payload
+
+
+def trigger_pending_events(
+    config_path: Path,
+    event_ids: list[str],
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> dict[str, Any]:
+    """Kick the next delivery after a claim leaves pending queue work."""
+
+    return trigger_event_ids(
+        config_path,
+        event_ids,
+        reason=CLAIM_COMPLETED_REASON,
+        runner=runner,
+    )
+
+
+def trigger_from_poll_result(
+    config_path: Path,
+    result: dict[str, Any],
+    *,
+    live_poll: bool,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> dict[str, Any]:
+    """Kick launchd once for a live poll that durably queued new events."""
+
+    event_ids = _event_ids(result)
+    if not live_poll or not event_ids:
+        return {
+            "status": "not_needed",
+            "triggered": False,
+            "event_ids": event_ids,
+        }
+
+    return trigger_event_ids(
+        config_path,
+        event_ids,
+        reason=NEW_EVENTS_REASON,
+        runner=runner,
+    )

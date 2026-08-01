@@ -409,6 +409,106 @@ class AutopilotSupervisorTests(unittest.TestCase):
         self.assertTrue(result["dispatch"])
         self.assertFalse(result["repair_pending"])
 
+    def test_three_ready_gates_then_doctor_wakes_do_not_livelock(
+        self,
+    ) -> None:
+        events = [
+            {
+                "id": "oldest",
+                "first_seen_at": "2026-07-27T17:50:00Z",
+            }
+        ]
+        dispatch_state = {"status": "leased_waiting", "work_kind": "x"}
+
+        for offset in (0, 60, 120):
+            observed_at = self.now + timedelta(seconds=offset)
+            event_dispatch_state = {
+                "status": "dispatch_kicked",
+                "reason": "claim_completed_with_pending_queue",
+                "requested_at": observed_at.isoformat(),
+                "event_ids": ["oldest"],
+            }
+            relay = system_doctor.relay_progress_check(
+                pending_count=1,
+                dispatch_state=dispatch_state,
+                event_dispatch_state=event_dispatch_state,
+                required_event_id="oldest",
+                owner=None,
+                max_wait_seconds=180,
+                now=observed_at,
+            )
+            latency = system_doctor.queue_latency_check(
+                events=events,
+                owner=None,
+                dispatch_state=dispatch_state,
+                event_dispatch_state=event_dispatch_state,
+                delivery_grace_seconds=180,
+                max_age_seconds=300,
+                now=observed_at,
+            )
+            result = autopilot_supervisor.run_once(
+                self.config,
+                self.contract,
+                now=observed_at,
+                checks=[relay, latency],
+            )
+
+            self.assertEqual(relay.status, "pass")
+            self.assertEqual(latency.status, "warn")
+            self.assertEqual(
+                latency.details["delivery_source"],
+                "event_dispatch",
+            )
+            self.assertTrue(result["healthy"])
+            self.assertFalse(
+                autopilot_supervisor.gate(
+                    self.config,
+                    now=observed_at,
+                )["dispatch"]
+            )
+
+        last_requested_at = self.now + timedelta(seconds=120)
+        expired_at = last_requested_at + timedelta(seconds=181)
+        expired_event_dispatch = {
+            "status": "dispatch_kicked",
+            "reason": "claim_completed_with_pending_queue",
+            "requested_at": last_requested_at.isoformat(),
+            "event_ids": ["oldest"],
+        }
+        expired_relay = system_doctor.relay_progress_check(
+            pending_count=1,
+            dispatch_state=dispatch_state,
+            event_dispatch_state=expired_event_dispatch,
+            required_event_id="oldest",
+            owner=None,
+            max_wait_seconds=180,
+            now=expired_at,
+        )
+        expired = system_doctor.queue_latency_check(
+            events=events,
+            owner=None,
+            dispatch_state=dispatch_state,
+            event_dispatch_state=expired_event_dispatch,
+            delivery_grace_seconds=180,
+            max_age_seconds=300,
+            now=expired_at,
+        )
+        result = autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=expired_at,
+            checks=[expired_relay, expired],
+        )
+
+        self.assertEqual(expired_relay.status, "fail")
+        self.assertEqual(expired.status, "fail")
+        self.assertFalse(expired.details["active_x_delivery"])
+        self.assertFalse(result["healthy"])
+        self.assertEqual(
+            result["failures"],
+            ["runtime.relay_progress", "runtime.queue_latency"],
+        )
+
     def test_mixed_queue_and_database_failure_keeps_repair_priority(
         self,
     ) -> None:

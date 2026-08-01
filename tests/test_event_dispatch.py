@@ -71,6 +71,52 @@ class EventDispatchTests(unittest.TestCase):
                 state["event_ids"],
                 ["2082313815820005869"],
             )
+            self.assertEqual(
+                state["reason"],
+                event_dispatch.NEW_EVENTS_REASON,
+            )
+
+    def test_completion_request_is_durable_before_kick(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = self.make_config(root)
+            observed_request: dict = {}
+
+            def runner(*_args: object, **_kwargs: object) -> object:
+                observed_request.update(
+                    json.loads(
+                        (
+                            root / "var" / "event-dispatch.json"
+                        ).read_text(encoding="utf-8")
+                    )
+                )
+                return subprocess.CompletedProcess(
+                    args=[],
+                    returncode=0,
+                    stdout="",
+                    stderr="",
+                )
+
+            result = event_dispatch.trigger_pending_events(
+                config,
+                ["2082313815820005870", "2082313815820005869"],
+                runner=runner,
+            )
+
+            self.assertEqual(
+                observed_request["status"],
+                "dispatch_requested",
+            )
+            self.assertEqual(
+                observed_request["reason"],
+                event_dispatch.CLAIM_COMPLETED_REASON,
+            )
+            self.assertEqual(
+                observed_request["event_ids"],
+                ["2082313815820005869", "2082313815820005870"],
+            )
+            self.assertEqual(result["status"], "dispatch_kicked")
+            self.assertTrue(result["triggered"])
 
     def test_empty_or_fixture_poll_does_not_kick(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

@@ -377,6 +377,54 @@ class SystemDoctorTests(unittest.TestCase):
         self.assertEqual(check.status, "fail")
         self.assertEqual(check.identifier, "runtime.relay_progress")
 
+    def test_relay_progress_accepts_fresh_completion_dispatch(self) -> None:
+        check = system_doctor.relay_progress_check(
+            pending_count=3,
+            dispatch_state={
+                "status": "leased_waiting",
+                "checked_at": "2026-07-29T15:00:00Z",
+            },
+            event_dispatch_state={
+                "status": "dispatch_kicked",
+                "reason": "claim_completed_with_pending_queue",
+                "requested_at": "2026-07-29T14:59:59Z",
+                "event_ids": ["123", "124", "125"],
+            },
+            required_event_id="123",
+            owner=None,
+            max_wait_seconds=180,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "pass")
+        self.assertEqual(
+            check.details["event_dispatch_status"],
+            "dispatch_kicked",
+        )
+        self.assertTrue(check.details["event_dispatch_covers_oldest"])
+
+    def test_relay_progress_rejects_expired_completion_dispatch(self) -> None:
+        check = system_doctor.relay_progress_check(
+            pending_count=1,
+            dispatch_state={"status": "leased_waiting"},
+            event_dispatch_state={
+                "status": "dispatch_kicked",
+                "reason": "claim_completed_with_pending_queue",
+                "requested_at": "2026-07-29T14:56:59Z",
+                "event_ids": ["123"],
+            },
+            required_event_id="123",
+            owner=None,
+            max_wait_seconds=180,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "fail")
+        self.assertEqual(
+            check.details["event_dispatch_age_seconds"],
+            181.0,
+        )
+
     def test_queue_latency_detects_unowned_stale_event(self) -> None:
         check = system_doctor.queue_latency_check(
             events=[
@@ -509,6 +557,235 @@ class SystemDoctorTests(unittest.TestCase):
 
         self.assertEqual(check.status, "fail")
         self.assertFalse(check.details["active_repair"])
+
+    def test_queue_latency_warns_during_fresh_x_delivery_grace(self) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[
+                {
+                    "id": "123",
+                    "first_seen_at": "2026-07-29T14:50:00Z",
+                }
+            ],
+            owner=None,
+            dispatch_state={
+                "status": "desktop_ready_waiting_relay",
+                "work_kind": "x",
+                "waiting_since": "2026-07-29T14:59:00Z",
+                "event_ids": ["123"],
+            },
+            delivery_grace_seconds=180,
+            max_age_seconds=300,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "warn")
+        self.assertTrue(check.details["active_x_delivery"])
+        self.assertTrue(check.details["delivery_covers_oldest"])
+        self.assertEqual(check.details["delivery_age_seconds"], 60.0)
+
+    def test_queue_latency_fails_after_x_delivery_grace_expires(self) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[
+                {
+                    "id": "123",
+                    "first_seen_at": "2026-07-29T14:50:00Z",
+                }
+            ],
+            owner=None,
+            dispatch_state={
+                "status": "desktop_ready_waiting_relay",
+                "work_kind": "x",
+                "waiting_since": "2026-07-29T14:56:59Z",
+                "checked_at": "2026-07-29T15:00:00Z",
+                "event_ids": ["123"],
+            },
+            delivery_grace_seconds=180,
+            max_age_seconds=300,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "fail")
+        self.assertFalse(check.details["active_x_delivery"])
+        self.assertEqual(check.details["delivery_age_seconds"], 181.0)
+
+    def test_queue_latency_warns_for_fresh_completion_dispatch(self) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[
+                {
+                    "id": "123",
+                    "first_seen_at": "2026-07-29T14:50:00Z",
+                }
+            ],
+            owner=None,
+            dispatch_state={
+                "status": "leased_waiting",
+                "work_kind": "x",
+                "event_ids": ["122"],
+            },
+            event_dispatch_state={
+                "status": "dispatch_requested",
+                "reason": "claim_completed_with_pending_queue",
+                "requested_at": "2026-07-29T14:59:59Z",
+                "event_ids": ["123"],
+            },
+            delivery_grace_seconds=180,
+            max_age_seconds=300,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "warn")
+        self.assertTrue(check.details["active_x_delivery"])
+        self.assertEqual(check.details["delivery_source"], "event_dispatch")
+        self.assertTrue(check.details["event_dispatch_covers_oldest"])
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_contract_passes_fresh_x_delivery_to_queue_latency(
+        self,
+        _git_origin: mock.Mock,
+    ) -> None:
+        current = datetime.now(timezone.utc)
+        (self.root / "var" / "wake-request.json").write_text(
+            json.dumps(
+                {
+                    "pending_count": 1,
+                    "events": [
+                        {
+                            "id": "123",
+                            "first_seen_at": (
+                                current - timedelta(seconds=301)
+                            ).isoformat().replace("+00:00", "Z"),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "var" / "dispatch.json").write_text(
+            json.dumps(
+                {
+                    "status": "desktop_ready_waiting_relay",
+                    "work_kind": "x",
+                    "waiting_since": current.isoformat(),
+                    "checked_at": current.isoformat(),
+                    "event_ids": ["123"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "var" / "autopilot.json").write_text(
+            json.dumps({"owner": None}),
+            encoding="utf-8",
+        )
+        self.contract["runtime"].update(
+            {
+                "dispatch_state_file": "var/dispatch.json",
+                "autopilot_state_file": "var/autopilot.json",
+                "max_dispatch_age_seconds": 180,
+                "max_relay_wait_seconds": 180,
+                "max_queue_age_seconds": 300,
+            }
+        )
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        latency = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.queue_latency"
+        )
+        self.assertEqual(latency.status, "warn")
+        self.assertTrue(latency.details["active_x_delivery"])
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_contract_reads_fresh_completion_dispatch_state(
+        self,
+        _git_origin: mock.Mock,
+    ) -> None:
+        current = datetime.now(timezone.utc)
+        (self.root / "var" / "wake-request.json").write_text(
+            json.dumps(
+                {
+                    "pending_count": 1,
+                    "events": [
+                        {
+                            "id": "123",
+                            "first_seen_at": (
+                                current - timedelta(seconds=301)
+                            ).isoformat().replace("+00:00", "Z"),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "var" / "dispatch.json").write_text(
+            json.dumps(
+                {
+                    "status": "leased_waiting",
+                    "work_kind": "x",
+                    "checked_at": current.isoformat(),
+                    "event_ids": ["122"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "var" / "event-dispatch.json").write_text(
+            json.dumps(
+                {
+                    "status": "dispatch_kicked",
+                    "reason": "claim_completed_with_pending_queue",
+                    "requested_at": current.isoformat(),
+                    "event_ids": ["123"],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "var" / "autopilot.json").write_text(
+            json.dumps({"owner": None}),
+            encoding="utf-8",
+        )
+        self.contract["runtime"].update(
+            {
+                "dispatch_state_file": "var/dispatch.json",
+                "event_dispatch_state_file": "var/event-dispatch.json",
+                "autopilot_state_file": "var/autopilot.json",
+                "max_dispatch_age_seconds": 180,
+                "max_relay_wait_seconds": 180,
+                "max_queue_age_seconds": 300,
+            }
+        )
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        relay = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.relay_progress"
+        )
+        latency = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.queue_latency"
+        )
+        self.assertEqual(relay.status, "pass")
+        self.assertEqual(latency.status, "warn")
+        self.assertEqual(latency.details["delivery_source"], "event_dispatch")
 
     @mock.patch(
         "scripts.system_doctor.git_origin",

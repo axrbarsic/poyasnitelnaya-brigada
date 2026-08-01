@@ -48,6 +48,15 @@ ACTIVE_REPAIR_STATUSES = {
     "claimed",
     "work_in_progress",
 }
+ACTIVE_X_DELIVERY_STATUSES = {
+    "desktop_launched_waiting_relay",
+    "desktop_ready_waiting_relay",
+}
+ACTIVE_EVENT_DISPATCH_STATUSES = {
+    "dispatch_requested",
+    "dispatch_kicked",
+}
+CLAIM_COMPLETED_DISPATCH_REASON = "claim_completed_with_pending_queue"
 
 
 @dataclass(frozen=True)
@@ -133,6 +142,70 @@ def parse_timestamp(value: Any) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
+
+
+def completion_dispatch_progress(
+    state: Any,
+    *,
+    current: datetime,
+    grace_seconds: int,
+    required_event_id: str | None,
+) -> dict[str, Any]:
+    """Classify one durable post-completion delivery request."""
+
+    delivery = state if isinstance(state, dict) else {}
+    status = str(delivery.get("status", ""))
+    reason = str(delivery.get("reason", ""))
+    raw_event_ids = delivery.get("event_ids")
+    event_ids = (
+        {
+            str(event_id)
+            for event_id in raw_event_ids
+            if str(event_id)
+        }
+        if isinstance(raw_event_ids, list)
+        else set()
+    )
+    requested_at = parse_timestamp(delivery.get("requested_at"))
+    age_seconds = (
+        (current - requested_at).total_seconds()
+        if requested_at is not None
+        else None
+    )
+    covers_required = (
+        required_event_id is None or required_event_id in event_ids
+    )
+    active = (
+        grace_seconds > 0
+        and status in ACTIVE_EVENT_DISPATCH_STATUSES
+        and reason == CLAIM_COMPLETED_DISPATCH_REASON
+        and bool(event_ids)
+        and covers_required
+        and age_seconds is not None
+        and 0 <= age_seconds <= grace_seconds
+    )
+    return {
+        "active": active,
+        "status": status,
+        "reason": reason,
+        "event_ids": sorted(event_ids),
+        "covers_required": covers_required,
+        "age_seconds": age_seconds,
+    }
+
+
+def oldest_queue_event_id(events: list[Any]) -> str | None:
+    observed: list[tuple[str, datetime]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        event_id = str(event.get("id") or event.get("event_id") or "")
+        first_seen = parse_timestamp(event.get("first_seen_at"))
+        if event_id and first_seen is not None:
+            observed.append((event_id, first_seen))
+    if not observed:
+        return None
+    return min(observed, key=lambda item: item[1])[0]
 
 
 def latest_poll_context(database: Path) -> dict[str, Any]:
@@ -231,6 +304,8 @@ def relay_progress_check(
     pending_count: int,
     dispatch_state: dict[str, Any],
     owner: Any,
+    event_dispatch_state: Any = None,
+    required_event_id: str | None = None,
     max_wait_seconds: int,
     now: datetime | None = None,
 ) -> Check:
@@ -279,10 +354,6 @@ def relay_progress_check(
             "Проверь supervisor lease и runtime.queue_latency.",
             details,
         )
-    waiting_statuses = {
-        "desktop_launched_waiting_relay",
-        "desktop_ready_waiting_relay",
-    }
     if dispatch_status == "deferred_resources":
         return Check(
             "runtime.relay_progress",
@@ -291,7 +362,36 @@ def relay_progress_check(
             "Проверь возраст очереди и освободи только безопасные ресурсы.",
             details,
         )
-    if dispatch_status not in waiting_statuses:
+    completion_delivery = completion_dispatch_progress(
+        event_dispatch_state,
+        current=current,
+        grace_seconds=max_wait_seconds,
+        required_event_id=required_event_id,
+    )
+    if completion_delivery["status"]:
+        details.update(
+            {
+                "event_dispatch_status": completion_delivery["status"],
+                "event_dispatch_reason": completion_delivery["reason"],
+                "event_dispatch_covers_oldest": completion_delivery[
+                    "covers_required"
+                ],
+                "event_dispatch_age_seconds": (
+                    round(completion_delivery["age_seconds"], 1)
+                    if completion_delivery["age_seconds"] is not None
+                    else None
+                ),
+            }
+        )
+    if completion_delivery["active"]:
+        return Check(
+            "runtime.relay_progress",
+            "pass",
+            "Следующая X-доставка уже запрошена после завершения claim.",
+            "Дождись relay в пределах grace; затем снова проверь очередь.",
+            details,
+        )
+    if dispatch_status not in ACTIVE_X_DELIVERY_STATUSES:
         return Check(
             "runtime.relay_progress",
             "fail",
@@ -341,13 +441,18 @@ def queue_latency_check(
     events: list[Any],
     owner: Any,
     supervisor_state: Any = None,
+    dispatch_state: Any = None,
+    event_dispatch_state: Any = None,
+    delivery_grace_seconds: int = 0,
     max_age_seconds: int,
     now: datetime | None = None,
 ) -> Check:
-    """Measure queue age independently from dispatcher heartbeat state."""
+    """Measure queue age with one bounded grace for a scheduled X delivery."""
 
     if max_age_seconds <= 0:
         raise ValueError("queue latency max age must be positive")
+    if delivery_grace_seconds < 0:
+        raise ValueError("X delivery grace must not be negative")
     if not events:
         return Check(
             "runtime.queue_latency",
@@ -430,12 +535,48 @@ def queue_latency_check(
         and supervisor_lease_expires is not None
         and supervisor_lease_expires >= current
     )
+    delivery = dispatch_state if isinstance(dispatch_state, dict) else {}
+    delivery_status = str(delivery.get("status", ""))
+    delivery_work_kind = str(delivery.get("work_kind", ""))
+    raw_delivery_event_ids = delivery.get("event_ids")
+    delivery_event_ids = (
+        {
+            str(event_id)
+            for event_id in raw_delivery_event_ids
+            if str(event_id)
+        }
+        if isinstance(raw_delivery_event_ids, list)
+        else set()
+    )
+    delivery_waiting_since = parse_timestamp(delivery.get("waiting_since"))
+    delivery_age_seconds = (
+        (current - delivery_waiting_since).total_seconds()
+        if delivery_waiting_since is not None
+        else None
+    )
+    active_x_delivery = (
+        delivery_grace_seconds > 0
+        and delivery_status in ACTIVE_X_DELIVERY_STATUSES
+        and delivery_work_kind == "x"
+        and oldest_event_id in delivery_event_ids
+        and delivery_age_seconds is not None
+        and 0 <= delivery_age_seconds <= delivery_grace_seconds
+    )
+    completion_delivery = completion_dispatch_progress(
+        event_dispatch_state,
+        current=current,
+        grace_seconds=delivery_grace_seconds,
+        required_event_id=oldest_event_id,
+    )
+    active_x_delivery = (
+        active_x_delivery or completion_delivery["active"]
+    )
     healthy = 0 <= age_seconds <= max_age_seconds
     status = (
         "pass"
         if healthy
         else "warn"
-        if active_owner or active_repair
+        if active_owner or active_repair or active_x_delivery
         else "fail"
     )
     details = {
@@ -448,9 +589,41 @@ def queue_latency_check(
         ),
         "active_owner": active_owner,
         "active_repair": active_repair,
+        "active_x_delivery": active_x_delivery,
         "owned": owned,
         "pending_count": len(events),
     }
+    if delivery_status:
+        details["delivery_status"] = delivery_status
+        details["delivery_work_kind"] = delivery_work_kind
+        details["delivery_covers_oldest"] = (
+            oldest_event_id in delivery_event_ids
+        )
+        details["delivery_grace_seconds"] = delivery_grace_seconds
+        details["delivery_age_seconds"] = (
+            round(delivery_age_seconds, 1)
+            if delivery_age_seconds is not None
+            else None
+        )
+    if completion_delivery["status"]:
+        details.update(
+            {
+                "event_dispatch_status": completion_delivery["status"],
+                "event_dispatch_reason": completion_delivery["reason"],
+                "event_dispatch_covers_oldest": completion_delivery[
+                    "covers_required"
+                ],
+                "event_dispatch_age_seconds": (
+                    round(completion_delivery["age_seconds"], 1)
+                    if completion_delivery["age_seconds"] is not None
+                    else None
+                ),
+            }
+        )
+    if completion_delivery["active"]:
+        details["delivery_source"] = "event_dispatch"
+    elif active_x_delivery:
+        details["delivery_source"] = "app_server_dispatch"
     if healthy:
         summary = f"Старейшее событие ожидает {round(age_seconds, 1)}s."
         repair = "Проверь relay progress при росте возраста."
@@ -476,6 +649,15 @@ def queue_latency_check(
         )
         repair = (
             "Заверши repair handoff, затем проверь следующий X claim."
+        )
+    elif active_x_delivery:
+        summary = (
+            "Старейшее ожидающее событие превысило SLO, но свежая "
+            "X-доставка уже ожидает owner claim."
+        )
+        repair = (
+            "Дождись owner claim в пределах relay grace; после grace "
+            "зависшая очередь снова станет FAIL."
         )
     else:
         summary = "Старейшее событие превысило SLO без активного owner."
@@ -1038,6 +1220,20 @@ def check_contract(
             )
         )
 
+    event_dispatch_state: dict[str, Any] = {}
+    event_dispatch_value = str(
+        runtime.get("event_dispatch_state_file", "")
+    ).strip()
+    if event_dispatch_value:
+        event_dispatch_path = resolve_project_path(
+            root,
+            event_dispatch_value,
+        )
+        try:
+            event_dispatch_state = read_json(event_dispatch_path)
+        except (OSError, ValueError, TypeError, AttributeError):
+            event_dispatch_state = {}
+
     owner: Any = None
     owner_state_value = str(
         runtime.get("autopilot_state_file", "")
@@ -1088,6 +1284,12 @@ def check_contract(
                 pending_count=pending,
                 dispatch_state=dispatch_state,
                 owner=owner,
+                event_dispatch_state=event_dispatch_state,
+                required_event_id=(
+                    oldest_queue_event_id(events)
+                    if isinstance(events, list)
+                    else None
+                ),
                 max_wait_seconds=max_relay_wait,
             )
         )
@@ -1112,6 +1314,9 @@ def check_contract(
                 events=events,
                 owner=owner,
                 supervisor_state=supervisor_state,
+                dispatch_state=dispatch_state,
+                event_dispatch_state=event_dispatch_state,
+                delivery_grace_seconds=max_relay_wait,
                 max_age_seconds=max_queue_age,
             )
         )
