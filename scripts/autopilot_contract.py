@@ -24,6 +24,22 @@ Sol Max. Используй skills x-twitter-operator и
 {DEFAULT_LOCAL_EXPLAINER_SKILL}, а также
 встроенный Browser.
 
+Поле MAX_PARALLEL_X_READ_TABS ниже задаёт предел task-owned X-вкладок для
+одного claim. При нескольких независимых событиях разрешено параллельно
+открыть их точные ветки, прочитать контекст, media и собрать target-local
+источники. Каждая вкладка навсегда привязана к одному event ID до её закрытия.
+Composer, нажатие Reply, официальная проверка, history import и resolve всегда
+остаются одной последовательной полосой. Никогда не держи заполненный composer
+сразу в двух вкладках и никогда не выполняй две публикации одновременно.
+
+Сначала сделай минимальную live-классификацию claimed events. Затем закрывай их
+по одному полной транзакцией, сначала already-answered и short, затем local-max;
+внутри одного класса бери старейший first_seen_at. После каждой публикации или
+доказанного already-answered немедленно сохрани history и durable resolve.
+Не готовь весь пакет целиком перед первой публикацией. Если Browser замедлился,
+потерял вкладку или выросло давление памяти, закрой лишние task-owned вкладки и
+продолжай с одной, не освобождая unresolved event.
+
 Для каждого события открой точный URL, восстанови полную ветку и историю,
 проверь media и позицию автора, выполни актуальный фактчек первичными
 источниками и двойную проверку дубля. Выбери short, local-max,
@@ -176,6 +192,13 @@ def build_prompt(
     browser_owner_cwd: Path,
 ) -> str:
     config = autopilot_dispatch.read_json(config_path)
+    max_parallel_read_tabs = int(
+        config.get("autopilot_max_parallel_read_tabs", 3)
+    )
+    if not 1 <= max_parallel_read_tabs <= 3:
+        raise ValueError(
+            "autopilot_max_parallel_read_tabs must be between 1 and 3"
+        )
     policy_value = str(config.get("personality_policy_file", "")).strip()
     policy_path = (
         resolve_path(config_path, policy_value)
@@ -212,6 +235,8 @@ def build_prompt(
         f"{WAKE_CONTRACT}\n\n"
         f"WATCHER_CONFIG={config_path.resolve()}\n"
         f"BROWSER_OWNER_WORKSPACE={browser_owner_cwd.resolve()}\n"
+        f"CLAIMED_EVENT_COUNT={len(events)}\n"
+        f"MAX_PARALLEL_X_READ_TABS={min(len(events), max_parallel_read_tabs)}\n"
         f"PERSONALITY_POLICY_JSON:\n{personality_payload}\n"
         f"EVENTS_JSON:\n{payload}\n"
     )

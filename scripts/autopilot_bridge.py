@@ -180,6 +180,19 @@ def handoff_reservation_path(config_path: Path) -> Path:
     )
 
 
+def max_claim_events(config_path: Path) -> int:
+    config = autopilot_dispatch.read_json(config_path)
+    value = int(
+        config.get(
+            "autopilot_max_claim_events",
+            autopilot_dispatch.DEFAULT_MAX_CLAIM_EVENTS,
+        )
+    )
+    if value <= 0:
+        raise ValueError("autopilot_max_claim_events must be positive")
+    return value
+
+
 def reserve_handoff(
     config_path: Path,
     *,
@@ -390,6 +403,7 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         wake_file,
         state_file,
         lease_seconds=lease_seconds,
+        max_events=max_claim_events(config_path),
         runtime_id=resource_guard.codex_runtime_id(),
     )
     if not result["dispatch"]:
@@ -533,13 +547,19 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
 def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
     autopilot_contract.load_workspace(config_path)
     wake_file, state_file = autopilot_dispatch.load_paths(config_path)
+    pending_events = autopilot_dispatch.load_wake_events(wake_file)
+    pending_event_ids = [str(event["id"]) for event in pending_events]
+    selected_events = autopilot_dispatch.select_claim_events(
+        pending_events,
+        max_events=max_claim_events(config_path),
+    )
+    selected_event_ids = [str(event["id"]) for event in selected_events]
     queue = autopilot_dispatch.status(
         wake_file,
         state_file,
         lease_seconds=lease_seconds,
     )
-    event_ids = [str(value) for value in queue["pending_ids"]]
-    if not event_ids:
+    if not pending_event_ids:
         return {
             "status": "idle",
             "dispatch": False,
@@ -551,8 +571,8 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         return {
             "status": "leased_waiting",
             "dispatch": False,
-            "pending_count": len(event_ids),
-            "event_ids": event_ids,
+            "pending_count": len(pending_event_ids),
+            "event_ids": pending_event_ids,
             "owner_busy": queue["owner_busy"],
             "leased_count": queue["leased_count"],
             "resource_guard": guard,
@@ -561,15 +581,17 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         return {
             "status": "resource_deferred",
             "dispatch": False,
-            "pending_count": len(event_ids),
-            "event_ids": event_ids,
+            "pending_count": len(pending_event_ids),
+            "event_ids": pending_event_ids,
             "resource_guard": guard,
         }
     return {
         "status": "ready",
         "dispatch": True,
-        "pending_count": len(event_ids),
-        "event_ids": event_ids,
+        "pending_count": len(pending_event_ids),
+        "event_ids": selected_event_ids,
+        "queued_event_ids": pending_event_ids,
+        "claim_limit": max_claim_events(config_path),
         "resource_guard": guard,
     }
 

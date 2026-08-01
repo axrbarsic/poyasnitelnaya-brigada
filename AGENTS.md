@@ -20,15 +20,23 @@
 - Keep the Browser owner on `gpt-5.6-sol` with reasoning effort `max`.
 - Only the Browser owner may operate authenticated tabs, classify a live
   target, author a short reply, validate the composer, or publish.
-- Idle runs own zero Browser tabs. Short and local Sol Max replies use one X
-  tab. The local Sol Max route owns zero ChatGPT tabs. The explicit `377`
-  visual route uses the local `377` skill and image generation, not ChatGPT.
-  Open ChatGPT only for an explicitly authorized `Ложкин` visual-bot route,
-  never for «Пояснительная бригада».
+- Idle runs own zero Browser tabs. One Browser owner may use up to three
+  task-owned X tabs for independent read-only inspection and target-local
+  preparation. Composer, publication, verification, durable import and resolve
+  remain one ordered writer lane, with at most one filled composer. Fall back
+  to one X tab on Browser instability or memory pressure. The local Sol Max
+  route owns zero ChatGPT tabs. The explicit `377` visual route uses the local
+  `377` skill and image generation, not ChatGPT. Open ChatGPT only for an
+  explicitly authorized `Ложкин` visual-bot route, never for «Пояснительная
+  бригада».
 - Close every task-owned Browser tab before the scheduled run ends. Never close
   a user-owned tab.
 - One global owner lease covers the whole queue. A new event must wait while
   any prior owner is active, even if the new event has never been leased.
+- Claim at most three oldest pending events. Classify the bounded claim, then
+  finish and durably resolve one event at a time. Process already-answered and
+  short events before local-max events, with oldest-first order inside one
+  class. Never prepare the whole claim before the first publication.
 - If the resource guard defers a run, leave every event unresolved and close
   the scheduled task without Browser work.
 - Use deterministic scripts for queue state, exact IDs, duplicate checks,

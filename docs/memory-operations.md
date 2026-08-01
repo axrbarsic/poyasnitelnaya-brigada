@@ -23,8 +23,10 @@ Codex automation is therefore retired.
    sends exactly one message to the pinned Sol Max owner.
 5. An adjacent heartbeat cannot hand off the same queue again.
 6. The Browser owner claims atomically and remains the sole owner.
-7. Short work uses one X tab.
-8. Local-max work uses one X tab and the local explainer skill, with no ChatGPT tab.
+7. A bounded claim uses at most three task-owned X tabs for independent
+   read-only inspection.
+8. Short and local-max share one ordered composer and publication lane. The
+   local explainer opens no ChatGPT tab.
 9. Every task-owned tab closes on a terminal outcome.
 10. The dispatcher verifies that every original event ID left the queue.
 11. A released unresolved claim is failure, not success.

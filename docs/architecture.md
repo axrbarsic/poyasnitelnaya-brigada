@@ -208,6 +208,11 @@ contradiction claim, or factual conclusion.
   Queue snapshots and watcher replacements share a separate wake-file lock.
   A live lease prevents duplicate Browser-owner runs. Failure before durable
   resolution removes the claim token for an immediate retry.
+- Each owner claim selects at most three oldest pending events. One Browser
+  owner may inspect those independent targets in up to three task-owned X tabs,
+  but composer, publication, verification, history import and resolve remain a
+  single ordered writer lane. Each event reaches a durable terminal result
+  before the next publication starts.
 - Resolved events disappear from the wake file and are pruned from dispatcher
   state. An unresolved event becomes eligible again after the lease expires,
   so a crashed Browser-owner turn cannot strand the queue forever.
@@ -227,6 +232,9 @@ contradiction claim, or factual conclusion.
   freshness. An unowned oldest event over the versioned SLO is a failure. The
   same event inside an active owner claim is a warning that requires lease and
   durable-completion inspection.
+- An owned queue-latency warning is not completion. The bounded oldest-first
+  claim and per-event commit rule prevent one long preparation phase from
+  hiding every short reply in the same batch.
 - The relay uses an atomic reservation and the global owner claim around direct
   delivery. Mobile Remote, local Desktop, and automated Browser work are
   serialized on the same durable thread. The direct follow-up is queued or

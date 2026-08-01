@@ -213,8 +213,10 @@ count as a stalled relay.
 ## Memory and quality contracts
 
 - Idle: zero model tokens, zero Browser tabs, zero new tasks.
-- Short: one X tab.
-- Local-max: one X tab, the local skill, and zero ChatGPT tabs.
+- A bounded inbound claim: at most three oldest events and up to three
+  task-owned X tabs for independent read-only inspection.
+- Short and local-max: one ordered composer/publication lane, immediate durable
+  resolution after each event, and zero ChatGPT tabs for local-max.
 - Only Sol makes publication decisions. The local-max route always requires
   reasoning effort `max`.
 - Luna never analyzes X content or drafts responses.

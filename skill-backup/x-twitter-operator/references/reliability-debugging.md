@@ -28,15 +28,24 @@ Check each layer in order:
 7. Luna called `send_message_to_thread` directly and the pinned Sol owner
    received the follow-up.
 8. The pinned owner claimed the event exactly once.
-9. Browser preflight used `@axrbarsic` and opened the exact live thread.
-10. The response route, duplicate checks and fact check completed.
-11. X contains one verified direct Alex child.
-12. Exact user and Alex turns exist in `conversation_turns`.
-13. `event_resolutions` contains the verified reply URL.
-14. The event is absent from the wake queue and no lease remains active.
+9. The claim contains at most three oldest pending events and does not hide a
+   short reply behind preparation of the whole batch.
+10. Browser preflight used `@axrbarsic` and opened the exact live thread.
+11. The response route, duplicate checks and fact check completed.
+12. X contains one verified direct Alex child.
+13. Exact user and Alex turns exist in `conversation_turns`.
+14. `event_resolutions` contains the verified reply URL.
+15. The event is absent from the wake queue and no lease remains active.
 
 Classify the first failing layer as the weak link. Do not infer that the API
 missed an event merely because the final queue is empty.
+
+An event is operationally missed when it is detected but exceeds the expected
+response time without a verified direct reply. Measure both
+`first_seen_at -> claimed_at` and `claimed_at -> verified publication`. A live
+lease proves ownership, not completion. For a convoy failure, keep one writer,
+bound a claim to three oldest events, allow up to three independent read-only X
+tabs, and commit each event end-to-end before preparing the next publication.
 
 If the gate is ready but the owner never wakes, inspect the Luna trace. A
 `send_message_to_thread` call made inside `functions.exec`, JavaScript,

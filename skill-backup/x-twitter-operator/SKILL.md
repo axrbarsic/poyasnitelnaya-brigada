@@ -69,7 +69,10 @@ If the read-only test fails, do not begin research that assumes later publicatio
 
 Use the smallest stable tab set:
 
-- One primary X tab.
+- One Browser owner may hold up to three task-owned X tabs for independent
+  read-only target inspection. Bind every tab to one immutable event ID.
+- Keep exactly one writer lane. Never fill composers in two tabs at once, and
+  never overlap publication, verification, history import, or resolve.
 - Optional research tabs only when a connector or direct web lookup cannot cover the source.
 
 Reuse tabs instead of opening duplicates. Do not close or navigate a tab owned by another session. When a tab binding becomes stale, discard only that binding and reacquire the tab from the existing browser. Do not reinitialize the browser for an ordinary stale-tab error.
@@ -97,9 +100,11 @@ performance automatically. The profile controls whether Browser work may
 start, never the required quality of Sol reasoning or fact checking:
 
 - idle dispatcher checks own zero Browser tabs and use no model;
-- short work owns one X tab;
-- Local Sol Max work owns one X tab and generates locally through
-  `poyasnitelnaya-brigada-v2` in the Sol Max owner turn;
+- a bounded claim contains at most three oldest pending events;
+- short and Local Sol Max work may inspect up to three independent X targets
+  in parallel, then publishes and resolves them one at a time;
+- Local Sol Max work generates locally through `poyasnitelnaya-brigada-v2` in
+  the Sol Max owner turn;
 - `initial-audit-next --conversations 1`, never routine `status --full`;
 - no helper session for waiting, polling, or mechanical age filtering;
 - close old backlog with one
@@ -387,7 +392,11 @@ without supplying target IDs.
 - In normal unattended idle, supervisor-owned Desktop is closed and Luna does
   not run. If Alex intentionally keeps Desktop open, the heartbeat still
   performs its small scheduled gate, but it never wakes Sol for an empty queue.
-- Keep zero Browser tabs while idle and one X tab for short or local Sol Max work.
+- Keep zero Browser tabs while idle and at most three task-owned X tabs during
+  a bounded claim. Fall back to one tab on Browser instability or memory
+  pressure. Classify the bounded claim, then finish each event end-to-end
+  before the next publication. Process already-answered and short events before
+  local-max events, oldest-first inside one class.
 - Close all task-owned tabs and finish normally. The model-free session
   janitor archives the task after its minimum age. `notLoaded` alone is not
   proof that a live owner died.

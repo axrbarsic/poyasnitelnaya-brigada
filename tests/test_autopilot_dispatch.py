@@ -92,6 +92,46 @@ class AutopilotDispatchTests(unittest.TestCase):
             "2026-07-25T13:30:00Z",
         )
 
+    def test_bounded_claim_selects_three_oldest_events(self) -> None:
+        events = []
+        for offset in range(5):
+            event = self.event(str(2080998938828501439 + offset))
+            event["first_seen_at"] = (
+                f"2026-07-25T12:{55 + offset:02d}:00Z"
+            )
+            events.append(event)
+        self.write_events(list(reversed(events)))
+
+        result = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            max_events=3,
+        )
+
+        self.assertEqual(result["pending_count"], 5)
+        self.assertEqual(result["claimed_count"], 3)
+        self.assertEqual(
+            [item["id"] for item in result["events"]],
+            [event["event_id"] for event in events[:3]],
+        )
+        state = autopilot_dispatch.read_json(self.state_file)
+        self.assertEqual(
+            state["owner"]["event_ids"],
+            [event["event_id"] for event in events[:3]],
+        )
+
+    def test_bounded_claim_rejects_nonpositive_limit(self) -> None:
+        self.write_events([self.event()])
+
+        with self.assertRaisesRegex(ValueError, "must be positive"):
+            autopilot_dispatch.claim(
+                self.wake_file,
+                self.state_file,
+                lease_seconds=1800,
+                max_events=0,
+            )
+
     def test_new_event_waits_for_active_global_owner(self) -> None:
         first_event = self.event("2080998938828501439")
         second_event = self.event("2080998938828501440")

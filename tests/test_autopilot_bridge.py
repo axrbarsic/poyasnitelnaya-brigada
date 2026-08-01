@@ -69,6 +69,9 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertIn("--non-empty --max 4000", result["prompt"])
         self.assertIn("scripts/verify_x_note_tweet.py", result["prompt"])
         self.assertIn("valid=true", result["prompt"])
+        self.assertIn("MAX_PARALLEL_X_READ_TABS=1", result["prompt"])
+        self.assertIn("Не готовь весь пакет целиком", result["prompt"])
+        self.assertIn("Никогда не держи заполненный composer", result["prompt"])
         self.assertNotIn("Жди готовый ответ до", result["prompt"])
 
     def test_claim_exposes_auditable_resolution_recovery(self) -> None:
@@ -195,6 +198,34 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertFalse(
             (self.root / "var" / "autopilot-dispatch.json").exists()
         )
+
+    def test_gate_and_claim_bound_batch_to_three_oldest_events(self) -> None:
+        events = []
+        for offset in range(5):
+            event = dict(self.event())
+            event_id = str(2081050838240211434 + offset)
+            event["event_id"] = event_id
+            event["event_url"] = (
+                f"https://x.com/Timyr316661/status/{event_id}"
+            )
+            event["first_seen_at"] = (
+                f"2026-07-25T16:{19 + offset:02d}:00Z"
+            )
+            events.append(event)
+        self.write_events(list(reversed(events)))
+
+        gated = autopilot_bridge.gate(self.config, lease_seconds=1800)
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        expected = [event["event_id"] for event in events[:3]]
+        self.assertEqual(gated["pending_count"], 5)
+        self.assertEqual(gated["event_ids"], expected)
+        self.assertEqual(gated["queued_event_ids"], [
+            event["event_id"] for event in reversed(events)
+        ])
+        self.assertEqual(gated["claim_limit"], 3)
+        self.assertEqual(claimed["event_ids"], expected)
+        self.assertIn("MAX_PARALLEL_X_READ_TABS=3", claimed["prompt"])
 
     def test_gate_does_not_dispatch_while_owner_is_active(self) -> None:
         self.write_events([self.event()])

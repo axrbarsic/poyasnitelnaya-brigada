@@ -19,6 +19,7 @@ from typing import Any, Iterator
 
 
 STATE_VERSION = 1
+DEFAULT_MAX_CLAIM_EVENTS = 3
 X_STATUS_PATH = re.compile(
     r"^/(?:[A-Za-z0-9_]{1,15}|i/web)/status/([0-9]{1,19})$"
 )
@@ -204,11 +205,32 @@ def compact_event(event: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def select_claim_events(
+    events: list[dict[str, Any]],
+    *,
+    max_events: int,
+) -> list[dict[str, Any]]:
+    """Select one bounded oldest-first claim without mutating the queue."""
+
+    if max_events <= 0:
+        raise ValueError("max claim events must be positive")
+    latest = datetime.max.replace(tzinfo=timezone.utc)
+
+    def priority(event: dict[str, Any]) -> tuple[datetime, int]:
+        observed_at = parse_time(
+            str(event.get("first_seen_at") or event.get("created_at") or "")
+        )
+        return observed_at or latest, int(str(event["id"]))
+
+    return sorted(events, key=priority)[:max_events]
+
+
 def claim(
     wake_file: Path,
     state_file: Path,
     *,
     lease_seconds: int,
+    max_events: int | None = None,
     now: datetime | None = None,
     runtime_id: str | None = None,
 ) -> dict[str, Any]:
@@ -217,7 +239,12 @@ def claim(
     current_time = now or utc_now()
 
     with locked_state(state_file):
-        events = load_wake_events(wake_file)
+        pending_events = load_wake_events(wake_file)
+        events = (
+            select_claim_events(pending_events, max_events=max_events)
+            if max_events is not None
+            else pending_events
+        )
         state = load_state(state_file)
         state_events = state["events"]
         owner = state.get("owner")
@@ -252,7 +279,7 @@ def claim(
                         "owner_busy": True,
                         "active_claim_token": owner.get("claim_token"),
                         "active_event_ids": active_ids,
-                        "pending_count": len(events),
+                        "pending_count": len(pending_events),
                         "leased_count": len(active_ids),
                         "lease_seconds": lease_seconds,
                     }
@@ -292,12 +319,12 @@ def claim(
                 "active_claim_token": tokens[0] if len(tokens) == 1 else None,
                 "active_claim_tokens": tokens,
                 "active_event_ids": active_ids,
-                "pending_count": len(events),
+                "pending_count": len(pending_events),
                 "leased_count": len(active_ids),
                 "lease_seconds": lease_seconds,
             }
 
-        pending_ids = {event["id"] for event in events}
+        pending_ids = {event["id"] for event in pending_events}
         state["events"] = {
             event_id: value
             for event_id, value in state_events.items()
@@ -305,7 +332,7 @@ def claim(
         }
         state_events = state["events"]
 
-        if not events:
+        if not pending_events:
             state["updated_at"] = isoformat(current_time)
             atomic_write_json(state_file, state)
             return {
@@ -348,7 +375,8 @@ def claim(
             "claimed_at": claimed_at,
             "lease_expires_at": lease_expires_at,
             "lease_seconds": lease_seconds,
-            "pending_count": len(events),
+            "pending_count": len(pending_events),
+            "claimed_count": len(events),
             "events": [compact_event(event) for event in events],
         }
 
@@ -527,10 +555,18 @@ def main(argv: list[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     wake_file, state_file = load_paths(arguments.config)
     if arguments.command == "claim":
+        config = read_json(arguments.config)
+        max_events = int(
+            config.get(
+                "autopilot_max_claim_events",
+                DEFAULT_MAX_CLAIM_EVENTS,
+            )
+        )
         result = claim(
             wake_file,
             state_file,
             lease_seconds=arguments.lease_seconds,
+            max_events=max_events,
         )
     elif arguments.command == "release":
         result = release(state_file, arguments.claim_token)
