@@ -228,6 +228,14 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertEqual(gated["claim_limit"], 3)
         self.assertEqual(claimed["event_ids"], expected)
         self.assertIn("MAX_PARALLEL_X_READ_TABS=3", claimed["prompt"])
+        self.assertIn(
+            "используй три вкладки для\nодновременной загрузки",
+            claimed["prompt"],
+        )
+        self.assertNotIn(
+            "На iMac 8 GB открывай только одну вкладку X",
+            claimed["prompt"],
+        )
 
     def test_gate_does_not_dispatch_while_owner_is_active(self) -> None:
         self.write_events([self.event()])
