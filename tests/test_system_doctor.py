@@ -400,6 +400,51 @@ class SystemDoctorTests(unittest.TestCase):
         self.assertEqual(check.status, "warn")
         self.assertTrue(check.details["owned"])
 
+    def test_queue_latency_warns_while_another_bounded_batch_is_owned(
+        self,
+    ) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[
+                {
+                    "id": "123",
+                    "first_seen_at": "2026-07-29T14:54:59Z",
+                },
+                {
+                    "id": "456",
+                    "first_seen_at": "2026-07-29T14:59:59Z",
+                },
+            ],
+            owner={
+                "event_ids": ["456"],
+                "lease_expires_at": "2026-07-29T15:30:00Z",
+            },
+            max_age_seconds=300,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "warn")
+        self.assertTrue(check.details["active_owner"])
+        self.assertFalse(check.details["owned"])
+
+    def test_queue_latency_fails_for_expired_bounded_batch(self) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[
+                {
+                    "id": "123",
+                    "first_seen_at": "2026-07-29T14:54:59Z",
+                }
+            ],
+            owner={
+                "event_ids": ["456"],
+                "lease_expires_at": "2026-07-29T14:59:59Z",
+            },
+            max_age_seconds=300,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "fail")
+        self.assertFalse(check.details["active_owner"])
+
     def test_queue_latency_rejects_invalid_event_shape(self) -> None:
         check = system_doctor.queue_latency_check(
             events=[None],

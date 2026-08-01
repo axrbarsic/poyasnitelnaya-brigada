@@ -389,8 +389,16 @@ def queue_latency_check(
         else set()
     )
     owned = oldest_event_id in owner_event_ids
+    owner_lease_expires = (
+        parse_timestamp(owner.get("lease_expires_at"))
+        if isinstance(owner, dict)
+        else None
+    )
+    active_owner = bool(owner_event_ids) and (
+        owner_lease_expires is None or owner_lease_expires >= current
+    )
     healthy = 0 <= age_seconds <= max_age_seconds
-    status = "pass" if healthy else "warn" if owned else "fail"
+    status = "pass" if healthy else "warn" if active_owner else "fail"
     details = {
         "age_seconds": round(age_seconds, 1),
         "max_age_seconds": max_age_seconds,
@@ -399,6 +407,7 @@ def queue_latency_check(
             "+00:00",
             "Z",
         ),
+        "active_owner": active_owner,
         "owned": owned,
         "pending_count": len(events),
     }
@@ -411,6 +420,15 @@ def queue_latency_check(
             "активному Browser owner."
         )
         repair = "Проверь renew, durable history и завершение текущего claim."
+    elif active_owner:
+        summary = (
+            "Старейшее ожидающее событие превысило SLO, пока активный "
+            "Browser owner обрабатывает предыдущую bounded batch."
+        )
+        repair = (
+            "Проверь продвижение текущего claim и следующий автоматический "
+            "handoff."
+        )
     else:
         summary = "Старейшее событие превысило SLO без активного owner."
         repair = "Проверь dispatcher, x-relay и owner routing, очередь не удаляй."
