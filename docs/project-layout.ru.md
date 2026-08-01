@@ -55,14 +55,15 @@ python3 evidence_import.py \
 - `~/.codex/skills/poyasnitelnaya-brigada`, установленная копия локального
   генератора;
 - `~/.codex/skills/poyasnitelnaya-brigada-v2`, установленная копия
-  экспериментального генератора продолжений;
+  основного генератора ответов и продолжений;
+- `~/.codex/skills/377`, установленная копия локального визуального skill;
 - `~/Library/LaunchAgents/com.axrbarsic.xmention.*.plist`, загруженные службы
   macOS;
 - macOS Data Protection Keychain, где хранятся секреты. Подписанный helper
   собирается из `macos/XMentionKeychainHelper*` и устанавливается под `var/`;
 - отдельный archive vault для исходных ZIP-архивов X.
 
-Это не отдельные исходники проекта. Все три skills восстанавливаются из
+Это не отдельные исходники проекта. Все четыре skills восстанавливаются из
 `skill-backup/`, LaunchAgent из `macos/`, а секреты никогда не копируются в
 репозиторий.
 

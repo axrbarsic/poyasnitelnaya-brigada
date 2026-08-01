@@ -316,6 +316,21 @@ class SystemDoctorTests(unittest.TestCase):
         self.assertEqual(check.status, "pass")
         self.assertEqual(check.details["owner_event_ids"], ["1", "2"])
 
+    def test_relay_progress_accepts_active_repair_handoff(self) -> None:
+        check = system_doctor.relay_progress_check(
+            pending_count=2,
+            dispatch_state={
+                "status": "work_in_progress",
+                "work_kind": "repair",
+            },
+            owner=None,
+            max_wait_seconds=180,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "pass")
+        self.assertEqual(check.details["work_kind"], "repair")
+
     def test_relay_progress_ignores_resource_deferred_queue(self) -> None:
         check = system_doctor.relay_progress_check(
             pending_count=2,

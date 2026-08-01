@@ -56,9 +56,14 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertTrue(result["dispatch"])
         self.assertIn("разделяй происхождение", result["prompt"])
         self.assertIn("хода и способ продолжения", result["prompt"])
-        self.assertIn("poyasnitelnaya-brigada", result["prompt"])
+        self.assertIn("poyasnitelnaya-brigada-v2", result["prompt"])
+        self.assertIn("прямой просьбе Alex применить именно v1", result["prompt"])
         self.assertIn("gpt-5.6-sol", result["prompt"])
         self.assertIn("reasoning_effort=max", result["prompt"])
+        self.assertIn(
+            "generation_skill=poyasnitelnaya-brigada-v2",
+            result["prompt"],
+        )
         self.assertIn("одним непустым целостным", result["prompt"])
         self.assertIn("4000 Unicode code points", result["prompt"])
         self.assertIn("--non-empty --max 4000", result["prompt"])
@@ -387,7 +392,8 @@ class AutopilotBridgeTests(unittest.TestCase):
         )
         self.assertIn("Content-based skip запрещен", result["prompt"])
         self.assertIn("`satirical-media`", result["prompt"])
-        self.assertIn("`377` или `Ложкин`", result["prompt"])
+        self.assertIn("локальный skill `377`", result["prompt"])
+        self.assertIn("`Ложкин`", result["prompt"])
         self.assertIn("`commenter_memory`", result["prompt"])
         self.assertIn('"commenter_memory":', result["prompt"])
         self.assertIn("Выбери short, local-max", result["prompt"])

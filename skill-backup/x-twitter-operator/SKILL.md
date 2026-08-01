@@ -22,7 +22,7 @@ Read and follow the bundled `browser:control-in-app-browser` skill before Browse
 Keep the Browser owner and final publication brain on `gpt-5.6-sol`.
 
 - Every standalone reply written without «Пояснительная бригада» must be authored and final-checked by Sol High or stronger.
-- Every turn that may invoke `poyasnitelnaya-brigada` must run on Sol Max. Do not generate its output in High and do not delegate its writing to another model.
+- Every turn that may invoke `poyasnitelnaya-brigada-v2` must run on Sol Max. Do not generate its output in High and do not delegate its writing to another model. Keep `poyasnitelnaya-brigada` v1 unchanged and use it only when Alex explicitly asks for v1.
 - Only Sol may decide the live target, resolve contextual ambiguity, classify `short`/`local-max`/`satirical-media`/`already-answered`, operate authenticated tabs, validate the final composer, or publish.
 - Use deterministic scripts before any model for ledger lookup, state counting, exact duplicate IDs, Unicode length, forbidden-character scans, and queue timestamps.
 - Use Luna Low only for bounded read-only mechanical work on supplied artifacts. It must not browse, research, draft replies, interpret context, or mutate state.
@@ -99,7 +99,7 @@ start, never the required quality of Sol reasoning or fact checking:
 - idle dispatcher checks own zero Browser tabs and use no model;
 - short work owns one X tab;
 - Local Sol Max work owns one X tab and generates locally through
-  `poyasnitelnaya-brigada` in the Sol Max owner turn;
+  `poyasnitelnaya-brigada-v2` in the Sol Max owner turn;
 - `initial-audit-next --conversations 1`, never routine `status --full`;
 - no helper session for waiting, polling, or mechanical age filtering;
 - close old backlog with one
@@ -159,7 +159,7 @@ For each X target:
    repeated claims, and messages without a factual thesis.
 6. Classify the response:
    - `short`: simple claim that can be answered clearly with verified facts.
-   - `local-max`: long, technical, historically dense, or apparently well-argued claim that uses the local `poyasnitelnaya-brigada` skill.
+   - `local-max`: long, technical, historically dense, or apparently well-argued claim that uses the local `poyasnitelnaya-brigada-v2` skill by default.
    - `satirical-media`: experimental safe visual response to a pure insult.
    - `already-answered`: an exact direct child reply from `@axrbarsic` already
      exists for this event.
@@ -209,7 +209,7 @@ origin provenance separate from continuation mode. Never rewrite an unknown
 manual origin as `provenance=pro`. Read the deterministic
 `manual_parent_continuation` profile from the claim payload. A proven local-max
 origin, at least 500 Unicode code points, at least three paragraphs, or at
-least one source URL routes the follow-up to local `poyasnitelnaya-brigada`
+least one source URL routes the follow-up to local `poyasnitelnaya-brigada-v2`
 with complete SQLite history. A concise exact parent with none of those signals
 may use Sol `short`. If the profile says `pending_exact_parent_restore`, restore
 and durably import the exact live X parent first, then apply the same adaptive
@@ -225,7 +225,7 @@ If any check is uncertain, do not publish until resolved. Never count a skipped 
 Perform a live internet check before drafting every factual X reply, even when the claim seems familiar. Verify unstable or contested claims against current evidence. Prefer primary and authoritative sources, including official documents, courts, international organizations, election monitors, and original statistics.
 
 For a `local-max` reply, use the verified research directly while applying
-`poyasnitelnaya-brigada`. The skill and final publication brain are the same
+`poyasnitelnaya-brigada-v2`. The skill and final publication brain are the same
 Sol Max turn, so no external bot handoff exists.
 
 Keep replies focused on claims, evidence, logic, and contradictions. Do not:
@@ -244,7 +244,10 @@ exists, and no reciprocal abuse.
 
 For an experimental satirical visual reply to a pure insult:
 
-- use exactly one custom ChatGPT web bot, either `377` or `Ложкин`;
+- for an explicitly selected `377` route, load the local `377` skill and use
+  the image generation tool without opening ChatGPT;
+- for an explicitly selected `Ложкин` route, use exactly one custom ChatGPT
+  web bot;
 - provide only the target post and the minimum thread context needed to
   understand the exchange;
 - satirize the rhetorical move or argument, not the author's body, dignity,
@@ -288,7 +291,9 @@ and forbidden-character scan in evidence.
 
 ## Пояснительная бригада
 
-Use the local `poyasnitelnaya-brigada` skill only for `local-max` targets.
+Use the local `poyasnitelnaya-brigada-v2` skill by default for `local-max`
+targets. Use `poyasnitelnaya-brigada` v1 only when Alex explicitly requests the
+old version.
 
 - Require `gpt-5.6-sol` with reasoning effort `max` before invoking the skill.
 - Never open ChatGPT, the custom GPT, or a ChatGPT conversation for generation.
@@ -312,7 +317,7 @@ Use the local `poyasnitelnaya-brigada` skill only for `local-max` targets.
 
   Then validate the actual X composer value again.
 - Record `generation_profile=local_sol_max`,
-  `generation_skill=poyasnitelnaya-brigada`,
+  `generation_skill=poyasnitelnaya-brigada-v2`,
   `generation_model=gpt-5.6-sol`, `reasoning_effort=max`, source URLs, target
   URL, exact text hash, and verified reply URL in durable evidence. Keep
   `provenance=pro` only as the legacy database compatibility marker.
@@ -366,7 +371,7 @@ without supplying target IDs.
 - The watcher may detect and queue work, but it must never draft or publish.
   Sol and the Browser owner retain classification and publication.
 - A queued local Sol Max follow-up must load the exact recorded local X history and use
-  `poyasnitelnaya-brigada` in Sol Max.
+  `poyasnitelnaya-brigada-v2` in Sol Max by default.
 - Run poll, watchdog, janitor, and the Python event dispatcher every minute on
   the 8 GB iMac. Empty, leased, voice-paused, and resource-deferred checks stop
   without a model, Browser, or new Codex task.

@@ -53,15 +53,16 @@ Only required deployment points remain outside the directory:
 
 - `~/.codex/skills/x-twitter-operator`, the installed X skill copy;
 - `~/.codex/skills/poyasnitelnaya-brigada`, the installed local generator;
-- `~/.codex/skills/poyasnitelnaya-brigada-v2`, the installed experimental
+- `~/.codex/skills/poyasnitelnaya-brigada-v2`, the installed default reply and
   continuation generator;
+- `~/.codex/skills/377`, the installed local visual skill;
 - `~/Library/LaunchAgents/com.axrbarsic.xmention.*.plist`, the loaded macOS
   services;
 - macOS Data Protection Keychain, which holds secrets. Its signed helper bundle
   is rebuilt from `macos/XMentionKeychainHelper*` and installed below `var/`;
 - a separate archive vault for original X archive ZIP files.
 
-These are not additional source trees. All three skills are restored from
+These are not additional source trees. All four skills are restored from
 `skill-backup/`, LaunchAgents are rendered from `macos/`, and secrets are
 never copied into the repository.
 

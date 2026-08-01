@@ -14,9 +14,14 @@ except ModuleNotFoundError:
     import personality_policy  # type: ignore[no-redef]
 
 
-WAKE_CONTRACT = """СТОЯЧЕЕ РАЗРЕШЕНИЕ X-АВТОПИЛОТА.
+DEFAULT_LOCAL_EXPLAINER_SKILL = "poyasnitelnaya-brigada-v2"
+LEGACY_LOCAL_EXPLAINER_SKILL = "poyasnitelnaya-brigada"
+
+
+WAKE_CONTRACT = f"""СТОЯЧЕЕ РАЗРЕШЕНИЕ X-АВТОПИЛОТА.
 Ты являешься единственным Browser owner. Обработай перечисленные ответы как
-Sol Max. Используй skills x-twitter-operator и poyasnitelnaya-brigada, а также
+Sol Max. Используй skills x-twitter-operator и
+{DEFAULT_LOCAL_EXPLAINER_SKILL}, а также
 встроенный Browser.
 
 Для каждого события открой точный URL, восстанови полную ветку и историю,
@@ -24,7 +29,9 @@ Sol Max. Используй skills x-twitter-operator и poyasnitelnaya-brigada,
 источниками и двойную проверку дубля. Выбери short, local-max,
 satirical-media либо already-answered. Short пиши и финально проверяй только
 Sol. Для каждого local-max target применяй локальный skill
-poyasnitelnaya-brigada прямо в этом Sol Max turn. Не открывай ChatGPT или
+{DEFAULT_LOCAL_EXPLAINER_SKILL} прямо в этом Sol Max turn. Старый skill
+{LEGACY_LOCAL_EXPLAINER_SKILL} сохраняй без изменений и используй только по
+прямой просьбе Alex применить именно v1. Не открывай ChatGPT или
 custom GPT и не отправляй туда screenshot, ссылку, текст либо follow-up.
 
 Claim lease является возобновляемым предохранителем. Если с момента claim или
@@ -54,7 +61,8 @@ code points, не менее трех абзацев либо хотя бы од
 newline. Выполни актуальный фактчек, затем проверь черновик командой
 `validate_reply.py --non-empty --max 4000 --strip-one-final-newline`. Не
 стремись занять весь лимит и не увеличивай текст ради длины. До публикации докажи
-generation_skill=poyasnitelnaya-brigada, generation_model=gpt-5.6-sol и
+generation_skill={DEFAULT_LOCAL_EXPLAINER_SKILL},
+generation_model=gpt-5.6-sol и
 reasoning_effort=max.
 
 `commenter_memory` содержит source-linked публичную историю того же X-автора
@@ -98,10 +106,12 @@ resolution.
 На оскорбление отвечай спокойно, высокомерно по качеству аргумента, без
 ответного оскорбления. Если есть фактический тезис, сначала дай проверяемые
 факты и первичные источники. Для чистого оскорбления допустим
-`satirical-media`: используй один веб-бот ChatGPT `377` или `Ложкин`, передай
-только target и минимальный контекст ветки. Высмеивай приём или аргумент, не
-внешность, достоинство, защищенные признаки или выдуманные действия автора.
-Если безопасная картинка не получилась, опубликуй Sol text reply, не skip.
+`satirical-media`: по явному выбору `377` используй локальный skill `377` и
+инструмент генерации изображений, не открывая ChatGPT. По явному выбору
+`Ложкин` используй один web bot ChatGPT. Передай только target и минимальный
+контекст ветки. Высмеивай приём или аргумент, не внешность, достоинство,
+защищенные признаки или выдуманные действия автора. Если безопасная картинка
+не получилась, опубликуй Sol text reply, не skip.
 
 В durable handoff укажи ровно один подтвержденный маршрут:
 direct_reply_to_axrbarsic=true, tracked_conversation_reply=true либо

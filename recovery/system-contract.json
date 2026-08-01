@@ -37,6 +37,8 @@
     "skill-backup/poyasnitelnaya-brigada/agents/openai.yaml",
     "skill-backup/poyasnitelnaya-brigada-v2/SKILL.md",
     "skill-backup/poyasnitelnaya-brigada-v2/agents/openai.yaml",
+    "skill-backup/377/SKILL.md",
+    "skill-backup/377/agents/openai.yaml",
     "macos/x-relay.prompt.txt",
     "macos/x-15.prompt.txt"
   ],
@@ -135,6 +137,12 @@
       "display_name": "skill «Пояснительная бригада v2»",
       "source": "skill-backup/poyasnitelnaya-brigada-v2",
       "installed": ".codex/skills/poyasnitelnaya-brigada-v2"
+    },
+    {
+      "id": "visual_377_skill",
+      "display_name": "skill 377",
+      "source": "skill-backup/377",
+      "installed": ".codex/skills/377"
     }
   ],
   "personality": {

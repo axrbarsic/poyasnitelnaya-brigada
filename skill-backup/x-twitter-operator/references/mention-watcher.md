@@ -192,7 +192,9 @@ already contains a reply URL, append a corrected handoff with
 
 Historical ChatGPT Pro conversation URLs are no longer runtime dependencies.
 Restore the exact X chain from SQLite and append-only JSONL, then continue
-through the local `poyasnitelnaya-brigada` skill. Keep old ChatGPT URLs as audit
+through the local `poyasnitelnaya-brigada-v2` skill by default. Keep
+`poyasnitelnaya-brigada` v1 unchanged for explicit requests only. Keep old
+ChatGPT URLs as audit
 metadata. Do not create a replacement ChatGPT conversation.
 
 If Alex explicitly expands the response scope or a blocked dependency is later

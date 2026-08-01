@@ -111,9 +111,11 @@ Single-owner work:
 - clicking reply, delete, follow, like, or message controls;
 - publication verification.
 
-The local `poyasnitelnaya-brigada` route never opens ChatGPT or a custom GPT.
-Its non-empty output, capped at 4000 code points, is generated inside the Sol
-Max owner turn without padding toward the limit.
+The local `poyasnitelnaya-brigada-v2` route is the default and never opens
+ChatGPT or a custom GPT. Keep `poyasnitelnaya-brigada` v1 unchanged and use it
+only when Alex explicitly asks for v1. Its non-empty output, capped at 4000
+code points, is generated inside the Sol Max owner turn without padding toward
+the limit.
 Additional research sessions must return data to the owner instead of operating
 authenticated tabs.
 

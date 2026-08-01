@@ -46,6 +46,7 @@ flowchart LR
 | Потеря после сбоя | Неразрешённый event остаётся в SQLite и снова доступен после lease |
 | Дубли публикации | Exact status ID, история, duplicate gate и проверка direct child reply |
 | Скрытая зависшая очередь | `runtime.queue_latency` измеряет `first_seen_at` старейшего event независимо от heartbeat |
+| Queue-latency перехватывает собственный recovery | Инцидент только `runtime.queue_latency` уступает relay штатному X handoff; смешанный FAIL по-прежнему идёт в doctor |
 | Ошибка dispatcher при pending queue | Любой неожиданный не-waiting статус теперь даёт FAIL |
 | Долгая корректная обработка | Старый event активного owner даёт WARN, а не ложный FAIL; renew сохраняет lease |
 | Накопление задач | Одна пользовательская задача, один служебный worker, janitor архивирует завершённые служебные задачи |

@@ -375,6 +375,71 @@ class AutopilotSupervisorTests(unittest.TestCase):
         self.assertEqual(result["event_ids"], ["synthetic-event"])
         self.assertEqual(result["owner_thread_id"], "owner")
 
+    def test_queue_latency_incident_yields_relay_to_x(self) -> None:
+        queue_latency = self.check("runtime.queue_latency", "fail")
+        autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now,
+            checks=[queue_latency],
+        )
+        x_reservation = {
+            "status": "handoff_reserved_ready",
+            "dispatch": True,
+            "event_ids": ["synthetic-event"],
+            "reservation_token": "synthetic-reservation",
+        }
+        with mock.patch.object(
+            autopilot_supervisor.autopilot_bridge,
+            "reserve_handoff",
+            return_value=x_reservation,
+        ) as reserve_x:
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        reserve_x.assert_called_once_with(
+            self.config,
+            lease_seconds=1800,
+        )
+        self.assertEqual(result["route"], "x")
+        self.assertTrue(result["dispatch"])
+        self.assertFalse(result["repair_pending"])
+
+    def test_mixed_queue_and_database_failure_keeps_repair_priority(
+        self,
+    ) -> None:
+        failures = [
+            self.check("runtime.queue_latency", "fail"),
+            self.check("runtime.database", "fail"),
+        ]
+        autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now,
+            checks=failures,
+        )
+        with mock.patch.object(
+            autopilot_supervisor.autopilot_bridge,
+            "reserve_handoff",
+            side_effect=AssertionError(
+                "X must wait while mixed repair is pending"
+            ),
+        ):
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        self.assertEqual(result["route"], "repair")
+        self.assertTrue(result["dispatch"])
+        self.assertTrue(result["repair_pending"])
+
     def test_relay_does_not_check_x_while_repair_is_pending(self) -> None:
         database_failure = self.check("runtime.database", "fail")
         autopilot_supervisor.run_once(

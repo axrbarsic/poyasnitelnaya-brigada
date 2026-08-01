@@ -35,7 +35,8 @@ automation, LaunchAgent, SQLite или Keychain. Он сверяет:
   старые automations;
 - пять LaunchAgent;
 - SQLite integrity, очередь и Keychain helper;
-- установленные `x-twitter-operator` и `poyasnitelnaya-brigada` с Git-копиями;
+- установленные `x-twitter-operator`, обе версии
+  `poyasnitelnaya-brigada` и `377` с Git-копиями;
 - матрицу характера и runtime overrides.
 
 ## Офлайн-эмулятор
@@ -165,6 +166,7 @@ state SQLite вручную. Закрепление worker не требуетс
   `skill-backup/poyasnitelnaya-brigada`;
 - `~/.codex/skills/poyasnitelnaya-brigada-v2` восстановить только из
   `skill-backup/poyasnitelnaya-brigada-v2`;
+- `~/.codex/skills/377` восстановить только из `skill-backup/377`;
 - LaunchAgent перерендерить из `macos/*.plist.example` через
   `scripts/render_launchd.py`;
 - heartbeat `x-relay` и cron `x-15` восстановить только через официальный

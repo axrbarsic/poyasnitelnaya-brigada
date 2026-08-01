@@ -21,9 +21,10 @@
 - Only the Browser owner may operate authenticated tabs, classify a live
   target, author a short reply, validate the composer, or publish.
 - Idle runs own zero Browser tabs. Short and local Sol Max replies use one X
-  tab. The local Sol Max route owns zero ChatGPT tabs. Open ChatGPT only for an
-  explicitly authorized visual-bot route such as `377` or `Ложкин`, never for
-  «Пояснительная бригада».
+  tab. The local Sol Max route owns zero ChatGPT tabs. The explicit `377`
+  visual route uses the local `377` skill and image generation, not ChatGPT.
+  Open ChatGPT only for an explicitly authorized `Ложкин` visual-bot route,
+  never for «Пояснительная бригада».
 - Close every task-owned Browser tab before the scheduled run ends. Never close
   a user-owned tab.
 - One global owner lease covers the whole queue. A new event must wait while
@@ -38,8 +39,10 @@
   both its per-run and daily returned-Post limits. Budget exhaustion may defer
   only the tail and must never stop owned mentions.
 - Generate every «Пояснительная бригада» reply locally with the tracked
-  `poyasnitelnaya-brigada` skill. Never open ChatGPT or the custom GPT for this
-  route. The active owner must be `gpt-5.6-sol` with reasoning effort `max`.
+  `poyasnitelnaya-brigada-v2` skill by default. Keep
+  `poyasnitelnaya-brigada` unchanged and use v1 only when Alex explicitly asks
+  for the old version. Never open ChatGPT or the custom GPT for this route. The
+  active owner must be `gpt-5.6-sol` with reasoning effort `max`.
 - A local «Пояснительная бригада» reply is non-empty and contains at most 4000
   Unicode code points after removing one technical final newline. Do not target
   the limit or pad the answer. Validate it with
@@ -98,9 +101,11 @@
   archives, runtime locks, generated evidence, or history exports.
 - `var/watcher.sqlite3` is the live source of truth.
 - Create consistent backups only with `memory_snapshot.py`.
-- Installed skills under `~/.codex/skills/x-twitter-operator` and
-  `~/.codex/skills/poyasnitelnaya-brigada` are deployment state. Their
-  restorable sources are the matching directories under `skill-backup/`.
+- Installed skills under `~/.codex/skills/x-twitter-operator`,
+  `~/.codex/skills/poyasnitelnaya-brigada`,
+  `~/.codex/skills/poyasnitelnaya-brigada-v2`, and `~/.codex/skills/377` are
+  deployment state. Their restorable sources are the matching directories
+  under `skill-backup/`.
 - The macOS LaunchAgent files under `~/Library/LaunchAgents` are deployment
   state generated from the tracked templates in `macos/`.
 

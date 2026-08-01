@@ -236,6 +236,9 @@ def relay_progress_check(
         "max_wait_seconds": max_wait_seconds,
         "pending_count": pending_count,
     }
+    work_kind = str(dispatch_state.get("work_kind", ""))
+    if work_kind:
+        details["work_kind"] = work_kind
     if pending_count <= 0:
         return Check(
             "runtime.relay_progress",
@@ -251,6 +254,21 @@ def relay_progress_check(
             "pass",
             "Ожидающая очередь уже принадлежит Browser owner.",
             "Проверь owner lease и session janitor.",
+            details,
+        )
+    active_repair_statuses = {
+        "repair_observing",
+        "escalation_pending",
+        "handoff_pending",
+        "claimed",
+        "work_in_progress",
+    }
+    if work_kind == "repair" and dispatch_status in active_repair_statuses:
+        return Check(
+            "runtime.relay_progress",
+            "pass",
+            "Relay выполняет активный repair handoff.",
+            "Возраст X очереди контролируется отдельным SLO.",
             details,
         )
     waiting_statuses = {

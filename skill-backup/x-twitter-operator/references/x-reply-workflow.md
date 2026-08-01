@@ -102,7 +102,9 @@ one.
 Use this experimental route only for a pure insult when a visual response adds
 value.
 
-1. Open exactly one custom ChatGPT web bot, `377` or `Ложкин`.
+1. For an explicitly selected `377` route, load the local `377` skill and use
+   the image generation tool without opening ChatGPT. For an explicitly
+   selected `Ложкин` route, open exactly that one custom ChatGPT web bot.
 2. Provide only the target and minimum thread context.
 3. Generate satire about the rhetorical move or weak argument.
 4. Reject output that degrades appearance, dignity, protected traits, private
@@ -114,8 +116,10 @@ value.
 
 ### Local Sol Max reply
 
-Inspect the complete context locally, load `poyasnitelnaya-brigada`, and generate
-inside the Sol Max Browser-owner turn. Include exact durable X history and
+Inspect the complete context locally, load `poyasnitelnaya-brigada-v2` by
+default, and generate inside the Sol Max Browser-owner turn. Keep
+`poyasnitelnaya-brigada` v1 unchanged and use it only when Alex explicitly asks
+for v1. Include exact durable X history and
 current primary-source research. Never open ChatGPT or the custom GPT. Produce
 one non-empty direct monologue of at most 4000 Unicode code points. Do not target
 the maximum or pad the answer. Validate it deterministically before filling the
@@ -144,7 +148,8 @@ Before filling a local «Пояснительная бригада» reply:
 
 - confirm `generation_model=gpt-5.6-sol`;
 - confirm `reasoning_effort=max`;
-- confirm `generation_skill=poyasnitelnaya-brigada`;
+- confirm `generation_skill=poyasnitelnaya-brigada-v2` unless Alex explicitly
+  requested v1;
 - confirm the target post is still open.
 
 After filling:

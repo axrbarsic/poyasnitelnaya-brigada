@@ -43,6 +43,7 @@ OPEN_STATUSES = {
 }
 TERMINAL_STATUSES = {"resolved"}
 EXTERNAL_ACTION_STATUS = "external_action_required"
+X_QUEUE_RECOVERY_FAILURES = {"runtime.queue_latency"}
 REPAIRABLE_POLL_STATUSES = {
     "stale",
     "failing",
@@ -704,11 +705,21 @@ def gate(
         elif coordination_recovered:
             save_state(path, state)
         external_action_required = status == EXTERNAL_ACTION_STATUS
+        failure_ids = {
+            str(check.get("identifier"))
+            for check in incident.get("checks", [])
+            if isinstance(check, dict) and check.get("status") == "fail"
+        }
+        x_queue_recovery = failure_ids == X_QUEUE_RECOVERY_FAILURES
         return {
             "status": status,
-            "dispatch": status == "escalation_pending",
+            "dispatch": (
+                status == "escalation_pending" and not x_queue_recovery
+            ),
             "repair_pending": (
-                status in OPEN_STATUSES and not external_action_required
+                status in OPEN_STATUSES
+                and not external_action_required
+                and not x_queue_recovery
             ),
             "external_action_required": external_action_required,
             "incident_id": incident.get("id"),

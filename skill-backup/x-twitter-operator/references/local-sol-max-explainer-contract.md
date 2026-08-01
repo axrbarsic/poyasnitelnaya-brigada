@@ -2,9 +2,11 @@
 
 ## Маршрутизация
 
-Использовать `poyasnitelnaya-brigada` для каждого нового `local-max` target и
-каждого продолжения цепочки, в которой точный родитель Alex имеет legacy
-database marker `provenance=pro`.
+Использовать `poyasnitelnaya-brigada-v2` по умолчанию для каждого нового
+`local-max` target и каждого продолжения цепочки, в которой точный родитель
+Alex имеет legacy database marker `provenance=pro`. Сохранять
+`poyasnitelnaya-brigada` v1 без изменений и применять его только по прямой
+просьбе Alex использовать старую версию.
 
 До генерации доказать:
 
@@ -132,7 +134,7 @@ durable resolve или outbound `completed`.
 После подтверждённой публикации записать:
 
 - `generation_profile=local_sol_max`;
-- `generation_skill=poyasnitelnaya-brigada`;
+- `generation_skill=poyasnitelnaya-brigada-v2` по умолчанию;
 - `generation_model=gpt-5.6-sol`;
 - `reasoning_effort=max`;
 - target URL и status ID;

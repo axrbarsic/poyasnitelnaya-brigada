@@ -13,6 +13,13 @@ CASES = ROOT / "tests" / "fixtures" / "poyasnitelnaya_brigada_v2_cases.json"
 
 
 class PoyasnitelnayaBrigadaV2EvalContractTests(unittest.TestCase):
+    def test_v2_is_the_default_and_v1_is_an_explicit_fallback(self) -> None:
+        skill = SKILL.read_text(encoding="utf-8")
+
+        self.assertIn("Use by default for every local-max", skill)
+        self.assertIn("use it only when Alex explicitly requests v1", skill)
+        self.assertIn("Уже начатую транзакцию", skill)
+
     def test_eval_cases_cover_required_dialogue_moves(self) -> None:
         payload = json.loads(CASES.read_text(encoding="utf-8"))
         cases = payload["cases"]

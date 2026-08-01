@@ -76,16 +76,17 @@ class LocalExplainerSkillTests(unittest.TestCase):
         self.assertIn("Full CDP Developer mode", skill)
         self.assertIn("requires explicit approval", skill)
 
-    def test_v2_is_explicit_and_keeps_v1_available(self) -> None:
+    def test_v2_is_default_and_keeps_v1_available(self) -> None:
         v1 = SKILL.read_text(encoding="utf-8")
         v2 = V2_SKILL.read_text(encoding="utf-8")
         interface = V2_INTERFACE.read_text(encoding="utf-8")
 
         self.assertIn("name: poyasnitelnaya-brigada", v1)
         self.assertIn("name: poyasnitelnaya-brigada-v2", v2)
-        self.assertIn("Use only when Alex explicitly asks", v2)
-        self.assertIn("Keep v1 available", v2)
+        self.assertIn("Use by default for every local-max", v2)
+        self.assertIn("use it only when Alex explicitly requests v1", v2)
         self.assertIn("$poyasnitelnaya-brigada-v2", interface)
+        self.assertIn("allow_implicit_invocation: true", interface)
 
     def test_v2_tracks_thesis_and_verified_contradictions(self) -> None:
         skill = V2_SKILL.read_text(encoding="utf-8")

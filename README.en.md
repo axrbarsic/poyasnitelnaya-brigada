@@ -76,8 +76,9 @@ content decisions:
 - A reply posted manually by Alex is still an `alex` turn. When someone
   continues that branch, the owner restores the manual parent and full live
   context, persists them, and only then prepares the next reply.
-- Explainer targets and follow-ups run locally through the versioned
-  `poyasnitelnaya-brigada` skill in Sol Max with exact durable history.
+- Explainer targets and follow-ups run locally through
+  `poyasnitelnaya-brigada-v2` by default in Sol Max with exact durable history.
+  V1 remains unchanged and runs only when Alex explicitly requests it.
 - A local explainer reply is non-empty, contains at most 4000 Unicode code
   points, does not target the limit, and passes deterministic source and
   composer validation before publication.

@@ -5,21 +5,21 @@
 The long-form route previously depended on a custom GPT page in ChatGPT. That
 added a Browser tab, memory pressure, UI waiting, and another failure point.
 
-The prompt now lives in Git as a local skill:
+V2 is now the default local skill:
 
-- source: `skill-backup/poyasnitelnaya-brigada`;
-- installed copy: `~/.codex/skills/poyasnitelnaya-brigada`;
+- source: `skill-backup/poyasnitelnaya-brigada-v2`;
+- installed copy: `~/.codex/skills/poyasnitelnaya-brigada-v2`;
 - model: `gpt-5.6-sol` only;
 - reasoning effort: `max` only;
 - ChatGPT and the custom GPT are not used for generation.
 
-The experimental v2 remains separate:
+V1 remains available only as an explicit fallback:
 
-- source: `skill-backup/poyasnitelnaya-brigada-v2`;
-- installed copy: `~/.codex/skills/poyasnitelnaya-brigada-v2`;
-- v1 remains available and no chain migrates implicitly;
-- v2 runs only when Alex explicitly selects it or the durable chain is already
-  marked for v2.
+- source: `skill-backup/poyasnitelnaya-brigada`;
+- installed copy: `~/.codex/skills/poyasnitelnaya-brigada`;
+- v1 stays unchanged and runs only when Alex explicitly requests the old
+  version;
+- an already started transaction does not switch skills midway.
 
 V2 restores the full dispute, keeps the anchor claim and open question, and
 tracks exact claims, concessions, verified contradictions, and goalpost
