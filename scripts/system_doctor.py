@@ -332,7 +332,7 @@ def queue_latency_check(
     *,
     events: list[Any],
     owner: Any,
-    dispatch_state: Any = None,
+    supervisor_state: Any = None,
     max_age_seconds: int,
     now: datetime | None = None,
 ) -> Check:
@@ -398,11 +398,29 @@ def queue_latency_check(
     active_owner = bool(owner_event_ids) and (
         owner_lease_expires is None or owner_lease_expires >= current
     )
+    supervisor_incident = (
+        supervisor_state.get("incident")
+        if isinstance(supervisor_state, dict)
+        else None
+    )
+    supervisor_owner = (
+        supervisor_incident.get("owner")
+        if isinstance(supervisor_incident, dict)
+        else None
+    )
+    supervisor_lease_expires = (
+        parse_timestamp(supervisor_owner.get("lease_expires_at"))
+        if isinstance(supervisor_owner, dict)
+        else None
+    )
     active_repair = (
-        isinstance(dispatch_state, dict)
-        and str(dispatch_state.get("work_kind", "")) == "repair"
-        and str(dispatch_state.get("status", ""))
+        isinstance(supervisor_incident, dict)
+        and str(supervisor_incident.get("status", ""))
         in ACTIVE_REPAIR_STATUSES
+        and isinstance(supervisor_owner, dict)
+        and bool(str(supervisor_owner.get("claim_token", "")))
+        and supervisor_lease_expires is not None
+        and supervisor_lease_expires >= current
     )
     healthy = 0 <= age_seconds <= max_age_seconds
     status = (
@@ -1067,11 +1085,24 @@ def check_contract(
         )
     max_queue_age = int(runtime.get("max_queue_age_seconds", 0))
     if max_queue_age > 0 and isinstance(events, list):
+        supervisor_state: dict[str, Any] = {}
+        supervisor_state_value = str(
+            config.get("autopilot_supervisor_state_file", "")
+        ).strip()
+        if supervisor_state_value:
+            supervisor_state_path = resolve_project_path(
+                root,
+                supervisor_state_value,
+            )
+            try:
+                supervisor_state = read_json(supervisor_state_path)
+            except (OSError, ValueError, TypeError, AttributeError):
+                supervisor_state = {}
         checks.append(
             queue_latency_check(
                 events=events,
                 owner=owner,
-                dispatch_state=dispatch_state,
+                supervisor_state=supervisor_state,
                 max_age_seconds=max_queue_age,
             )
         )
