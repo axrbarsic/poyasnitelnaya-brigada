@@ -33,21 +33,17 @@ an X reply.
    resource-deferred queues use no model and create no Codex task.
 10. A ready gate checks Codex Desktop. If Desktop is absent, the supervisor
    launches it in the canonical repository and records the exact PID it owns.
-11. One existing in-app Luna Low heartbeat calls one deterministic
-    `relay-reserve-handoff`. Python selects either repair or X, creates at most
-    one reservation, and returns one unambiguous `dispatch` plus `route`.
-    The relay then sends one direct `send_message_to_thread` follow-up to the
-    dedicated Sol Max service worker without reading owner status. The exact
-    thread, model, and thinking values come from the versioned contract, and no
-    process-local `hostId` is sent. Codex queues or steers the follow-up when a
-    turn is active.
-    If delivery fails, the relay runs `release-handoff` with its exact
-    reservation token and exits. The durable queue remains pending. Atomic
-    reservation and the global owner claim prevent adjacent heartbeat ticks
-    from creating concurrent Browser owners.
-12. The dedicated service worker executes the atomic claim inside Codex Desktop and remains
-    the only authenticated Browser publication owner. After the queue is empty,
-    the supervisor may close only the exact Desktop PID that it launched.
+11. One existing in-app heartbeat is attached directly to the dedicated Sol
+    Max service worker and calls one deterministic `relay-reserve-handoff`.
+    Python selects repair, inbound X, or idle-only outbound, creates at most one
+    reservation, and returns one unambiguous `dispatch` plus `route`. The same
+    task executes the corresponding claim. There is no cross-thread message,
+    relay task, or process-local `hostId` dependency. Codex serializes a new
+    heartbeat behind any active owner turn.
+12. The service worker remains the only authenticated Browser publication
+    owner. Atomic reservation and the global owner claim prevent adjacent
+    heartbeat ticks from creating concurrent Browser owners. After the queue
+    is empty, the supervisor may close only the exact Desktop PID it launched.
 13. A separate one-minute watchdog checks poll freshness and failure count.
 14. Sol Max opens the complete live X subtree, classifies text and media in
     context, and resolves an event only after publication, exact proof of an
@@ -93,7 +89,7 @@ an X reply.
     applies a bounded first lookback, and reuses immutable event ID
     deduplication. X bills read endpoints per returned resource and normally
     deduplicates the same resource within one UTC day.
-23. Scheduled outbound reuses the existing one-minute `x-relay`; standalone
+23. Scheduled outbound reuses the existing one-minute self-owned `x-relay`; standalone
     cron `x-15` remains paused. After repair and inbound routing, the relay may
     atomically reserve one outbound attempt for the current 10-minute window
     only when the inbound queue is exactly empty and both writer leases are
@@ -137,7 +133,7 @@ injects the known target ID into the queue or automation prompt.
 4. Run target-agnostic `mandatory-response-requeue` with one fixed lookback and
    `as-of`, first dry-run and then apply.
 5. Let the model-free dispatcher rediscover the event, launch Desktop when
-   needed, and let the existing in-app Luna relay wake the dedicated Sol owner.
+   needed, and let the existing Sol owner heartbeat claim it directly.
 6. Verify one live direct Alex child, exact history, durable resolution, empty
    queue and no active lease.
 
@@ -285,7 +281,7 @@ contradiction claim, or factual conclusion.
 Polling, deduplication, queueing, health checks, lease checks, notifications,
 CLI update checks, and every terminal idle gate use no model calls. In normal
 unattended idle, supervisor-owned Desktop is closed, so the in-app heartbeat
-does not run either. A ready queue spends one short Luna Low turn on the
-cross-thread relay. Sol Max receives a turn only for real queued events. If
-Alex intentionally keeps Desktop open, the in-app heartbeat still performs its
-small scheduled Luna gate while the terminal dispatcher remains model-free.
+does not run either. A ready queue starts the existing Sol Max owner directly,
+without a second model turn for transport. If Alex intentionally keeps Desktop
+open, the self-owned heartbeat performs its small scheduled gate while the
+terminal dispatcher remains model-free.

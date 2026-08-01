@@ -53,9 +53,10 @@
       "pin_recommended": false
     },
     "heartbeat_relay": {
-      "id": "019f9d46-67b0-72c1-aca6-406af579d5fa",
-      "model": "gpt-5.6-luna",
-      "reasoning_effort": "low",
+      "id": "019fbb76-1692-7cd3-a474-1f12d7971d6e",
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "max",
+      "cwd": "/Users/alexlane/Developer/x-mention-watcher",
       "must_be_unarchived": true
     }
   },
@@ -65,7 +66,7 @@
       "kind": "heartbeat",
       "status": "ACTIVE",
       "rrule": "FREQ=MINUTELY;INTERVAL=1",
-      "target_thread_id": "019f9d46-67b0-72c1-aca6-406af579d5fa",
+      "target_thread_id": "019fbb76-1692-7cd3-a474-1f12d7971d6e",
       "prompt_source": "macos/x-relay.prompt.txt"
     },
     "outbound_local_skill": {

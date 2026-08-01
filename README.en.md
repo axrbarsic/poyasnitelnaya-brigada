@@ -11,20 +11,13 @@
 Reliable X reply autopilot with token-free detection, durable conversation
 memory, Sol Max local-skill reasoning, and verified Browser publication.
 
-<p align="center">
-  <img src="docs/assets/system-flow-en.png"
-       alt="Poyasnitelnaya Brigada system flow"
-       width="430">
-</p>
-
-> Deployment status on 2026-07-31: the inbound terminal-first path runs through
-> a Luna Low relay and one persistent Sol Max Browser owner. The explainer route
+> Deployment status on 2026-08-01: the inbound terminal-first path runs through
+> the self-owned heartbeat of one persistent Sol Max Browser owner. The explainer route
 > moved from the custom GPT to a local versioned skill. Generation no longer
 > opens ChatGPT and instead uses Sol Max, exact SQLite history, and a
 > deterministic 4000 Unicode code-point upper bound with no length padding.
-> Scheduled outbound belongs to the standalone local `x-15` cron instead of a
-> heartbeat attached to the busy owner task. It is intentionally paused until
-> the inbound queue is clear and Alex explicitly resumes outbound search.
+> Scheduled outbound reuses that heartbeat only when the inbound queue is empty
+> and the writer is idle. The standalone local `x-15` cron remains paused.
 
 ## License and attribution
 
@@ -55,13 +48,10 @@ content decisions:
 - Only a ready queue checks Codex Desktop. The terminal supervisor starts the
   canonical workspace when Desktop is closed. Launch failure keeps every event
   pending and raises a throttled local alert.
-- One existing in-app Luna Low heartbeat calls `reserve-handoff`. Python first
-  checks the canonical owner's durable rollout and requires its latest turn to
-  be terminal plus a one-minute quiet period. The relay then sends one direct
-  follow-up without a separate live status read. Codex queues or steers the
-  follow-up if a turn starts during delivery. A delivery failure releases the
-  exact reservation with `release-handoff`, so the queue waits instead of
-  creating a parallel branch. A TTL reservation and global owner claim block
+- One existing in-app heartbeat is attached directly to the Sol Max owner and
+  calls `reserve-handoff`. Python selects one durable route, then the same task
+  executes the matching claim. There is no cross-thread send, relay task, or
+  process-local host dependency. A TTL reservation and global owner claim block
   adjacent heartbeat runs from creating concurrent Browser owners.
 - A model-free LaunchAgent archives completed service runs and recovers stale
   owner claims without creating another Codex task.
@@ -119,7 +109,7 @@ independent cursors. The watcher stores immutable event IDs in SQLite, writes a
 durable pending queue, and maintains a health file. A token-free supervisor
 detects stale polling and contract failures. It performs one allowlisted poll
 kickstart, then creates one deduplicated durable incident for the existing Sol
-High owner if the failure persists. The official X API still requires an X API
+Max owner if the failure persists. The official X API still requires an X API
 Bearer Token.
 
 It does not:
@@ -131,13 +121,11 @@ It does not:
 
 When Alex explicitly grants standing autopilot authority, a model-free
 LaunchAgent checks the durable queue. Only a ready queue starts Desktop when
-needed. One existing in-app Luna Low heartbeat sends a reserved wake to the
-persistent Sol Max Browser owner through the Codex app thread API after the
-durable terminal and quiet-period gate. Mobile Remote, local Desktop, and the
-automated Browser owner use one durable thread. If another turn starts during
-delivery, Codex queues or steers the follow-up, while the global owner claim
-still serializes publication. Sol remains the only publication brain, and the
-local explainer route always runs with Max reasoning.
+needed. One existing in-app heartbeat belongs to the persistent Sol Max Browser
+owner. It reserves and claims work in the same durable task. Mobile Remote,
+local Desktop, and the automated Browser owner use that thread in order, while
+the global owner claim serializes publication. Sol remains the only publication
+brain, and the local explainer route always runs with Max reasoning.
 
 With `mandatory_response_mode=true`, every eligible available event inside the
 requested lookback receives exactly one reply. Support, sarcasm, jokes, insults,
@@ -174,7 +162,7 @@ post or official X API record is append-only verified.
 
 Polling, supervisor, janitor, and event dispatcher LaunchAgents run every minute
 for `@axrbarsic`. The dispatcher checks the compact queue without a model and
-starts Luna only for ready work. A complete initial
+starts the existing Sol owner only for ready work. A complete initial
 review remains a separate gate and must finish before an empty incremental
 queue is treated as proof of completeness.
 
@@ -415,8 +403,8 @@ python3 scripts/autopilot_bridge.py \
   claim
 ```
 
-If `dispatch` is true, the ready-only Luna relay sends the prompt to the pinned
-Sol Max owner. The owner claims and marks the work as started:
+If `dispatch` is true, the self-owned Sol Max heartbeat claims and marks the
+work as started:
 
 ```bash
 python3 scripts/autopilot_bridge.py \
@@ -574,7 +562,7 @@ python3 xmention_watcher.py --config config.json mandatory-response-requeue \
 
 This command is also the clean-experiment entry point after an eligibility fix.
 Run dry-run and apply with one identical `as-of`, then let the model-free
-dispatcher launch the relay and the pinned Sol owner. Do not manually inject
+dispatcher launch the existing Sol owner heartbeat. Do not manually inject
 the known ID. The reusable diagnostic contract is stored in
 [`reliability-debugging.md`](skill-backup/x-twitter-operator/references/reliability-debugging.md).
 
@@ -657,7 +645,7 @@ python3 scripts/autopilot_supervisor.py \
 
 The supervisor remains silent while healthy. A stale or failing poll receives
 one allowlisted LaunchAgent kickstart. A persistent or nonrepairable failure
-becomes one durable incident. Dispatcher and the existing Luna relay deliver
+becomes one durable incident. Dispatcher and the self-owned heartbeat expose
 that incident to the existing Sol Max owner. Reservation, claim, cooldown,
 and a required completion report prevent duplicate wakes and false success.
 
@@ -713,8 +701,8 @@ and applies the correction atomically, so append-only history remains intact.
 The `macos/` directory contains five LaunchAgent templates whose intervals come
 from `config.json`: poll, supervisor, session janitor, event dispatcher, and
 Codex CLI updater. The idle terminal path is entirely model-free. A ready queue
-starts Codex Desktop when needed, then the existing in-app Luna relay wakes the
-pinned Sol Max Browser owner. The janitor archives historical service tasks
+starts Codex Desktop when needed, then the existing Sol Max heartbeat claims
+the route. The janitor archives historical service tasks
 and recovers orphaned claims without creating a Codex task or spending model
 tokens.
 

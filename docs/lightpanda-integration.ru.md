@@ -14,7 +14,7 @@ Lightpanda полезна проекту, но не заменяет текущ�
   Markdown, accessibility tree и воспроизводимых PandaScript canary.
 - Она не заменяет официальный X API, потому что API обнаруживает новые
   упоминания и дает стабильные event ID.
-- Она не заменяет Luna relay, потому что relay будит существующую задачу Codex.
+- Она не заменяет self-owned heartbeat, потому что он запускает owner workflow внутри Codex.
 - Она не заменяет Sol Max, потому что финальная оценка контекста и авторство
   ответа остаются модельной задачей.
 - Она не заменяет встроенный Browser, потому что X блокирует Lightpanda через
@@ -27,7 +27,7 @@ evidence, а не как нового owner.
 ```mermaid
 flowchart LR
     API["Официальный X API watcher"] --> Q["SQLite и durable queue"]
-    Q --> L["Luna relay"]
+    Q --> L["Sol Max self-owned heartbeat"]
     L --> S["Sol Max Browser owner"]
     S --> LP["Фильтрованный Lightpanda MCP"]
     LP --> R{"Результат"}
@@ -265,7 +265,7 @@ terminal CLI.
 | X API watcher | Моментально и детерминированно обнаруживает event ID |
 | SQLite queue | Дает durable state и дедупликацию |
 | Event kick и минутный fallback | Не теряют событие при сбое одного wake path |
-| Luna relay | Экономно будит существующую Sol задачу |
+| Self-owned heartbeat | Запускает существующую Sol задачу без межсессионной отправки |
 | Global owner lease | Не допускает двух публикаций |
 | Sol Max | Понимает живой контекст и пишет ответ |
 | Встроенный Browser | Единственный авторизованный X owner |

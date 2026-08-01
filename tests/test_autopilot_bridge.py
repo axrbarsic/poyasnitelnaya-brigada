@@ -331,27 +331,43 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertTrue(result["dispatch"])
         self.assertEqual(result["status"], "handoff_reserved_ready")
 
-    def test_relay_prompt_uses_direct_followup_without_live_read(self) -> None:
+    def test_relay_prompt_runs_owner_in_same_heartbeat(self) -> None:
         prompt = (
             Path(__file__).resolve().parents[1]
             / "macos"
             / "x-relay.prompt.txt"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("codex_app__send_message_to_thread", prompt)
-        self.assertIn("tools.codex_app__send_message_to_thread", prompt)
-        self.assertIn("Не используй `tool_search`", prompt)
-        self.assertIn("один `functions.exec`", prompt)
-        self.assertIn("точный переданный `threadId`", prompt)
-        self.assertIn("Не используй старое имя", prompt)
-        self.assertIn("Не читай owner thread", prompt)
-        self.assertIn("owner_thread_id, owner_model и owner_thinking", prompt)
-        self.assertIn("Не передавай hostId", prompt)
-        self.assertIn("Не используй зашитый ID сессии или модели", prompt)
-        self.assertNotIn("hostId `local`", prompt)
-        self.assertNotIn("model `gpt-5.6-sol`", prompt)
-        self.assertNotIn("codex_app.read_thread", prompt)
-        self.assertNotIn("owner_thread_not_idle", prompt)
+        self.assertIn("self-owned heartbeat", prompt)
+        self.assertIn("relay-reserve-handoff", prompt)
+        self.assertIn("route=repair", prompt)
+        self.assertIn("route=x", prompt)
+        self.assertIn("route=outbound", prompt)
+        self.assertIn("started с точным claim-token", prompt)
+        self.assertIn("renew с точным claim-token", prompt)
+        self.assertIn("Не вызывай send_message_to_thread", prompt)
+        self.assertIn("Не запускай второй reservation gate", prompt)
+        self.assertNotIn("codex_app__send_message_to_thread", prompt)
+        self.assertNotIn("tools.codex_app__send_message_to_thread", prompt)
+        self.assertNotIn("tool_search", prompt)
+
+    def test_relay_contract_targets_browser_owner_task(self) -> None:
+        contract = json.loads(
+            (
+                Path(__file__).resolve().parents[1]
+                / "recovery"
+                / "system-contract.json"
+            ).read_text(encoding="utf-8")
+        )
+        owner = contract["threads"]["browser_owner"]
+        relay = contract["threads"]["heartbeat_relay"]
+        automation = contract["automations"]["active_relay"]
+
+        self.assertEqual(relay["id"], owner["id"])
+        self.assertEqual(relay["model"], owner["model"])
+        self.assertEqual(relay["reasoning_effort"], "max")
+        self.assertEqual(relay["cwd"], owner["cwd"])
+        self.assertEqual(automation["target_thread_id"], owner["id"])
 
     def test_owner_claim_is_not_blocked_by_its_own_active_turn(self) -> None:
         self.write_events([self.event()])

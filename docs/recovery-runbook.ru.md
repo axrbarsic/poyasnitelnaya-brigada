@@ -29,7 +29,7 @@ automation, LaunchAgent, SQLite или Keychain. Он сверяет:
 
 - канонический каталог и Git origin;
 - обязательные файлы каркаса;
-- главную Sol Max сессию и Luna Low relay;
+- единственную Sol Max owner-сессию с self-owned heartbeat;
 - архивный флаг, модель, минимальный effort и рабочий каталог ролей;
 - официальный heartbeat `x-relay`, paused cron marker `x-15` и остальные
   retired automations;
@@ -89,7 +89,7 @@ poll это один `launchctl kickstart`. Биллинговый `HTTP 402` я
 неоднозначному ресурсу, создается один durable incident.
 
 Dispatcher видит incident без модели, поднимает Codex Desktop штатным путем, а
-существующая Luna relay-сессия передает его выделенному Sol Max service worker.
+self-owned heartbeat существующего Sol Max worker выполняет repair claim.
 Одинаковый fingerprint не создает повторные incident каждую минуту.
 Reservation, claim token, started, completed и failed защищают ремонт от двух
 одновременных владельцев. `completed` для настоящей аварии принимается только
@@ -110,7 +110,7 @@ python3 scripts/autopilot_supervisor.py --config config.json status
 python3 scripts/autopilot_supervisor.py --config config.json canary
 ```
 
-Canary проверяет реальный dispatcher, Luna handoff и Sol claim, но не считается
+Canary проверяет реальный dispatcher, self-owned heartbeat и Sol claim, но не считается
 проверкой X watcher. Финальный X canary всегда слепой: watcher сам обнаруживает
 органический неотвеченный event, без передачи модели ID, ссылки, ручного
 добавления в очередь или заранее созданного resolution.
@@ -120,7 +120,7 @@ Canary проверяет реальный dispatcher, Luna handoff и Sol claim
 - Token-free self-repair обнаружил искусственно состаренный poll health,
   выполнил ровно один allowlisted kickstart и сам закрыл incident после
   восстановления poll.
-- Repair handoff прошел через production dispatcher, Luna relay, claim,
+- Repair handoff прошел через production dispatcher, self-owned heartbeat, claim,
   started, doctor с нулем FAIL и completed с обязательным отчетом.
 - Отдельный production canary намеренно протухшего owner lease вернул тот же
   incident в `escalation_pending`, выдал новый claim и завершился при FAIL 0.

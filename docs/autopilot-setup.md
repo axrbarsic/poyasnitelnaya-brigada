@@ -16,12 +16,10 @@ The system separates token-free mechanics from content decisions:
    a new Codex task.
 5. A ready queue starts Codex Desktop in the canonical workspace when the app
    is closed. Failure keeps the queue intact, retries later, and alerts Alex.
-6. One existing in-app Luna Low heartbeat checks a durable repair incident
-   before the X queue and runs the matching `reserve-handoff`. It atomically
-   reserves one route and immediately makes exactly one direct
-   `send_message_to_thread` call. Codex queues or steers the follow-up if a
-   turn is active.
-7. The pinned Sol Max task claims atomically, restores the live thread,
+6. One existing in-app heartbeat is attached directly to the Sol Max owner.
+   It checks a durable repair incident, the X queue, and idle-only outbound,
+   then runs one `reserve-handoff` and the matching claim in the same task.
+7. The Sol Max task restores the live thread,
    publishes, and stores exact history.
 8. The supervisor may later stop only a Desktop process it launched itself.
 
@@ -29,8 +27,8 @@ The external app-server performs neither relay nor Browser work. It has no
 Codex Desktop built-in Browser session or desktop-only cross-thread tools. The
 authenticated Browser always belongs to the persistent in-app owner.
 
-> Current deployment status, 2026-07-30: the persistent Sol Max owner and Luna
-> Low relay pass doctor with zero failures. The explainer route now runs as a
+> Current deployment status, 2026-08-01: the persistent Sol Max owner and its
+> self-owned heartbeat pass doctor with zero failures. The explainer route runs as a
 > local skill without ChatGPT, uses exact durable history, and validates one
 > non-empty reply capped at 4000 Unicode code points without length padding.
 >
@@ -54,14 +52,14 @@ Official architecture references:
 | Supervisor LaunchAgent | 1 minute | none | Doctor, repair allowlist, durable incident |
 | Session janitor LaunchAgent | 1 minute | none | Archive service tasks, recover claims |
 | Event dispatcher LaunchAgent | 1 minute | none while idle | Gate, Desktop launch, managed shutdown |
-| In-app relay heartbeat | while Desktop is open | Luna Low | Reservation and one owner message |
-| Pinned Browser owner | per event | Sol Max | Claim, Browser, sources, publication |
+| Self-owned heartbeat | while Desktop is open | Sol Max | Reservation and claim in the same task |
+| Browser owner | per event | Sol Max | Browser, sources, publication |
 | Local explainer skill | local-max only | Sol Max | Reply capped at 4000 points, history, sources |
 | Codex CLI updater | 6 hours | none without update | Version, SHA-256, doctor, history |
 
 Idle terminal monitoring spends zero model tokens and creates no task. The
-normal unattended state keeps Desktop closed. A real event starts it and uses
-one short Luna relay turn. A supervisor-managed Desktop closes after the queue
+normal unattended state keeps Desktop closed. A real event starts the existing
+owner directly. A supervisor-managed Desktop closes after the queue
 and owner lease clear. A Desktop opened by Alex is never closed automatically.
 
 ## Configuration
@@ -119,16 +117,12 @@ resources, and has a separate read budget. Exhausting the tail budget does not
 stop owned mentions. Inspect counters with
 `python3 xmention_watcher.py --config config.json status`.
 
-`browser_owner_thread_id` identifies one pinned Sol Max owner. `x-relay` is a
-heartbeat attached to one existing Luna Low thread, not a standalone
-automation. `reserve-handoff` does not claim X events, but prevents duplicate
-wake delivery for 180 seconds. The relay does not read the owner thread as a
-delivery gate. It immediately sends exactly one direct follow-up to the pinned
-thread, and Codex queues or steers that follow-up when a turn is already
-active. On a delivery failure, it runs `release-handoff` with the exact
-reservation token. A successful owner claim changes the reservation to
-`claimed`. Atomic reservation plus the global owner claim prevent concurrent
-Browser owners. The restorable heartbeat prompt is tracked in
+`browser_owner_thread_id` identifies one Sol Max owner. `x-relay` is a
+heartbeat attached to that same task, not a standalone automation or a relay
+thread. `reserve-handoff` prevents an adjacent run for 180 seconds, then the
+same task executes the matching claim. There is no cross-thread send, owner
+thread read, or process-local `hostId` dependency. Atomic reservation plus the
+global owner claim prevent concurrent Browser owners. The restorable heartbeat prompt is tracked in
 [`macos/x-relay.prompt.txt`](../macos/x-relay.prompt.txt).
 
 A reply posted manually by Alex is an `alex` turn. If somebody answers it, the
@@ -184,16 +178,14 @@ dispatcher, then delete it through the official `automation_update` API.
    without app-server.
 4. On `ready`, the supervisor starts `codex app CANONICAL_ROOT` if Desktop is
    absent.
-5. The in-app heartbeat runs one `relay-reserve-handoff`. Python selects
+5. The self-owned heartbeat runs one `relay-reserve-handoff`. Python selects
    repair or X, creates at most one reservation, and returns one `dispatch`
    with an exact `route`.
-6. The winning relay sends one direct message with a Sol Max override. It does
-   not perform a separate live owner-thread read. Codex queues or steers the
-   follow-up if the owner turn is active.
-7. If delivery fails, the relay runs `release-handoff` with its exact
-   reservation token and exits. The queue remains pending. An adjacent
-   heartbeat receives `handoff_reserved`, and the global owner claim prevents
-   concurrent Browser owners.
+6. The same Sol Max task executes the matching claim. If claim startup fails,
+   it runs `release-handoff` with the exact reservation token. The queue
+   remains pending.
+7. An adjacent heartbeat receives `handoff_reserved`, and the global owner
+   claim prevents concurrent Browser owners.
 8. The Browser owner runs `claim`, then `started`.
 9. The owner loads `x-twitter-operator`, opens the minimum tabs, performs double
    dedupe, and executes the publication transaction.

@@ -1,5 +1,9 @@
 # Deployment checklist
 
+> Historical note: cross-thread Luna relay checks below describe the retired
+> transport. Production now uses the self-owned Sol Max heartbeat documented in
+> `docs/architecture.md` and `macos/x-relay.prompt.txt`.
+
 ## Gate 1: local validation
 
 - [x] Python compile succeeds.

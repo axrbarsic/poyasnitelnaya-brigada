@@ -14,14 +14,8 @@
 индикатора непрочитанных уведомлений X, защищается от дублей и передает сильной
 модели только реальные события.
 
-<p align="center">
-  <img src="docs/assets/system-flow-ru.png"
-       alt="Схема работы Пояснительной бригады"
-       width="430">
-</p>
-
 > Статус deployment на 2026-08-01: входящий terminal-first контур работает
-> через Luna Low relay и выделенный Sol Max service worker. Маршрут
+> через self-owned heartbeat единственного Sol Max service worker. Маршрут
 > «Пояснительной бригады» перенесен из custom GPT в локальный versioned skill.
 > Генерация больше не открывает ChatGPT, использует Sol Max, точную SQLite
 > history и детерминированный верхний предел 4000 Unicode code points без
@@ -60,14 +54,12 @@
 7. Только готовая очередь проверяет Codex Desktop. Если приложение закрыто,
    terminal supervisor запускает его в каноническом workspace. Ошибка запуска
    не снимает событие с очереди и вызывает локальное уведомление.
-8. Один существующий in-app heartbeat на Luna Low вызывает `reserve-handoff`.
-   Python атомарно резервирует единственный handoff. Затем relay отправляет
-   ровно один direct follow-up в service worker без чтения его статуса. Точный
-   thread, model и thinking приходят из versioned contract, `hostId` не
-   передаётся. Codex ставит follow-up в очередь или направляет его в активный
-   turn. Ошибка доставки освобождает точную reservation командой
-   `release-handoff`. Reservation с TTL и глобальный owner claim не позволяют
-   двум heartbeat создать двух Browser-owner.
+8. Один существующий in-app heartbeat прикреплён прямо к Sol Max service
+   worker и вызывает `reserve-handoff`. Python атомарно резервирует один
+   маршрут, после чего эта же сессия выполняет claim. Межсессионной отправки,
+   отдельного relay thread и нестабильного `hostId` больше нет. Reservation с
+   TTL и глобальный owner claim не позволяют соседним heartbeat создать двух
+   Browser-owner.
 9. Sol Max открывает живую ветку X, анализирует текст и изображения, проверяет
    первичные источники, историю диалога и отсутствие дубля.
 10. Короткий ответ пишет Sol. Маршрут «Пояснительной бригады» выполняется
@@ -100,7 +92,8 @@ Watcher и dispatcher сами никогда ничего не публикую
   нового ответа. Минутный интервал остаётся независимым fallback.
 - Пустой terminal цикл не использует модель и расходует ноль токенов. В
   штатном unattended режиме Desktop закрыт; при готовой очереди он запускается,
-  Luna Low выполняет короткий relay, а после работы managed Desktop закрывается.
+  self-owned Sol Max heartbeat делает claim, а после работы managed Desktop
+  закрывается.
 - Ручное открытие уведомлений X не ломает обнаружение, потому что watcher
   использует ID статусов API, а не синий индикатор интерфейса.
 - Ручной ответ Alex считается обычным ходом `alex`. Если собеседник продолжит
@@ -129,7 +122,7 @@ Watcher и dispatcher сами никогда ничего не публикую
 - Безмодельный supervisor раз в минуту запускает системный doctor. Зеленое
   состояние никого не будит. Stale poll получает один allowlisted
   `launchctl kickstart`; повторный провал создает один durable incident и
-  передает его существующей Sol Max owner-сессии через тот же Luna relay.
+  передает его self-owned heartbeat существующей Sol Max owner-сессии.
 - `HTTP 402 Payment Required` никогда не получает `kickstart`. Supervisor один
   раз выгружает poll LaunchAgent, фиксирует `external_action_required` и не
   создаёт повторные модельные пробуждения. Уже накопленная X очередь при этом
@@ -137,13 +130,12 @@ Watcher и dispatcher сами никогда ничего не публикую
   загружает poll LaunchAgent и подтверждает один успешный live poll.
 - Repair incident имеет reservation, claim token, cooldown и обязательный
   отчет. Одинаковая поломка не создает минутный шторм модельных пробуждений.
-- Событийный relay использует одну существующую heartbeat-сессию и один
-  выделенный service worker. Новая сессия на цикл не создается.
-- Relay никогда не будит активную owner-сессию. Mobile Remote, локальный Desktop
-  и автоматический Browser owner используют один durable thread по очереди.
-  Проверка состояния и отправка не являются одной атомарной операцией Codex,
-  поэтому интерактивные сообщения с двух экранов также отправляются
-  последовательно.
+- Событийный relay является heartbeat самого выделенного service worker.
+  Новая или промежуточная сессия на цикл не создается.
+- Heartbeat не отправляет сообщения в другую задачу. Codex сериализует его с
+  активным owner turn, а reservation и claim закрывают гонки соседних запусков.
+  Mobile Remote, локальный Desktop и автоматический Browser owner используют
+  один durable thread по очереди.
 - Doctor handoff также ждёт завершения активного X claim. Повторная проверка
   owner после repair reservation освобождает только repair token, если X успел
   выиграть гонку старта.
@@ -226,8 +218,8 @@ python3 xmention_watcher.py --config config.json status
 Причины и дальнейшая webhook-миграция описаны в
 [`docs/x-api-cost-control.ru.md`](docs/x-api-cost-control.ru.md).
 
-После этого установите пять LaunchAgent, один in-app Luna relay heartbeat и
-один выделенный Sol Max service worker по
+После этого установите пять LaunchAgent и один выделенный Sol Max service
+worker с self-owned heartbeat по
 [русскому руководству автопилота](docs/autopilot-setup.ru.md),
 [контракту локального skill](docs/local-explainer-skill.ru.md) и
 [deployment checklist](docs/deployment-checklist.md). Для iMac с 8 ГБ отдельно
@@ -258,7 +250,7 @@ python3 xmention_watcher.py --config config.json status
 - Параллельная подготовка фактов и черновиков допустима, но X Browser,
   публикация, верификация и durable resolve всегда принадлежат одному owner и
   выполняются последовательно.
-- Автоматика `x-15` остаётся на паузе. Существующий `x-relay` автоматически
+- Автоматика `x-15` остаётся на паузе. Self-owned `x-relay` автоматически
   разрешает одну outbound-попытку в текущем 10-минутном окне только при нулевой
   входящей очереди и свободном writer. Любое новое входящее событие отменяет
   outbound до публикации, а пропущенные окна не накапливаются.
@@ -450,8 +442,8 @@ python3 xmention_watcher.py --config config.json mandatory-response-requeue \
 
 Эта же команда используется для чистого эксперимента после исправления слабого
 звена. Dry-run и apply получают один и тот же `as-of`, после чего безмодельный
-dispatcher при необходимости запускает Desktop, а существующий in-app Luna
-relay будит Sol owner. Известный event ID нельзя вручную подставлять в очередь
+dispatcher при необходимости запускает Desktop, а self-owned heartbeat Sol
+owner делает claim. Известный event ID нельзя вручную подставлять в очередь
 или prompt. Полный переносимый протокол находится в
 [`reliability-debugging.md`](skill-backup/x-twitter-operator/references/reliability-debugging.md).
 

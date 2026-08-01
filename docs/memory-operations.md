@@ -19,8 +19,8 @@ Codex automation is therefore retired.
 2. An idle cycle spends zero model tokens, creates no task, and starts no
    Desktop or Browser.
 3. A ready queue launches Codex Desktop only when it is absent.
-4. One existing in-app Luna Low heartbeat atomically reserves the handoff and
-   sends exactly one message to the pinned Sol Max owner.
+4. One existing Sol Max owner heartbeat atomically reserves the handoff and
+   executes the matching claim in the same task.
 5. An adjacent heartbeat cannot hand off the same queue again.
 6. The Browser owner claims atomically and remains the sole owner.
 7. A bounded claim uses at most three task-owned X tabs for independent
@@ -89,11 +89,11 @@ The new idle path:
 | Session janitor | 0 | 0 | no |
 | Idle dispatcher | 0 | 0 | no |
 
-In normal unattended idle, supervisor-owned Desktop is closed and Luna Low does
-not run. A ready queue gets one short Luna relay. If Alex intentionally keeps
-Desktop open, the in-app heartbeat continues its small scheduled Luna gate.
-Sol Max cost follows the number and complexity of real replies instead of
-elapsed monitoring time.
+In normal unattended idle, supervisor-owned Desktop is closed and the heartbeat
+does not run. A ready queue starts the existing Sol Max owner directly, without
+a second model turn for transport. If Alex intentionally keeps Desktop open,
+the self-owned heartbeat continues its small scheduled gate. Substantive Sol
+Max cost follows the number and complexity of real replies.
 
 ## Archiving
 
@@ -120,7 +120,7 @@ app-server and never depends on heuristically killing unrelated processes.
 2. Run an idle dispatcher cycle and confirm zero new tasks.
 3. Compare helper PID and RSS before and after idle, with no growth.
 4. Wait for one real X event.
-5. Confirm one Luna relay and one Sol Max owner turn.
+5. Confirm one self-owned Sol Max heartbeat and owner turn.
 6. Verify the X URL, exact history, and durable resolution.
 7. Confirm the original event leaves the queue.
 8. Confirm an adjacent heartbeat is blocked by the reservation.

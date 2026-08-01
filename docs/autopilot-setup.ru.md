@@ -17,12 +17,11 @@
 5. Готовая очередь запускает Codex Desktop в каноническом workspace, если
    приложение закрыто. При неудаче очередь сохраняется, запуск повторяется, а
    Alex получает локальное уведомление.
-6. Одна существующая in-app heartbeat-сессия на Luna Low выполняет один
-   `relay-reserve-handoff`. Python сам проверяет durable repair incident, затем
-   X queue и атомарно резервирует единственный маршрут. Luna сразу делает один
-   direct `send_message_to_thread`. Codex ставит follow-up в очередь или
-   направляет его в активный turn.
-7. Закрепленная сессия Sol Max атомарно делает `claim`, восстанавливает живую
+6. Один существующий in-app heartbeat закреплён прямо за Sol Max owner и
+   выполняет один `relay-reserve-handoff`. Python сам проверяет durable repair
+   incident, X queue и idle-only outbound, затем атомарно резервирует один
+   маршрут. Эта же сессия делает claim, без межсессионной отправки.
+7. Сессия Sol Max восстанавливает живую
    ветку, публикует и сохраняет точную историю.
 8. После завершения supervisor может закрыть только тот Desktop, который
    запустил сам. Пользовательский Desktop он не закрывает.
@@ -31,8 +30,8 @@
 встроенной Browser-сессии Codex Desktop и desktop-only cross-thread tools.
 Browser всегда принадлежит постоянной owner-сессии внутри приложения.
 
-> Текущее состояние deployment на 2026-07-30: постоянный Sol Max owner и Luna
-> Low relay проходят doctor без FAIL. Маршрут «Пояснительной бригады»
+> Текущее состояние deployment на 2026-08-01: постоянный Sol Max owner и его
+> self-owned heartbeat проходят doctor без FAIL. Маршрут «Пояснительной бригады»
 > выполняется локальным skill без ChatGPT, использует exact durable history и
 > проверяет непустой ответ не длиннее 4000 Unicode code points без искусственного
 > увеличения текста.
@@ -57,16 +56,16 @@ Browser всегда принадлежит постоянной owner-сесс�
 | Supervisor LaunchAgent | 1 минута | нет | Doctor, allowlist ремонта, durable incident |
 | Session janitor LaunchAgent | 1 минута | нет | Архив служебных задач, recovery claim |
 | Event dispatcher LaunchAgent | 1 минута | нет при idle | Gate, запуск и managed shutdown Desktop |
-| In-app relay heartbeat | пока Desktop открыт | Luna Low | Reservation и одно сообщение owner |
-| Закрепленный Browser owner | по событию | Sol Max | Claim, Browser, фактчек, публикация |
+| Self-owned heartbeat | пока Desktop открыт | Sol Max | Reservation и claim в той же сессии |
+| Browser owner | по событию | Sol Max | Browser, фактчек, публикация |
 | Локальный skill «Пояснительная бригада» | только local-max | Sol Max | Не более 4000 code points, история, источники |
 | Codex CLI updater | 6 часов | нет без update | Version check, SHA-256, doctor, журнал |
 
 Пустой terminal monitoring не расходует model tokens и не создает задач.
 Штатный unattended режим держит Desktop закрытым. При событии supervisor
-поднимает его, Luna получает короткий relay-turn, а после завершения managed
-Desktop закрывается. Если Desktop открыт самим Alex, supervisor его не закрывает
-и минутный heartbeat остается минимальной ценой in-app транспорта.
+поднимает его, existing owner получает heartbeat-turn, а после завершения
+managed Desktop закрывается. Если Desktop открыт самим Alex, supervisor его не
+закрывает. Отдельного модельного turn на транспорт больше нет.
 
 ## Конфигурация
 
@@ -124,16 +123,12 @@ trust_level = "trusted"
 счетчики доступны в `python3 xmention_watcher.py --config config.json status`.
 
 `browser_owner_thread_id` принадлежит одному выделенному service worker на Sol
-Max. `x-relay` является heartbeat одной существующей Luna Low сессии, а не
-standalone automation. `reserve-handoff` не claim события, но атомарно блокирует
-повторную отправку wake на 180 секунд. Relay не читает owner thread как
-дополнительный gate. Точный thread, model и thinking возвращает versioned
-contract, а process-local `hostId` не передаётся. Relay сразу отправляет ровно
-один direct follow-up в service worker, а Codex ставит его в очередь или
-направляет в активный turn. При ошибке доставки relay выполняет
-`release-handoff` с точным reservation token. Успешный owner claim переводит
-reservation в состояние `claimed`. Atomic reservation и глобальный owner claim
-не допускают двух Browser-owner. Восстановимый prompt heartbeat хранится в
+Max. `x-relay` является heartbeat этой же сессии, а не standalone automation и
+не отдельным relay thread. `reserve-handoff` не claim события, но атомарно
+блокирует соседний запуск на 180 секунд. Та же сессия сразу выполняет
+соответствующий claim. Межсессионной отправки, чтения owner thread и зависимости
+от process-local `hostId` нет. Atomic reservation и глобальный owner claim не
+допускают двух Browser-owner. Восстановимый prompt heartbeat хранится в
 [`macos/x-relay.prompt.txt`](../macos/x-relay.prompt.txt).
 
 Repair handoff не прерывает активный X claim. Relay проверяет глобальный owner
@@ -198,16 +193,14 @@ scheduled run создает отдельную задачу и может ос�
    завершаются без app-server.
 5. При `ready` supervisor проверяет main process Codex Desktop и запускает
    `codex app CANONICAL_ROOT`, если процесс отсутствует.
-6. In-app heartbeat выполняет один `relay-reserve-handoff`. Python сам
+6. Self-owned heartbeat выполняет один `relay-reserve-handoff`. Python сам
    резервирует repair incident либо, при его отсутствии, X queue и возвращает
    единственный `dispatch` вместе с точным `route`.
-7. Победивший relay делает один direct `send_message_to_thread` с override Sol
-   Max без отдельного live-чтения owner thread. Codex ставит follow-up в
-   очередь или направляет его в активный turn.
-8. При ошибке доставки relay выполняет `release-handoff` со своим точным
-   reservation token и завершается. Очередь остается pending. Соседний
-   heartbeat получает `handoff_reserved`, а глобальный owner claim не допускает
-   двух Browser-owner.
+7. Та же Sol Max сессия выполняет соответствующий claim. Если старт claim не
+   состоялся, она делает `release-handoff` с точным reservation token. Очередь
+   остаётся pending.
+8. Соседний heartbeat получает `handoff_reserved`, а глобальный owner claim не
+   допускает двух Browser-owner.
 9. Repair owner выполняет doctor claim и started, чинит минимально и закрывает
    incident только после нулевого FAIL и отчета. X owner выполняет X claim и
    started.
@@ -268,7 +261,7 @@ renew и durable завершение.
 1. Поставьте старую X automation на паузу.
 2. Запустите один реальный unresolved event без передачи его ID модели.
 3. Подтвердите естественное обнаружение watcher.
-4. Подтвердите один relay-turn и один Sol Max owner-turn.
+4. Подтвердите один self-owned heartbeat и Sol Max owner-turn.
 5. Проверьте verified X URL, exact history и durable resolution.
 6. Проверьте, что event исчез из очереди.
 7. Выполните пустой цикл dispatcher и убедитесь, что число задач и helper

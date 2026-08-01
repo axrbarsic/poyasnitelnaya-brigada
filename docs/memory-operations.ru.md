@@ -19,8 +19,8 @@ Standalone scheduled task Codex создавал новую задачу каж�
 2. Idle цикл расходует ноль model tokens, не создает задачу и не запускает
    Desktop или Browser.
 3. Готовая очередь запускает Codex Desktop, только если он закрыт.
-4. Одна существующая in-app heartbeat-сессия на Luna Low атомарно резервирует
-   handoff и отправляет одно сообщение закрепленному Sol Max owner.
+4. Heartbeat существующей Sol Max owner-сессии атомарно резервирует handoff и
+   выполняет соответствующий claim в той же задаче.
 5. Соседний heartbeat не может передать ту же очередь повторно.
 6. Browser owner атомарно делает claim и остается единственным владельцем.
 7. Ограниченный claim использует до трёх task-owned X-вкладок для независимого
@@ -96,11 +96,12 @@ Max owner.
 | Session janitor | 0 | 0 | нет |
 | Idle dispatcher | 0 | 0 | нет |
 
-При обычном unattended idle supervisor-owned Desktop закрыт, поэтому Luna Low
-не запускается. При реальной готовой очереди Luna выполняет короткую передачу.
-Если Alex намеренно оставил Desktop открытым, in-app heartbeat продолжает свой
-маленький минутный Luna gate. Основной расход Sol Max пропорционален числу и
-сложности реальных ответов, а не времени работы мониторинга.
+При обычном unattended idle supervisor-owned Desktop закрыт, поэтому heartbeat
+не запускается. Реальная готовая очередь запускает существующий Sol Max owner
+напрямую, без второго модельного turn для транспорта. Если Alex намеренно
+оставил Desktop открытым, self-owned heartbeat продолжает небольшой минутный
+gate. Содержательный расход Sol Max пропорционален числу и сложности реальных
+ответов.
 
 ## Архивация
 
@@ -128,7 +129,7 @@ dispatcher не запускает app-server в production и никогда н
 2. Выполнить idle dispatcher и подтвердить ноль новых задач.
 3. Сравнить PID и RSS helper до и после idle цикла, роста быть не должно.
 4. Дождаться реального X event.
-5. Подтвердить один Luna relay и один Sol Max owner-turn.
+5. Подтвердить один self-owned Sol Max heartbeat и owner-turn.
 6. Подтвердить verified X URL, exact history и durable resolution.
 7. Подтвердить исчезновение заявленного ID из очереди.
 8. Проверить, что соседний heartbeat заблокирован reservation.

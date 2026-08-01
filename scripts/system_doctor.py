@@ -387,16 +387,17 @@ def relay_progress_check(
         return Check(
             "runtime.relay_progress",
             "pass",
-            "Следующая X-доставка уже запрошена после завершения claim.",
-            "Дождись relay в пределах grace; затем снова проверь очередь.",
+            "Следующий X-handoff уже запрошен после завершения claim.",
+            "Дождись self-owned heartbeat в пределах grace; затем снова "
+            "проверь очередь.",
             details,
         )
     if dispatch_status not in ACTIVE_X_DELIVERY_STATUSES:
         return Check(
             "runtime.relay_progress",
             "fail",
-            "Ожидающая очередь не передана relay.",
-            "Проверь статус dispatcher, heartbeat x-relay и direct delivery.",
+            "Ожидающая очередь не получила owner claim.",
+            "Проверь dispatcher, self-owned heartbeat x-relay и reservation.",
             details,
         )
     waiting_since = parse_timestamp(
@@ -408,7 +409,7 @@ def relay_progress_check(
         return Check(
             "runtime.relay_progress",
             "fail",
-            "Dispatcher не записал начало ожидания relay.",
+            "Dispatcher не записал начало ожидания owner heartbeat.",
             "Перезапусти штатный dispatcher и проверь waiting_since.",
             details,
         )
@@ -423,14 +424,14 @@ def relay_progress_check(
         "runtime.relay_progress",
         "pass" if healthy else "fail",
         (
-            f"Relay ожидает claim {round(age_seconds, 1)}s."
+            f"Heartbeat ожидает claim {round(age_seconds, 1)}s."
             if healthy
-            else f"Relay не создал claim за {round(age_seconds, 1)}s."
+            else f"Heartbeat не создал claim за {round(age_seconds, 1)}s."
         ),
         (
             "Дождись ближайшего минутного heartbeat."
             if healthy
-            else "Проверь heartbeat x-relay, reservation и direct delivery."
+            else "Проверь self-owned heartbeat x-relay и reservation."
         ),
         details,
     )
@@ -661,7 +662,9 @@ def queue_latency_check(
         )
     else:
         summary = "Старейшее событие превысило SLO без активного owner."
-        repair = "Проверь dispatcher, x-relay и owner routing, очередь не удаляй."
+        repair = (
+            "Проверь dispatcher, x-relay и owner claim, очередь не удаляй."
+        )
     return Check(
         "runtime.queue_latency",
         status,
