@@ -6,7 +6,7 @@ import sqlite3
 import tempfile
 import unittest
 from contextlib import closing
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
@@ -331,6 +331,20 @@ class SystemDoctorTests(unittest.TestCase):
         self.assertEqual(check.status, "pass")
         self.assertEqual(check.details["work_kind"], "repair")
 
+    def test_relay_progress_accepts_repair_waiting_gate(self) -> None:
+        check = system_doctor.relay_progress_check(
+            pending_count=2,
+            dispatch_state={
+                "status": "repair_waiting",
+                "work_kind": "x",
+            },
+            owner=None,
+            max_wait_seconds=180,
+        )
+
+        self.assertEqual(check.status, "pass")
+        self.assertEqual(check.details["dispatch_status"], "repair_waiting")
+
     def test_relay_progress_ignores_resource_deferred_queue(self) -> None:
         check = system_doctor.relay_progress_check(
             pending_count=2,
@@ -495,6 +509,65 @@ class SystemDoctorTests(unittest.TestCase):
 
         self.assertEqual(check.status, "fail")
         self.assertFalse(check.details["active_repair"])
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_contract_reads_default_supervisor_state_for_active_repair(
+        self,
+        _git_origin: mock.Mock,
+    ) -> None:
+        current = datetime.now(timezone.utc)
+        (self.root / "var" / "wake-request.json").write_text(
+            json.dumps(
+                {
+                    "pending_count": 1,
+                    "events": [
+                        {
+                            "id": "123",
+                            "first_seen_at": (
+                                current - timedelta(seconds=301)
+                            ).isoformat().replace("+00:00", "Z"),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+        (self.root / "var" / "autopilot-supervisor.json").write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "incident": {
+                        "status": "work_in_progress",
+                        "owner": {
+                            "claim_token": "repair-token",
+                            "lease_expires_at": (
+                                current + timedelta(minutes=30)
+                            ).isoformat().replace("+00:00", "Z"),
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        self.contract["runtime"]["max_queue_age_seconds"] = 300
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        check = next(
+            item
+            for item in checks
+            if item.identifier == "runtime.queue_latency"
+        )
+        self.assertEqual(check.status, "warn")
+        self.assertTrue(check.details["active_repair"])
 
     def test_queue_latency_rejects_invalid_event_shape(self) -> None:
         check = system_doctor.queue_latency_check(

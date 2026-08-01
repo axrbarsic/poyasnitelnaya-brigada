@@ -271,6 +271,14 @@ def relay_progress_check(
             "Возраст X очереди контролируется отдельным SLO.",
             details,
         )
+    if dispatch_status == "repair_waiting":
+        return Check(
+            "runtime.relay_progress",
+            "pass",
+            "Relay намеренно уступил очередь активному repair owner.",
+            "Проверь supervisor lease и runtime.queue_latency.",
+            details,
+        )
     waiting_statuses = {
         "desktop_launched_waiting_relay",
         "desktop_ready_waiting_relay",
@@ -1087,7 +1095,8 @@ def check_contract(
     if max_queue_age > 0 and isinstance(events, list):
         supervisor_state: dict[str, Any] = {}
         supervisor_state_value = str(
-            config.get("autopilot_supervisor_state_file", "")
+            config.get("autopilot_supervisor_state_file")
+            or "var/autopilot-supervisor.json"
         ).strip()
         if supervisor_state_value:
             supervisor_state_path = resolve_project_path(
