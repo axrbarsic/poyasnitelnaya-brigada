@@ -240,6 +240,58 @@ class AutopilotBridgeTests(unittest.TestCase):
             claimed["event_ids"],
         )
 
+    def test_gate_does_not_dispatch_while_doctor_owner_is_active(self) -> None:
+        self.write_events([self.event()])
+        supervisor = self.root / "var" / "autopilot-supervisor.json"
+        supervisor.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "incident": {
+                        "id": "doctor-incident",
+                        "status": "work_in_progress",
+                        "owner": {
+                            "claim_token": "doctor-token",
+                            "lease_expires_at": "2099-07-25T18:00:00Z",
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = autopilot_bridge.gate(self.config, lease_seconds=1800)
+
+        self.assertFalse(result["dispatch"])
+        self.assertEqual(result["status"], "repair_waiting")
+        self.assertEqual(result["repair_incident_id"], "doctor-incident")
+        self.assertEqual(result["repair_status"], "work_in_progress")
+
+    def test_gate_ignores_expired_doctor_owner(self) -> None:
+        self.write_events([self.event()])
+        supervisor = self.root / "var" / "autopilot-supervisor.json"
+        supervisor.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "incident": {
+                        "id": "doctor-incident",
+                        "status": "work_in_progress",
+                        "owner": {
+                            "claim_token": "doctor-token",
+                            "lease_expires_at": "2020-07-25T18:00:00Z",
+                        },
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        result = autopilot_bridge.gate(self.config, lease_seconds=1800)
+
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["status"], "ready")
+
     def test_relay_handoff_reservation_blocks_duplicate_wake(self) -> None:
         self.write_events([self.event()])
 

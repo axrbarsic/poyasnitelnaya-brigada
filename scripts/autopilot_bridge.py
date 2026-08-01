@@ -193,6 +193,54 @@ def max_claim_events(config_path: Path) -> int:
     return value
 
 
+def active_supervisor_owner(
+    config_path: Path,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Return a live doctor owner that must finish before another X claim."""
+
+    config = autopilot_dispatch.read_json(config_path)
+    path = resolve_path(
+        config_path,
+        str(
+            config.get(
+                "autopilot_supervisor_state_file",
+                "var/autopilot-supervisor.json",
+            )
+        ),
+    )
+    try:
+        state = autopilot_dispatch.read_json(path)
+    except (OSError, ValueError, TypeError, AttributeError):
+        return {"owner_busy": False}
+    incident = state.get("incident")
+    owner = incident.get("owner") if isinstance(incident, dict) else None
+    lease_expires_at = (
+        autopilot_dispatch.parse_time(owner.get("lease_expires_at"))
+        if isinstance(owner, dict)
+        else None
+    )
+    current = now or autopilot_dispatch.utc_now()
+    owner_busy = (
+        isinstance(incident, dict)
+        and str(incident.get("status", ""))
+        in {"claimed", "work_in_progress"}
+        and isinstance(owner, dict)
+        and bool(str(owner.get("claim_token", "")))
+        and lease_expires_at is not None
+        and lease_expires_at > current
+    )
+    if not owner_busy:
+        return {"owner_busy": False}
+    return {
+        "owner_busy": True,
+        "incident_id": str(incident.get("id", "")),
+        "status": str(incident.get("status", "")),
+        "lease_expires_at": autopilot_dispatch.isoformat(lease_expires_at),
+    }
+
+
 def reserve_handoff(
     config_path: Path,
     *,
@@ -575,6 +623,18 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
             "event_ids": pending_event_ids,
             "owner_busy": queue["owner_busy"],
             "leased_count": queue["leased_count"],
+            "resource_guard": guard,
+        }
+    repair_owner = active_supervisor_owner(config_path)
+    if repair_owner["owner_busy"]:
+        return {
+            "status": "repair_waiting",
+            "dispatch": False,
+            "pending_count": len(pending_event_ids),
+            "event_ids": pending_event_ids,
+            "repair_incident_id": repair_owner["incident_id"],
+            "repair_status": repair_owner["status"],
+            "repair_lease_expires_at": repair_owner["lease_expires_at"],
             "resource_guard": guard,
         }
     if guard.get("defer"):
