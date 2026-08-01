@@ -213,6 +213,13 @@ python3 xmention_watcher.py --config config.json status
 `@axrbarsic`. У mentions и conversation tail разные курсоры. Первый tail
 проход ограничен `conversation_tail_initial_lookback_hours`, обычные проходы
 используют короткое перекрытие и дедупликацию по неизменяемому X ID.
+Расширенные ресурсы User и Media в этих poll не запрашиваются. Широкий tail
+ограничен параметрами `conversation_tail_daily_post_read_limit` и
+`conversation_tail_max_post_reads_per_poll`; его исчерпание не блокирует
+дешевую ленту собственных упоминаний. Незавершенный проход сохраняет позицию и
+продолжается со следующей порции без повторного чтения уже пройденных страниц.
+Причины и дальнейшая webhook-миграция описаны в
+[`docs/x-api-cost-control.ru.md`](docs/x-api-cost-control.ru.md).
 
 После этого установите пять LaunchAgent, один in-app Luna relay heartbeat и
 одну закрепленную сессию Sol Max по

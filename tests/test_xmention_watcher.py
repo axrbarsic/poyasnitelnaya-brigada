@@ -384,6 +384,150 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(result["conversation_tail"]["status"], "not_due")
         self.assertEqual(result["new_count"], 0)
 
+    def test_conversation_tail_resumes_within_daily_read_budget(self) -> None:
+        chain_id = "2080312847230210375"
+        self.insert_alex_turn_for_chain(chain_id)
+        configured = replace(
+            self.config,
+            conversation_tail_enabled=True,
+            conversation_tail_poll_interval_seconds=300,
+            conversation_tail_daily_post_read_limit=20,
+            conversation_tail_max_post_reads_per_poll=10,
+        )
+        requested_urls: list[str] = []
+
+        def make_event(event_id: str) -> dict:
+            return {
+                "id": event_id,
+                "author_id": "901",
+                "text": f"Nested reply {event_id}",
+                "created_at": "2026-07-31T21:00:00Z",
+                "conversation_id": chain_id,
+                "in_reply_to_user_id": "902",
+                "referenced_tweets": [
+                    {"type": "replied_to", "id": "2081808000000000000"}
+                ],
+            }
+
+        first_ids = [str(2083400000000000010 - index) for index in range(10)]
+        final_id = "2083399999999999999"
+
+        def fetch(url: str, token: str, timeout: int) -> dict:
+            requested_urls.append(url)
+            if "/users/900/mentions?" in url:
+                return {"data": [], "meta": {}}
+            query = watcher.urllib.parse.parse_qs(
+                watcher.urllib.parse.urlsplit(url).query
+            )
+            self.assertNotIn("expansions", query)
+            self.assertNotIn("media.fields", query)
+            if "pagination_token" not in query:
+                return {
+                    "data": [make_event(event_id) for event_id in first_ids],
+                    "meta": {
+                        "newest_id": first_ids[0],
+                        "next_token": "unused-by-local-resume",
+                    },
+                }
+            self.assertEqual(
+                query["pagination_token"],
+                ["unused-by-local-resume"],
+            )
+            return {
+                "data": [make_event(final_id)],
+                "meta": {"newest_id": final_id},
+            }
+
+        with mock.patch.dict(
+            os.environ,
+            {"X_BEARER_TOKEN": "test-token"},
+            clear=True,
+        ):
+            first = watcher.poll_live(configured, self.connection, fetch=fetch)
+
+        first_tail = first["conversation_tail"]
+        self.assertEqual(first_tail["status"], "partial_budget_exhausted")
+        self.assertFalse(first_tail["scan_complete"])
+        self.assertEqual(first_tail["returned_count"], 10)
+        self.assertIsNotNone(
+            watcher.get_meta(
+                self.connection,
+                watcher.CONVERSATION_TAIL_SCAN_STATE_KEY,
+            )
+        )
+        self.assertIsNone(
+            watcher.get_meta(self.connection, "conversation_tail_last_success_at")
+        )
+
+        watcher.set_meta(
+            self.connection,
+            watcher.CONVERSATION_TAIL_LAST_ATTEMPT_KEY,
+            watcher.isoformat(datetime.now(timezone.utc) - timedelta(seconds=301)),
+        )
+        with mock.patch.dict(
+            os.environ,
+            {"X_BEARER_TOKEN": "test-token"},
+            clear=True,
+        ):
+            second = watcher.poll_live(configured, self.connection, fetch=fetch)
+
+        second_tail = second["conversation_tail"]
+        self.assertEqual(second_tail["status"], "success")
+        self.assertTrue(second_tail["scan_complete"])
+        self.assertEqual(second_tail["returned_count"], 1)
+        self.assertIsNone(
+            watcher.get_meta(
+                self.connection,
+                watcher.CONVERSATION_TAIL_SCAN_STATE_KEY,
+            )
+        )
+        self.assertIsNotNone(
+            watcher.get_meta(self.connection, "conversation_tail_last_success_at")
+        )
+        budget = watcher.conversation_tail_budget_status(
+            configured,
+            self.connection,
+        )
+        self.assertEqual(budget["used"], 11)
+        self.assertEqual(budget["remaining"], 9)
+
+    def test_conversation_tail_budget_does_not_stop_owned_mentions(self) -> None:
+        chain_id = "2080312847230210375"
+        self.insert_alex_turn_for_chain(chain_id)
+        configured = replace(
+            self.config,
+            conversation_tail_enabled=True,
+            conversation_tail_daily_post_read_limit=10,
+        )
+        now = watcher.isoformat()
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO poll_runs(
+                    started_at, completed_at, source, status, new_count,
+                    returned_count, request_count
+                ) VALUES(?, ?, ?, 'success', 0, 10, 1)
+                """,
+                (now, now, watcher.CONVERSATION_TAIL_SOURCE),
+            )
+        requested_urls: list[str] = []
+
+        def fetch(url: str, token: str, timeout: int) -> dict:
+            requested_urls.append(url)
+            self.assertIn("/users/900/mentions?", url)
+            return {"data": [], "meta": {}}
+
+        with mock.patch.dict(
+            os.environ,
+            {"X_BEARER_TOKEN": "test-token"},
+            clear=True,
+        ):
+            result = watcher.poll_live(configured, self.connection, fetch=fetch)
+
+        self.assertEqual(len(requested_urls), 1)
+        self.assertEqual(result["conversation_tail"]["status"], "budget_exhausted")
+        self.assertEqual(result["health"], "healthy")
+
     def test_conversation_tail_chunks_queries_at_x_api_limit(self) -> None:
         conversation_ids = [
             str(2_080_000_000_000_000_000 + index)
@@ -565,11 +709,9 @@ class WatcherTests(unittest.TestCase):
             watcher.urllib.parse.urlsplit(requested_urls[0]).query
         )
         self.assertIn("attachments", query["tweet.fields"][0])
-        self.assertIn(
-            "attachments.media_keys",
-            query["expansions"][0],
-        )
-        self.assertIn("alt_text", query["media.fields"][0])
+        self.assertNotIn("expansions", query)
+        self.assertNotIn("user.fields", query)
+        self.assertNotIn("media.fields", query)
 
         def error_fetch(url: str, token: str, timeout: int) -> dict:
             return {"errors": [{"title": "Synthetic API error"}]}

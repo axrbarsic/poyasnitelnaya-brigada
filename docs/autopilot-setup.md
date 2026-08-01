@@ -101,15 +101,23 @@ Create ignored `config.json` from the example and set:
   "session_janitor_minimum_age_seconds": 60,
   "commenter_memory_limit": 12,
   "conversation_tail_enabled": true,
-  "conversation_tail_poll_interval_seconds": 60,
+  "conversation_tail_poll_interval_seconds": 300,
   "conversation_tail_watch_hours": 24,
   "conversation_tail_initial_lookback_hours": 2,
   "conversation_tail_overlap_seconds": 120,
   "conversation_tail_max_conversations": 80,
+  "conversation_tail_daily_post_read_limit": 200,
+  "conversation_tail_max_post_reads_per_poll": 50,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }
 ```
+
+Owned mentions remain on the one-minute poll. The more expensive Recent Search
+conversation tail runs every five minutes, requests no expanded User or Media
+resources, and has a separate read budget. Exhausting the tail budget does not
+stop owned mentions. Inspect counters with
+`python3 xmention_watcher.py --config config.json status`.
 
 `browser_owner_thread_id` identifies one pinned Sol Max owner. `x-relay` is a
 heartbeat attached to one existing Luna Low thread, not a standalone

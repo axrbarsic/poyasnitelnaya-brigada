@@ -25,8 +25,11 @@ from typing import Any, Callable, Iterable
 from scripts import event_dispatch, keychain_bundle
 
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 TOKEN_ENV_NAMES = ("X_BEARER_TOKEN", "X_API_BEARER_TOKEN", "TWITTER_BEARER_TOKEN")
+CONVERSATION_TAIL_SOURCE = "x_api_conversation_tail"
+CONVERSATION_TAIL_SCAN_STATE_KEY = "conversation_tail_scan_state"
+CONVERSATION_TAIL_LAST_ATTEMPT_KEY = "conversation_tail_last_attempt_at"
 INITIAL_AUDIT_EXPIRY_PROVENANCE = "stored_api_auto_expiry_v1"
 TERMINAL_BLOCKER_CODES = {
     "account_unavailable",
@@ -95,6 +98,8 @@ class Config:
     conversation_tail_initial_lookback_hours: int
     conversation_tail_overlap_seconds: int
     conversation_tail_max_conversations: int
+    conversation_tail_daily_post_read_limit: int
+    conversation_tail_max_post_reads_per_poll: int
     commenter_memory_limit: int
     notifications_enabled: bool
 
@@ -132,7 +137,7 @@ def load_config(path: Path) -> Config:
             raw.get("conversation_tail_enabled", False)
         ),
         conversation_tail_poll_interval_seconds=int(
-            raw.get("conversation_tail_poll_interval_seconds", 60)
+            raw.get("conversation_tail_poll_interval_seconds", 300)
         ),
         conversation_tail_watch_hours=int(
             raw.get("conversation_tail_watch_hours", 24)
@@ -145,6 +150,12 @@ def load_config(path: Path) -> Config:
         ),
         conversation_tail_max_conversations=int(
             raw.get("conversation_tail_max_conversations", 80)
+        ),
+        conversation_tail_daily_post_read_limit=int(
+            raw.get("conversation_tail_daily_post_read_limit", 200)
+        ),
+        conversation_tail_max_post_reads_per_poll=int(
+            raw.get("conversation_tail_max_post_reads_per_poll", 50)
         ),
         commenter_memory_limit=int(raw.get("commenter_memory_limit", 12)),
         notifications_enabled=bool(raw.get("notifications_enabled", True)),
@@ -169,6 +180,12 @@ def load_config(path: Path) -> Config:
         ),
         "conversation_tail_max_conversations": (
             config.conversation_tail_max_conversations
+        ),
+        "conversation_tail_daily_post_read_limit": (
+            config.conversation_tail_daily_post_read_limit
+        ),
+        "conversation_tail_max_post_reads_per_poll": (
+            config.conversation_tail_max_post_reads_per_poll
         ),
         "commenter_memory_limit": config.commenter_memory_limit,
     }
@@ -260,6 +277,8 @@ def connect_database(path: Path) -> sqlite3.Connection:
             source TEXT NOT NULL,
             status TEXT NOT NULL,
             new_count INTEGER NOT NULL,
+            returned_count INTEGER NOT NULL DEFAULT 0,
+            request_count INTEGER NOT NULL DEFAULT 0,
             error_class TEXT,
             error_message TEXT
         );
@@ -474,6 +493,16 @@ def connect_database(path: Path) -> sqlite3.Connection:
             "ALTER TABLE conversation_turns "
             "ADD COLUMN media_json TEXT NOT NULL DEFAULT '[]'"
         )
+    poll_run_columns = {
+        str(row["name"])
+        for row in connection.execute("PRAGMA table_info(poll_runs)")
+    }
+    for column in ("returned_count", "request_count"):
+        if column not in poll_run_columns:
+            connection.execute(
+                f"ALTER TABLE poll_runs ADD COLUMN {column} "
+                "INTEGER NOT NULL DEFAULT 0"
+            )
     connection.execute(
         """
         UPDATE conversation_turns AS turn
@@ -947,9 +976,21 @@ def ingest_response(
     *,
     source: str,
     started_at: str | None = None,
+    returned_count: int | None = None,
+    request_count: int = 1,
+    poll_status: str = "success",
+    advance_conversation_tail_cursor: bool = True,
+    conversation_tail_cursor_at: str | None = None,
 ) -> dict[str, Any]:
     started = started_at or isoformat()
     observed_at = isoformat()
+    measured_returned_count = (
+        len(response.get("data", []) or [])
+        if returned_count is None
+        else returned_count
+    )
+    if measured_returned_count < 0 or request_count < 0:
+        raise ValueError("Poll resource counters must not be negative")
     users = {
         str(user.get("id")): str(user.get("username"))
         for user in response.get("includes", {}).get("users", [])
@@ -1056,7 +1097,7 @@ def ingest_response(
                 elif delivery_state == "self_authored":
                     observed_self_authored_ids.append(event_id)
 
-        if source != "x_api_conversation_tail":
+        if source != CONVERSATION_TAIL_SOURCE:
             previous_cursor = get_meta(connection, "since_id")
             newest_id = numeric_max(
                 [
@@ -1067,11 +1108,14 @@ def ingest_response(
             )
             if newest_id:
                 set_meta(connection, "since_id", newest_id)
-        if source == "x_api_conversation_tail":
+        if (
+            source == CONVERSATION_TAIL_SOURCE
+            and advance_conversation_tail_cursor
+        ):
             set_meta(
                 connection,
                 "conversation_tail_last_success_at",
-                observed_at,
+                conversation_tail_cursor_at or observed_at,
             )
         if get_meta(connection, "first_success_at") is None:
             set_meta(connection, "first_success_at", observed_at)
@@ -1087,10 +1131,19 @@ def ingest_response(
         connection.execute(
             """
             INSERT INTO poll_runs(
-                started_at, completed_at, source, status, new_count
-            ) VALUES(?, ?, ?, 'success', ?)
+                started_at, completed_at, source, status, new_count,
+                returned_count, request_count
+            ) VALUES(?, ?, ?, ?, ?, ?, ?)
             """,
-            (started, observed_at, source, len(new_ids)),
+            (
+                started,
+                observed_at,
+                source,
+                poll_status,
+                len(new_ids),
+                measured_returned_count,
+                request_count,
+            ),
         )
 
     health = write_health(config, connection, last_new_count=len(new_ids))
@@ -1106,6 +1159,8 @@ def ingest_response(
         "bootstrap": live_bootstrap,
         "observed_count": len(observed_ids),
         "new_count": len(new_ids),
+        "returned_count": measured_returned_count,
+        "request_count": request_count,
         "new_event_ids": sorted(new_ids, key=int),
         "self_authored_event_ids": sorted(
             set(
@@ -4609,6 +4664,84 @@ def conversation_tail_query_chunks(
     return chunks
 
 
+def conversation_tail_budget_status(
+    config: Config,
+    connection: sqlite3.Connection,
+    *,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    current = now or utc_now()
+    day_start = current.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    row = connection.execute(
+        """
+        SELECT
+            COALESCE(SUM(returned_count), 0) AS returned_count,
+            COALESCE(SUM(request_count), 0) AS request_count
+        FROM poll_runs
+        WHERE source = ?
+          AND status IN ('success', 'partial_budget_exhausted')
+          AND completed_at >= ?
+          AND completed_at < ?
+        """,
+        (
+            CONVERSATION_TAIL_SOURCE,
+            isoformat(day_start),
+            isoformat(day_end),
+        ),
+    ).fetchone()
+    used = int(row["returned_count"] or 0)
+    limit = config.conversation_tail_daily_post_read_limit
+    remaining = max(0, limit - used)
+    return {
+        "utc_day": day_start.date().isoformat(),
+        "daily_limit": limit,
+        "used": used,
+        "remaining": remaining,
+        "request_count": int(row["request_count"] or 0),
+        "allowed": remaining >= 10,
+    }
+
+
+def _load_conversation_tail_scan_state(
+    connection: sqlite3.Connection,
+) -> dict[str, Any] | None:
+    raw = get_meta(connection, CONVERSATION_TAIL_SCAN_STATE_KEY)
+    if raw is None:
+        return None
+    try:
+        state = json.loads(raw)
+        queries = state["queries"]
+        query_index = int(state["query_index"])
+        if (
+            not isinstance(queries, list)
+            or not queries
+            or not all(isinstance(query, str) and query for query in queries)
+            or query_index < 0
+            or query_index > len(queries)
+        ):
+            raise ValueError
+        parse_time(str(state["scan_started_at"]))
+        parse_time(str(state["start_time"]))
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+        raise RuntimeError("Invalid durable conversation tail scan state") from error
+    return state
+
+
+def _store_conversation_tail_scan_state(
+    connection: sqlite3.Connection,
+    state: dict[str, Any] | None,
+) -> None:
+    if state is None:
+        delete_meta(connection, CONVERSATION_TAIL_SCAN_STATE_KEY)
+        return
+    set_meta(
+        connection,
+        CONVERSATION_TAIL_SCAN_STATE_KEY,
+        json.dumps(state, ensure_ascii=False, sort_keys=True),
+    )
+
+
 def poll_conversation_tails(
     config: Config,
     connection: sqlite3.Connection,
@@ -4618,139 +4751,198 @@ def poll_conversation_tails(
     now: datetime | None = None,
 ) -> dict[str, Any]:
     current = now or utc_now()
+    scan_state = _load_conversation_tail_scan_state(connection)
     last_success = parse_time(
         get_meta(connection, "conversation_tail_last_success_at")
     )
-    if last_success is not None:
-        age = (current - last_success).total_seconds()
+    last_attempt = parse_time(
+        get_meta(connection, CONVERSATION_TAIL_LAST_ATTEMPT_KEY)
+    ) or last_success
+    if last_attempt is not None:
+        age = (current - last_attempt).total_seconds()
         if age < config.conversation_tail_poll_interval_seconds:
             return {
-                "source": "x_api_conversation_tail",
+                "source": CONVERSATION_TAIL_SOURCE,
                 "status": "not_due",
                 "new_count": 0,
                 "new_event_ids": [],
             }
 
-    conversation_ids = active_conversation_ids(
-        config,
-        connection,
-        now=current,
-    )
-    if not conversation_ids:
+    budget = conversation_tail_budget_status(config, connection, now=current)
+    if not budget["allowed"]:
         with connection:
             set_meta(
                 connection,
-                "conversation_tail_last_success_at",
+                CONVERSATION_TAIL_LAST_ATTEMPT_KEY,
                 isoformat(current),
             )
         return {
-            "source": "x_api_conversation_tail",
-            "status": "no_active_conversations",
-            "tracked_conversation_count": 0,
+            "source": CONVERSATION_TAIL_SOURCE,
+            "status": "budget_exhausted",
+            "budget": budget,
             "new_count": 0,
             "new_event_ids": [],
         }
 
-    if last_success is None:
-        start_time = current - timedelta(
-            hours=config.conversation_tail_initial_lookback_hours
+    if scan_state is None:
+        conversation_ids = active_conversation_ids(
+            config,
+            connection,
+            now=current,
         )
-    else:
-        start_time = last_success - timedelta(
-            seconds=config.conversation_tail_overlap_seconds
+        if not conversation_ids:
+            with connection:
+                set_meta(
+                    connection,
+                    "conversation_tail_last_success_at",
+                    isoformat(current),
+                )
+                set_meta(
+                    connection,
+                    CONVERSATION_TAIL_LAST_ATTEMPT_KEY,
+                    isoformat(current),
+                )
+            return {
+                "source": CONVERSATION_TAIL_SOURCE,
+                "status": "no_active_conversations",
+                "tracked_conversation_count": 0,
+                "new_count": 0,
+                "new_event_ids": [],
+            }
+        if last_success is None:
+            start_time = current - timedelta(
+                hours=config.conversation_tail_initial_lookback_hours
+            )
+        else:
+            start_time = last_success - timedelta(
+                seconds=config.conversation_tail_overlap_seconds
+            )
+        watch_cutoff = current - timedelta(
+            hours=config.conversation_tail_watch_hours
         )
-    watch_cutoff = current - timedelta(hours=config.conversation_tail_watch_hours)
-    start_time = max(start_time, watch_cutoff)
-    queries = conversation_tail_query_chunks(
-        conversation_ids,
-        account_handle=config.keychain_account,
+        start_time = max(start_time, watch_cutoff)
+        queries = conversation_tail_query_chunks(
+            conversation_ids,
+            account_handle=config.keychain_account,
+        )
+        scan_state = {
+            "scan_started_at": isoformat(current),
+            "start_time": isoformat(start_time),
+            "queries": queries,
+            "query_index": 0,
+            "pagination_token": None,
+            "tracked_conversation_count": len(conversation_ids),
+        }
+
+    queries = list(scan_state["queries"])
+    query_index = int(scan_state["query_index"])
+    pagination_token = scan_state.get("pagination_token")
+    run_budget = min(
+        int(budget["remaining"]),
+        config.conversation_tail_max_post_reads_per_poll,
     )
 
     all_data: list[dict[str, Any]] = []
-    all_users: dict[str, dict[str, Any]] = {}
-    all_media: dict[str, dict[str, Any]] = {}
     newest_ids: list[str | None] = []
     page_count = 0
-    for query in queries:
-        pagination_token: str | None = None
-        seen_pagination_tokens: set[str] = set()
-        while True:
-            page_count += 1
-            if page_count > config.max_pages_per_poll:
-                raise RuntimeError(
-                    "X conversation tail pagination exceeded configured page limit"
-                )
-            params: dict[str, str] = {
-                "query": query,
-                "start_time": isoformat(start_time),
-                "max_results": "100",
-                "sort_order": "recency",
-                "tweet.fields": (
-                    "author_id,created_at,conversation_id,in_reply_to_user_id,"
-                    "referenced_tweets,attachments"
-                ),
-                "expansions": "author_id,attachments.media_keys",
-                "user.fields": "username",
-                "media.fields": (
-                    "media_key,type,url,preview_image_url,alt_text,"
-                    "width,height,duration_ms"
-                ),
-            }
-            if pagination_token:
-                params["pagination_token"] = pagination_token
-            url = (
-                f"{config.api_base}/tweets/search/recent?"
-                f"{urllib.parse.urlencode(params)}"
+    while query_index < len(queries):
+        remaining_run_budget = run_budget - len(all_data)
+        if remaining_run_budget < 10:
+            break
+        page_count += 1
+        if page_count > config.max_pages_per_poll:
+            raise RuntimeError(
+                "X conversation tail pagination exceeded configured page limit"
             )
-            page = fetch(url, token, config.request_timeout_seconds)
-            if not isinstance(page, dict):
-                raise RuntimeError(
-                    "X conversation tail returned a non-object JSON response"
-                )
-            if page.get("errors"):
-                raise RuntimeError(
-                    "X conversation tail returned errors: "
-                    + json.dumps(page["errors"], ensure_ascii=False)[:1000]
-                )
-            all_data.extend(page.get("data", []) or [])
-            for user in page.get("includes", {}).get("users", []) or []:
-                if user.get("id"):
-                    all_users[str(user["id"])] = user
-            for item in page.get("includes", {}).get("media", []) or []:
-                if item.get("media_key"):
-                    all_media[str(item["media_key"])] = item
-            meta = page.get("meta", {}) or {}
-            newest_ids.append(meta.get("newest_id"))
-            pagination_token = meta.get("next_token")
-            if not pagination_token:
-                break
-            if pagination_token in seen_pagination_tokens:
+        params: dict[str, str] = {
+            "query": queries[query_index],
+            "start_time": str(scan_state["start_time"]),
+            "max_results": str(min(100, remaining_run_budget)),
+            "sort_order": "recency",
+            "tweet.fields": (
+                "author_id,created_at,conversation_id,in_reply_to_user_id,"
+                "referenced_tweets,attachments"
+            ),
+        }
+        if pagination_token:
+            params["pagination_token"] = str(pagination_token)
+        url = (
+            f"{config.api_base}/tweets/search/recent?"
+            f"{urllib.parse.urlencode(params)}"
+        )
+        page = fetch(url, token, config.request_timeout_seconds)
+        if not isinstance(page, dict):
+            raise RuntimeError(
+                "X conversation tail returned a non-object JSON response"
+            )
+        if page.get("errors"):
+            raise RuntimeError(
+                "X conversation tail returned errors: "
+                + json.dumps(page["errors"], ensure_ascii=False)[:1000]
+            )
+        page_data = page.get("data", []) or []
+        if not isinstance(page_data, list):
+            raise RuntimeError("X conversation tail data is not an array")
+        if len(page_data) > remaining_run_budget:
+            raise RuntimeError("X conversation tail exceeded the local read budget")
+        all_data.extend(page_data)
+        meta = page.get("meta", {}) or {}
+        newest_ids.append(meta.get("newest_id"))
+        if meta.get("next_token"):
+            next_pagination_token = str(meta["next_token"])
+            if pagination_token == next_pagination_token:
                 raise RuntimeError(
                     "X conversation tail returned a repeated pagination token"
                 )
-            seen_pagination_tokens.add(pagination_token)
+            pagination_token = next_pagination_token
+        else:
+            query_index += 1
+            pagination_token = None
 
     merged = {
         "data": all_data,
-        "includes": {
-            "users": list(all_users.values()),
-            "media": list(all_media.values()),
-        },
         "meta": {"newest_id": numeric_max(newest_ids)},
     }
+    complete = query_index >= len(queries)
+    scan_state["query_index"] = query_index
+    scan_state["pagination_token"] = pagination_token
     result = ingest_response(
         config,
         connection,
         merged,
-        source="x_api_conversation_tail",
+        source=CONVERSATION_TAIL_SOURCE,
         started_at=isoformat(current),
+        returned_count=len(all_data),
+        request_count=page_count,
+        poll_status="success" if complete else "partial_budget_exhausted",
+        advance_conversation_tail_cursor=complete,
+        conversation_tail_cursor_at=str(scan_state["scan_started_at"]),
     )
+    with connection:
+        set_meta(
+            connection,
+            CONVERSATION_TAIL_LAST_ATTEMPT_KEY,
+            isoformat(current),
+        )
+        _store_conversation_tail_scan_state(
+            connection,
+            None if complete else scan_state,
+        )
+    budget_after = {
+        **budget,
+        "used": int(budget["used"]) + len(all_data),
+        "remaining": max(0, int(budget["remaining"]) - len(all_data)),
+    }
     return {
         **result,
-        "status": "success",
-        "tracked_conversation_count": len(conversation_ids),
+        "status": "success" if complete else "partial_budget_exhausted",
+        "tracked_conversation_count": int(
+            scan_state["tracked_conversation_count"]
+        ),
         "query_count": len(queries),
-        "start_time": isoformat(start_time),
+        "start_time": str(scan_state["start_time"]),
+        "budget": budget_after,
+        "scan_complete": complete,
     }
 
 
@@ -4772,8 +4964,6 @@ def poll_live(
         token = bearer_token(config)
         since_id = get_meta(connection, "since_id")
         all_data: list[dict[str, Any]] = []
-        all_users: dict[str, dict[str, Any]] = {}
-        all_media: dict[str, dict[str, Any]] = {}
         newest_ids: list[str | None] = [since_id]
         pagination_token: str | None = None
         seen_pagination_tokens: set[str] = set()
@@ -4788,12 +4978,6 @@ def poll_live(
                 "tweet.fields": (
                     "author_id,created_at,conversation_id,in_reply_to_user_id,"
                     "referenced_tweets,attachments"
-                ),
-                "expansions": "author_id,attachments.media_keys",
-                "user.fields": "username",
-                "media.fields": (
-                    "media_key,type,url,preview_image_url,alt_text,"
-                    "width,height,duration_ms"
                 ),
             }
             if since_id:
@@ -4813,12 +4997,6 @@ def poll_live(
                     + json.dumps(page["errors"], ensure_ascii=False)[:1000]
                 )
             all_data.extend(page.get("data", []) or [])
-            for user in page.get("includes", {}).get("users", []) or []:
-                if user.get("id"):
-                    all_users[str(user["id"])] = user
-            for item in page.get("includes", {}).get("media", []) or []:
-                if item.get("media_key"):
-                    all_media[str(item["media_key"])] = item
             meta = page.get("meta", {}) or {}
             newest_ids.append(meta.get("newest_id"))
             pagination_token = meta.get("next_token")
@@ -4830,10 +5008,6 @@ def poll_live(
 
         merged = {
             "data": all_data,
-            "includes": {
-                "users": list(all_users.values()),
-                "media": list(all_media.values()),
-            },
             "meta": {"newest_id": numeric_max(newest_ids)},
         }
         mention_result = ingest_response(
@@ -4842,6 +5016,8 @@ def poll_live(
             merged,
             source="x_api",
             started_at=started_at,
+            returned_count=len(all_data),
+            request_count=page_count,
         )
         if not config.conversation_tail_enabled:
             return mention_result
@@ -5394,6 +5570,12 @@ def main() -> int:
                 {
                     "health": evaluate_health(config),
                     "queue": queue_output,
+                    "x_api_budget": {
+                        "conversation_tail": conversation_tail_budget_status(
+                            config,
+                            connection,
+                        )
+                    },
                 }
             )
             return 0

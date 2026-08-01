@@ -105,15 +105,23 @@ trust_level = "trusted"
   "session_janitor_minimum_age_seconds": 60,
   "commenter_memory_limit": 12,
   "conversation_tail_enabled": true,
-  "conversation_tail_poll_interval_seconds": 60,
+  "conversation_tail_poll_interval_seconds": 300,
   "conversation_tail_watch_hours": 24,
   "conversation_tail_initial_lookback_hours": 2,
   "conversation_tail_overlap_seconds": 120,
   "conversation_tail_max_conversations": 80,
+  "conversation_tail_daily_post_read_limit": 200,
+  "conversation_tail_max_post_reads_per_poll": 50,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }
 ```
+
+Лента собственных упоминаний продолжает проверяться раз в минуту. Более
+дорогой Recent Search по хвостам цепочек запускается раз в пять минут, не
+запрашивает расширенные ресурсы User и Media и имеет отдельный лимит чтения.
+Исчерпание лимита хвостов не останавливает собственные упоминания. Текущие
+счетчики доступны в `python3 xmention_watcher.py --config config.json status`.
 
 `browser_owner_thread_id` принадлежит одной закрепленной owner-сессии на Sol
 Max. `x-relay` является heartbeat одной существующей Luna Low сессии, а не

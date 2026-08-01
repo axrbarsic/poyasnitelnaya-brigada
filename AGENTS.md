@@ -32,6 +32,11 @@
   the scheduled task without Browser work.
 - Use deterministic scripts for queue state, exact IDs, duplicate checks,
   Unicode length, forbidden characters, and timestamp filtering.
+- Keep the one-minute owned mentions poll independent from the conversation
+  tail budget. Poll requests must not request expanded User or Media resources.
+  The Recent Search tail runs at the configured slower interval and must honor
+  both its per-run and daily returned-Post limits. Budget exhaustion may defer
+  only the tail and must never stop owned mentions.
 - Generate every «Пояснительная бригада» reply locally with the tracked
   `poyasnitelnaya-brigada` skill. Never open ChatGPT or the custom GPT for this
   route. The active owner must be `gpt-5.6-sol` with reasoning effort `max`.
