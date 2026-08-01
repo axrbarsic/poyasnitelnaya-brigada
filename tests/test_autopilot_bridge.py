@@ -232,6 +232,18 @@ class AutopilotBridgeTests(unittest.TestCase):
             "используй три вкладки для\nодновременной загрузки",
             claimed["prompt"],
         )
+        self.assertIn(
+            "проверь три\nразных tab ID",
+            claimed["prompt"],
+        )
+        self.assertIn(
+            "Запрещено открывать второй или\nтретий target через `goto`",
+            claimed["prompt"],
+        )
+        self.assertIn(
+            "PARALLEL_TAB_PREFLIGHT=distinct_tab_ids_required",
+            claimed["prompt"],
+        )
         self.assertNotIn(
             "На iMac 8 GB открывай только одну вкладку X",
             claimed["prompt"],

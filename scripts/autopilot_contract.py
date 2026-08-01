@@ -29,7 +29,10 @@ Sol Max. Используй skills x-twitter-operator и
 их точные ветки в отдельных вкладках, но не больше указанного предела. При
 MAX_PARALLEL_X_READ_TABS=3 и трёх claimed events используй три вкладки для
 одновременной загрузки, чтения контекста, media и сбора target-local
-источников. Каждая вкладка навсегда привязана к одному event ID до её закрытия.
+источников. Создай все три вкладки одним Browser preflight-шагом, проверь три
+разных tab ID и только затем переходи к чтению. Запрещено открывать второй или
+третий target через `goto` первой вкладки. Каждая вкладка навсегда привязана к
+одному event ID до её закрытия.
 Composer, нажатие Reply, официальная проверка, history import и resolve всегда
 остаются одной последовательной полосой. Никогда не держи заполненный composer
 сразу в двух вкладках и никогда не выполняй две публикации одновременно.
@@ -240,6 +243,7 @@ def build_prompt(
         f"BROWSER_OWNER_WORKSPACE={browser_owner_cwd.resolve()}\n"
         f"CLAIMED_EVENT_COUNT={len(events)}\n"
         f"MAX_PARALLEL_X_READ_TABS={min(len(events), max_parallel_read_tabs)}\n"
+        "PARALLEL_TAB_PREFLIGHT=distinct_tab_ids_required\n"
         f"PERSONALITY_POLICY_JSON:\n{personality_payload}\n"
         f"EVENTS_JSON:\n{payload}\n"
     )
