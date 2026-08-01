@@ -47,11 +47,14 @@ lease proves ownership, not completion. For a convoy failure, keep one writer,
 bound a claim to three oldest events, allow up to three independent read-only X
 tabs, and commit each event end-to-end before preparing the next publication.
 
-If the gate is ready but the owner never wakes, inspect the Luna trace. A
-`send_message_to_thread` call made inside `functions.exec`, JavaScript,
-`tools.*`, or another nested wrapper can remain pending. Fix the universal
-dispatcher prompt: expose the tool through `tool_search`, call the direct Codex
-app tool, keep the queue unclaimed on failure, and let the next cycle retry.
+If the gate is ready but the owner never wakes, inspect the Luna trace. Use the
+callable name exposed by the current Codex tool surface. When `tool_search` is
+available, discover `codex_app__send_message_to_thread` through it. When it is
+not available but `functions.exec` exposes the callable in `ALL_TOOLS`, await
+exactly one `tools.codex_app__send_message_to_thread(...)` call and require the
+returned object to contain the exact requested `threadId`. Do not call the old
+`codex_app.send_message_to_thread` handler name. Keep the queue unclaimed on
+delivery failure and let the next cycle retry.
 
 ## Proven failure signature
 

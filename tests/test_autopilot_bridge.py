@@ -338,7 +338,10 @@ class AutopilotBridgeTests(unittest.TestCase):
             / "x-relay.prompt.txt"
         ).read_text(encoding="utf-8")
 
-        self.assertIn("прямой codex_app.send_message_to_thread", prompt)
+        self.assertIn("codex_app__send_message_to_thread", prompt)
+        self.assertIn("tools.codex_app__send_message_to_thread", prompt)
+        self.assertIn("точный переданный `threadId`", prompt)
+        self.assertIn("Не используй старое имя", prompt)
         self.assertIn("Не читай owner thread", prompt)
         self.assertIn("owner_thread_id, owner_model и owner_thinking", prompt)
         self.assertIn("Не передавай hostId", prompt)

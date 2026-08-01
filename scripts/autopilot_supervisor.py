@@ -707,12 +707,7 @@ def gate(
         elif coordination_recovered:
             save_state(path, state)
         external_action_required = status == EXTERNAL_ACTION_STATUS
-        failure_ids = {
-            str(check.get("identifier"))
-            for check in incident.get("checks", [])
-            if isinstance(check, dict) and check.get("status") == "fail"
-        }
-        x_queue_recovery = failure_ids == X_QUEUE_RECOVERY_FAILURES
+        x_queue_recovery = is_x_queue_recovery_incident(incident)
         return {
             "status": status,
             "dispatch": (
@@ -1085,6 +1080,13 @@ def claim(
         incident = state.get("incident")
         if not isinstance(incident, dict):
             return {"status": "idle", "dispatch": False}
+        if is_x_queue_recovery_incident(incident):
+            return {
+                "status": str(incident.get("status")),
+                "dispatch": False,
+                "incident_id": incident["id"],
+                "x_queue_recovery": True,
+            }
         if incident.get("status") not in {
             "handoff_pending",
             "escalation_pending",
@@ -1114,6 +1116,15 @@ def claim(
             "claim_token": claim_token,
             "prompt": repair_prompt(incident),
         }
+
+
+def is_x_queue_recovery_incident(incident: dict[str, Any]) -> bool:
+    failure_ids = {
+        str(check.get("identifier"))
+        for check in incident.get("checks", [])
+        if isinstance(check, dict) and check.get("status") == "fail"
+    }
+    return failure_ids == X_QUEUE_RECOVERY_FAILURES
 
 
 def repair_prompt(incident: dict[str, Any]) -> str:

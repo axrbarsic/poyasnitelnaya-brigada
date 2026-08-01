@@ -568,6 +568,32 @@ class AutopilotSupervisorTests(unittest.TestCase):
         self.assertTrue(result["dispatch"])
         self.assertFalse(result["repair_pending"])
 
+    def test_stale_doctor_wake_cannot_claim_queue_latency_incident(
+        self,
+    ) -> None:
+        queue_latency = self.check("runtime.queue_latency", "fail")
+        detected = autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now,
+            checks=[queue_latency],
+        )
+
+        result = autopilot_supervisor.claim(
+            self.config,
+            lease_seconds=1800,
+            now=self.now + timedelta(seconds=1),
+        )
+        state = autopilot_supervisor.load_state(
+            autopilot_supervisor.state_path(self.config)
+        )
+
+        self.assertFalse(result["dispatch"])
+        self.assertTrue(result["x_queue_recovery"])
+        self.assertEqual(result["incident_id"], detected["incident_id"])
+        self.assertEqual(state["incident"]["status"], "escalation_pending")
+        self.assertIsNone(state["incident"].get("owner"))
+
     def test_three_ready_gates_then_doctor_wakes_do_not_livelock(
         self,
     ) -> None:
