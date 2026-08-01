@@ -99,18 +99,17 @@ stored text. A substantive parent, defined as at least 500 code points, three
 paragraphs, one source URL, or a proven local-max origin, continues through
 this skill with full SQLite history. No ChatGPT conversation is reconstructed.
 
-## Autonomous 15-minute cycle
+## Autonomous 10-minute cycle
 
 Outbound is implemented as the standalone local cron automation `x-15` on
-`gpt-5.6-sol` with `max` effort. Both `x-15` and the old `x-pro-15` heartbeat
-are currently paused. Do not resume `x-15` until the inbound queue is empty and
-Alex explicitly authorizes outbound search again.
+`gpt-5.6-sol` with `max` effort. Alex has explicitly authorized `x-15`; the old
+`x-pro-15` heartbeat remains paused.
 A heartbeat attached to a busy owner task can accumulate wakeups without
 executing them. A standalone cron receives an independent run and therefore
 does not depend on the duration of Alex's active owner conversation.
 
-Every run first checks the incoming queue, then obtains an atomic lease through
-`scripts/outbound_cycle.py`. A normal run handles at most one verified target.
+Every run first obtains an atomic lease through `scripts/outbound_cycle.py`,
+then checks the incoming queue. A normal run handles at most one verified target.
 While catch-up is active, the limit becomes two sequential targets with no
 extra X tabs. Only the second verified publication consumes one catch-up unit,
 so target quality cannot be replaced by mechanically filling a quota.
@@ -135,15 +134,20 @@ python3 scripts/outbound_cycle.py \
 The state lives under `var/`, stays out of Git, and records exact claim tokens,
 run outcomes, and idempotent missed-window adjustments.
 
+If an inbound or earlier outbound owner occupies the single writer lane, the
+run opens no Browser and records one idempotent `defer-slot` for the current
+10-minute window. The slot remains in catch-up for later processing, so an
+inbound backlog no longer erases scheduled outbound opportunities.
+
 ### Safe cron updates
 
 Never change the `x-15` prompt or runtime fields over an active run. Pause the
 cron through the official `automation_update` tool, wait for every existing
 `x-15` task to finish, and require `outbound_cycle.py status` to report
 `owner=null`. Only then update the prompt and run the doctor and targeted
-canary. Keep the cron `PAUSED` until Alex explicitly authorizes resumption after
-the inbound queue is clear. This prevents a legacy Browser owner from
-overlapping the first run of the new contract.
+canary. After the canary, restore the state explicitly authorized by Alex. This
+prevents a legacy Browser owner from overlapping the first run of the new
+contract.
 
 ## Memory and recovery
 

@@ -9,7 +9,7 @@ import re
 import sys
 import urllib.parse
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -133,6 +133,130 @@ def add_catchup(
         "status": "catchup_added",
         "catchup_remaining": state["catchup_remaining"],
         **record,
+    }
+
+
+def scheduled_slot(
+    *,
+    interval_minutes: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    if interval_minutes <= 0:
+        raise ValueError("interval_minutes must be positive")
+    checked_at = now or autopilot_dispatch.utc_now()
+    if checked_at.tzinfo is None:
+        raise ValueError("now must be timezone-aware")
+    interval_seconds = interval_minutes * 60
+    start_epoch = int(checked_at.timestamp())
+    start_epoch -= start_epoch % interval_seconds
+    start = datetime.fromtimestamp(start_epoch, tz=timezone.utc)
+    end = start + timedelta(seconds=interval_seconds)
+    return {
+        "adjustment_id": (
+            f"scheduled-defer-{interval_minutes}m-"
+            f"{start.strftime('%Y%m%dT%H%M%SZ')}"
+        ),
+        "window_start": autopilot_dispatch.isoformat(start),
+        "window_end": autopilot_dispatch.isoformat(end),
+    }
+
+
+def defer_slot(
+    path: Path,
+    *,
+    interval_minutes: int,
+    reason: str,
+    claim_token: str | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    explanation = reason.strip()
+    if not explanation:
+        raise ValueError("reason must not be empty")
+    checked_at = now or autopilot_dispatch.utc_now()
+    slot = scheduled_slot(
+        interval_minutes=interval_minutes,
+        now=checked_at,
+    )
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        owner: dict[str, Any] | None = None
+        if claim_token is not None:
+            owner = require_owner(state, claim_token=claim_token)
+            if owner.get("status") not in {"claimed", "work_in_progress"}:
+                raise ValueError("defer-slot requires a live outbound owner")
+        else:
+            candidate = state.get("owner")
+            if not isinstance(candidate, dict) or not owner_is_active(
+                candidate,
+                checked_at,
+            ):
+                raise ValueError(
+                    "defer-slot without claim-token requires an active owner"
+                )
+            owner_claimed_at = parse_aware_time(
+                str(candidate.get("claimed_at", "")),
+                field="owner.claimed_at",
+            )
+            owner_slot = scheduled_slot(
+                interval_minutes=interval_minutes,
+                now=owner_claimed_at,
+            )
+            if owner_slot["adjustment_id"] == slot["adjustment_id"]:
+                return {
+                    "status": "slot_already_claimed",
+                    "claim_token": None,
+                    "reason": explanation,
+                    "slot_id": slot["adjustment_id"],
+                    "catchup_added": 0,
+                    "catchup_remaining": state["catchup_remaining"],
+                }
+
+        previous = next(
+            (
+                item
+                for item in state["adjustments"]
+                if item.get("adjustment_id") == slot["adjustment_id"]
+            ),
+            None,
+        )
+        catchup_added = 0
+        if previous is None:
+            state["adjustments"].append(
+                {
+                    **slot,
+                    "count": 1,
+                    "reason": explanation,
+                    "created_at": autopilot_dispatch.isoformat(checked_at),
+                }
+            )
+            state["catchup_remaining"] += 1
+            catchup_added = 1
+
+        if owner is not None:
+            state["runs"].append(
+                {
+                    "claim_token": claim_token,
+                    "claimed_at": owner.get("claimed_at"),
+                    "started_at": owner.get("started_at"),
+                    "finished_at": autopilot_dispatch.isoformat(checked_at),
+                    "status": "deferred",
+                    "target_limit": owner.get("target_limit"),
+                    "publications": [],
+                    "catchup_consumed": 0,
+                    "catchup_added": catchup_added,
+                    "reason": explanation,
+                    "slot_id": slot["adjustment_id"],
+                }
+            )
+            state["owner"] = None
+        write_state(path, state)
+    return {
+        "status": "deferred" if catchup_added else "already_deferred",
+        "claim_token": claim_token,
+        "reason": explanation,
+        "slot_id": slot["adjustment_id"],
+        "catchup_added": catchup_added,
+        "catchup_remaining": state["catchup_remaining"],
     }
 
 
@@ -415,6 +539,10 @@ def build_parser() -> argparse.ArgumentParser:
     failed_parser = commands.add_parser("failed")
     failed_parser.add_argument("--claim-token", required=True)
     failed_parser.add_argument("--reason", required=True)
+    deferred_parser = commands.add_parser("defer-slot")
+    deferred_parser.add_argument("--interval-minutes", required=True, type=int)
+    deferred_parser.add_argument("--reason", required=True)
+    deferred_parser.add_argument("--claim-token")
     commands.add_parser("status")
     return parser
 
@@ -454,6 +582,13 @@ def run(arguments: argparse.Namespace) -> dict[str, Any]:
             path,
             claim_token=arguments.claim_token,
             reason=arguments.reason,
+        )
+    if arguments.command == "defer-slot":
+        return defer_slot(
+            path,
+            interval_minutes=arguments.interval_minutes,
+            reason=arguments.reason,
+            claim_token=arguments.claim_token,
         )
     if arguments.command == "status":
         return status(path)

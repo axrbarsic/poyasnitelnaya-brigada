@@ -32,12 +32,22 @@ class OutboundCycleTests(unittest.TestCase):
         self.assertIn("--non-empty --max 4000", prompt)
         self.assertNotIn("--exact 4000", prompt)
         self.assertIn("valid=true", prompt)
-        for command in ("claim", "started", "renew", "completed", "failed"):
+        for command in (
+            "claim",
+            "started",
+            "renew",
+            "completed",
+            "failed",
+            "defer-slot",
+        ):
             self.assertIn(
                 f"scripts/outbound_cycle.py --state "
                 f"var/outbound-cycle.json --lease-seconds 1800 {command}",
                 prompt,
             )
+        self.assertIn("--interval-minutes 10", prompt)
+        self.assertIn("poyasnitelnaya-brigada-v2", prompt)
+        self.assertIn("расист", prompt)
         self.assertIn("Никогда не оставляй claim без terminal", prompt)
 
     def test_normal_claim_serializes_one_target(self) -> None:
@@ -135,6 +145,83 @@ class OutboundCycleTests(unittest.TestCase):
         self.assertTrue(next_claim["dispatch"])
         self.assertNotEqual(
             next_claim["claim_token"],
+            claimed["claim_token"],
+        )
+
+    def test_started_slot_defer_adds_catchup_and_releases_owner(self) -> None:
+        now = datetime(2026, 8, 1, 6, 41, tzinfo=timezone.utc)
+        claimed = outbound_cycle.claim(
+            self.state,
+            lease_seconds=1800,
+            now=now,
+        )
+        outbound_cycle.started(
+            self.state,
+            claim_token=claimed["claim_token"],
+        )
+        deferred = outbound_cycle.defer_slot(
+            self.state,
+            interval_minutes=10,
+            reason="inbound_writer_priority",
+            claim_token=claimed["claim_token"],
+            now=now,
+        )
+        state = outbound_cycle.load_state(self.state)
+
+        self.assertEqual(deferred["status"], "deferred")
+        self.assertEqual(deferred["catchup_remaining"], 1)
+        self.assertIsNone(state["owner"])
+        self.assertEqual(state["runs"][-1]["status"], "deferred")
+
+    def test_busy_slot_defer_is_idempotent_and_preserves_owner(self) -> None:
+        claimed_at = datetime(2026, 8, 1, 6, 29, tzinfo=timezone.utc)
+        now = datetime(2026, 8, 1, 6, 31, tzinfo=timezone.utc)
+        claimed = outbound_cycle.claim(
+            self.state,
+            lease_seconds=1800,
+            now=claimed_at,
+        )
+        first = outbound_cycle.defer_slot(
+            self.state,
+            interval_minutes=10,
+            reason="outbound_owner_busy",
+            now=now,
+        )
+        second = outbound_cycle.defer_slot(
+            self.state,
+            interval_minutes=10,
+            reason="outbound_owner_busy",
+            now=now + timedelta(minutes=1),
+        )
+        state = outbound_cycle.load_state(self.state)
+
+        self.assertEqual(first["catchup_added"], 1)
+        self.assertEqual(second["status"], "already_deferred")
+        self.assertEqual(state["catchup_remaining"], 1)
+        self.assertEqual(
+            state["owner"]["claim_token"],
+            claimed["claim_token"],
+        )
+
+    def test_busy_slot_does_not_duplicate_same_window(self) -> None:
+        now = datetime(2026, 8, 1, 6, 41, tzinfo=timezone.utc)
+        claimed = outbound_cycle.claim(
+            self.state,
+            lease_seconds=1800,
+            now=now,
+        )
+        deferred = outbound_cycle.defer_slot(
+            self.state,
+            interval_minutes=10,
+            reason="outbound_owner_busy",
+            now=now + timedelta(minutes=1),
+        )
+        state = outbound_cycle.load_state(self.state)
+
+        self.assertEqual(deferred["status"], "slot_already_claimed")
+        self.assertEqual(state["catchup_remaining"], 0)
+        self.assertEqual(
+            state["owner"]["claim_token"],
             claimed["claim_token"],
         )
 

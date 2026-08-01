@@ -95,11 +95,13 @@ an X reply.
     deduplicates the same resource within one UTC day.
 23. Scheduled outbound uses the standalone local cron `x-15`, never a
     heartbeat attached to the busy owner task. It runs on `gpt-5.6-sol` with
-    effort `max`, checks the incoming queue first, and obtains a separate
-    atomic lease from `scripts/outbound_cycle.py`. A normal run handles one
+    effort `max`, obtains a separate atomic lease from
+    `scripts/outbound_cycle.py`, and then checks the incoming queue. A normal run handles one
     target. A bounded catch-up run may handle a second target sequentially in
     the same X tab. Only a verified second publication consumes one missed
-    opportunity, so catch-up cannot force a weak or duplicate target.
+    opportunity, so catch-up cannot force a weak or duplicate target. A tick
+    blocked by the single writer lane records an idempotent deferred 10-minute
+    slot instead of disappearing.
 
 Each event resolution can preserve stance, confidence, media meaning, and
 multiple evidence notes. This prevents a media-only reply from disappearing

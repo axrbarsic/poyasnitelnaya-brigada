@@ -171,7 +171,7 @@ state SQLite вручную. Закрепление worker не требуетс
   `scripts/render_launchd.py`;
 - heartbeat `x-relay` и cron `x-15` восстановить только через официальный
   `automation_update`. Для `x-15` обязательны local execution,
-  `gpt-5.6-sol`, effort `max`, 15-минутный интервал и точный prompt из
+  `gpt-5.6-sol`, effort `max`, 10-минутный интервал и точный prompt из
   `macos/x-15.prompt.txt`;
 - подписанный app-like Keychain helper восстановить командой
   `scripts/install_keychain_helper.sh`. Для первого выпуска нужен Apple Account
