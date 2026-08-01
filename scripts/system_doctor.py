@@ -41,6 +41,13 @@ REASONING_EFFORT_ORDER = (
     "max",
     "ultra",
 )
+ACTIVE_REPAIR_STATUSES = {
+    "repair_observing",
+    "escalation_pending",
+    "handoff_pending",
+    "claimed",
+    "work_in_progress",
+}
 
 
 @dataclass(frozen=True)
@@ -256,14 +263,7 @@ def relay_progress_check(
             "Проверь owner lease и session janitor.",
             details,
         )
-    active_repair_statuses = {
-        "repair_observing",
-        "escalation_pending",
-        "handoff_pending",
-        "claimed",
-        "work_in_progress",
-    }
-    if work_kind == "repair" and dispatch_status in active_repair_statuses:
+    if work_kind == "repair" and dispatch_status in ACTIVE_REPAIR_STATUSES:
         return Check(
             "runtime.relay_progress",
             "pass",
@@ -332,6 +332,7 @@ def queue_latency_check(
     *,
     events: list[Any],
     owner: Any,
+    dispatch_state: Any = None,
     max_age_seconds: int,
     now: datetime | None = None,
 ) -> Check:
@@ -397,8 +398,20 @@ def queue_latency_check(
     active_owner = bool(owner_event_ids) and (
         owner_lease_expires is None or owner_lease_expires >= current
     )
+    active_repair = (
+        isinstance(dispatch_state, dict)
+        and str(dispatch_state.get("work_kind", "")) == "repair"
+        and str(dispatch_state.get("status", ""))
+        in ACTIVE_REPAIR_STATUSES
+    )
     healthy = 0 <= age_seconds <= max_age_seconds
-    status = "pass" if healthy else "warn" if active_owner else "fail"
+    status = (
+        "pass"
+        if healthy
+        else "warn"
+        if active_owner or active_repair
+        else "fail"
+    )
     details = {
         "age_seconds": round(age_seconds, 1),
         "max_age_seconds": max_age_seconds,
@@ -408,6 +421,7 @@ def queue_latency_check(
             "Z",
         ),
         "active_owner": active_owner,
+        "active_repair": active_repair,
         "owned": owned,
         "pending_count": len(events),
     }
@@ -428,6 +442,14 @@ def queue_latency_check(
         repair = (
             "Проверь продвижение текущего claim и следующий автоматический "
             "handoff."
+        )
+    elif active_repair:
+        summary = (
+            "Старейшее ожидающее событие превысило SLO во время "
+            "активного repair handoff."
+        )
+        repair = (
+            "Заверши repair handoff, затем проверь следующий X claim."
         )
     else:
         summary = "Старейшее событие превысило SLO без активного owner."
@@ -1049,6 +1071,7 @@ def check_contract(
             queue_latency_check(
                 events=events,
                 owner=owner,
+                dispatch_state=dispatch_state,
                 max_age_seconds=max_queue_age,
             )
         )
