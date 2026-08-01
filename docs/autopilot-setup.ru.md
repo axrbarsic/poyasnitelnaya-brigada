@@ -123,17 +123,22 @@ trust_level = "trusted"
 Исчерпание лимита хвостов не останавливает собственные упоминания. Текущие
 счетчики доступны в `python3 xmention_watcher.py --config config.json status`.
 
-`browser_owner_thread_id` принадлежит одной закрепленной owner-сессии на Sol
+`browser_owner_thread_id` принадлежит одному выделенному service worker на Sol
 Max. `x-relay` является heartbeat одной существующей Luna Low сессии, а не
 standalone automation. `reserve-handoff` не claim события, но атомарно блокирует
 повторную отправку wake на 180 секунд. Relay не читает owner thread как
-дополнительный gate. Он сразу отправляет ровно один direct follow-up в
-закреплённый thread, а Codex ставит его в очередь или направляет в активный
-turn. При ошибке доставки relay выполняет
+дополнительный gate. Точный thread, model и thinking возвращает versioned
+contract, а process-local `hostId` не передаётся. Relay сразу отправляет ровно
+один direct follow-up в service worker, а Codex ставит его в очередь или
+направляет в активный turn. При ошибке доставки relay выполняет
 `release-handoff` с точным reservation token. Успешный owner claim переводит
 reservation в состояние `claimed`. Atomic reservation и глобальный owner claim
 не допускают двух Browser-owner. Восстановимый prompt heartbeat хранится в
 [`macos/x-relay.prompt.txt`](../macos/x-relay.prompt.txt).
+
+Repair handoff не прерывает активный X claim. Relay проверяет глобальный owner
+до repair reservation и сразу после неё. Если X owner успел стать активным,
+relay освобождает только repair reservation и ждёт durable завершения X.
 
 Ручной ответ Alex считается ходом `alex`. Если на него отвечают, Browser owner
 поднимает точную живую ветку, сохраняет ранее не импортированный ручной ответ и
@@ -220,6 +225,12 @@ scheduled run создает отдельную задачу и может ос�
 `runtime.relay_progress` только когда ожидание без owner превышает версионный
 контракт `max_relay_wait_seconds`. Resource deferral и активный owner не
 считаются остановкой relay.
+
+Отдельная проверка `runtime.queue_latency` измеряет `first_seen_at` самого
+старого события независимо от свежести poll и dispatcher. Превышение
+`max_queue_age_seconds` без owner является FAIL. Если именно старейшее событие
+уже находится в активном claim, doctor возвращает WARN и требует проверить
+renew и durable завершение.
 
 ## Контракты памяти и качества
 

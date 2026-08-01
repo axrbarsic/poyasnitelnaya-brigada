@@ -333,6 +333,78 @@ class SystemDoctorTests(unittest.TestCase):
             "deferred_resources",
         )
 
+    def test_relay_progress_rejects_failed_dispatch_with_queue(self) -> None:
+        check = system_doctor.relay_progress_check(
+            pending_count=1,
+            dispatch_state={
+                "status": "desktop_launch_failed",
+                "checked_at": "2026-07-29T14:59:59Z",
+            },
+            owner=None,
+            max_wait_seconds=180,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "fail")
+        self.assertEqual(check.identifier, "runtime.relay_progress")
+
+    def test_queue_latency_detects_unowned_stale_event(self) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[
+                {
+                    "id": "123",
+                    "first_seen_at": "2026-07-29T14:54:59Z",
+                }
+            ],
+            owner=None,
+            max_age_seconds=300,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "fail")
+        self.assertEqual(check.details["oldest_event_id"], "123")
+        self.assertEqual(check.details["age_seconds"], 301.0)
+
+    def test_queue_latency_warns_for_owned_long_running_event(self) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[
+                {
+                    "id": "123",
+                    "first_seen_at": "2026-07-29T14:54:59Z",
+                },
+                {
+                    "id": "456",
+                    "first_seen_at": "2026-07-29T14:59:59Z",
+                },
+            ],
+            owner={"event_ids": ["123"]},
+            max_age_seconds=300,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "warn")
+        self.assertTrue(check.details["owned"])
+
+    def test_queue_latency_rejects_invalid_event_shape(self) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[None],
+            owner=None,
+            max_age_seconds=300,
+        )
+
+        self.assertEqual(check.status, "fail")
+        self.assertEqual(check.details["invalid_event_ids"], ["<invalid>"])
+
+    def test_queue_latency_rejects_missing_first_seen_at(self) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[{"id": "123", "first_seen_at": None}],
+            owner=None,
+            max_age_seconds=300,
+        )
+
+        self.assertEqual(check.status, "fail")
+        self.assertEqual(check.details["invalid_event_ids"], ["123"])
+
     def test_contract_treats_persistent_busy_as_warning(self) -> None:
         with (
             mock.patch(

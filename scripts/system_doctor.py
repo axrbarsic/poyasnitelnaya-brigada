@@ -257,12 +257,20 @@ def relay_progress_check(
         "desktop_launched_waiting_relay",
         "desktop_ready_waiting_relay",
     }
-    if dispatch_status not in waiting_statuses:
+    if dispatch_status == "deferred_resources":
         return Check(
             "runtime.relay_progress",
             "pass",
-            "Dispatcher не находится в состоянии ожидания relay.",
-            "Проверь отдельные gate и dispatcher health.",
+            "Relay намеренно отложен resource guard.",
+            "Проверь возраст очереди и освободи только безопасные ресурсы.",
+            details,
+        )
+    if dispatch_status not in waiting_statuses:
+        return Check(
+            "runtime.relay_progress",
+            "fail",
+            "Ожидающая очередь не передана relay.",
+            "Проверь статус dispatcher, heartbeat x-relay и direct delivery.",
             details,
         )
     waiting_since = parse_timestamp(
@@ -298,6 +306,101 @@ def relay_progress_check(
             if healthy
             else "Проверь heartbeat x-relay, reservation и direct delivery."
         ),
+        details,
+    )
+
+
+def queue_latency_check(
+    *,
+    events: list[Any],
+    owner: Any,
+    max_age_seconds: int,
+    now: datetime | None = None,
+) -> Check:
+    """Measure queue age independently from dispatcher heartbeat state."""
+
+    if max_age_seconds <= 0:
+        raise ValueError("queue latency max age must be positive")
+    if not events:
+        return Check(
+            "runtime.queue_latency",
+            "pass",
+            "Ожидающая очередь пуста.",
+            "Проверь wake queue и poll health.",
+            {
+                "pending_count": 0,
+                "max_age_seconds": max_age_seconds,
+            },
+        )
+
+    observed: list[tuple[str, datetime]] = []
+    invalid_event_ids: list[str] = []
+    for event in events:
+        if not isinstance(event, dict):
+            invalid_event_ids.append("<invalid>")
+            continue
+        event_id = str(event.get("id") or event.get("event_id") or "")
+        first_seen = parse_timestamp(event.get("first_seen_at"))
+        if not event_id or first_seen is None:
+            invalid_event_ids.append(event_id or "<missing>")
+            continue
+        observed.append((event_id, first_seen))
+    if invalid_event_ids:
+        return Check(
+            "runtime.queue_latency",
+            "fail",
+            "Возраст части ожидающей очереди нельзя измерить.",
+            "Восстанови first_seen_at из live SQLite, не удаляя события.",
+            {
+                "invalid_event_ids": invalid_event_ids,
+                "pending_count": len(events),
+                "max_age_seconds": max_age_seconds,
+            },
+        )
+
+    oldest_event_id, oldest_seen = min(observed, key=lambda item: item[1])
+    current = now or datetime.now(timezone.utc)
+    age_seconds = (current - oldest_seen).total_seconds()
+    owner_event_ids = (
+        {
+            str(event_id)
+            for event_id in owner.get("event_ids", [])
+            if str(event_id)
+        }
+        if isinstance(owner, dict)
+        else set()
+    )
+    owned = oldest_event_id in owner_event_ids
+    healthy = 0 <= age_seconds <= max_age_seconds
+    status = "pass" if healthy else "warn" if owned else "fail"
+    details = {
+        "age_seconds": round(age_seconds, 1),
+        "max_age_seconds": max_age_seconds,
+        "oldest_event_id": oldest_event_id,
+        "oldest_first_seen_at": oldest_seen.isoformat().replace(
+            "+00:00",
+            "Z",
+        ),
+        "owned": owned,
+        "pending_count": len(events),
+    }
+    if healthy:
+        summary = f"Старейшее событие ожидает {round(age_seconds, 1)}s."
+        repair = "Проверь relay progress при росте возраста."
+    elif owned:
+        summary = (
+            "Старейшее событие превысило SLO, но уже принадлежит "
+            "активному Browser owner."
+        )
+        repair = "Проверь renew, durable history и завершение текущего claim."
+    else:
+        summary = "Старейшее событие превысило SLO без активного owner."
+        repair = "Проверь dispatcher, x-relay и owner routing, очередь не удаляй."
+    return Check(
+        "runtime.queue_latency",
+        status,
+        summary,
+        repair,
         details,
     )
 
@@ -777,6 +880,7 @@ def check_contract(
         )
 
     wake_path = resolve_project_path(root, str(runtime["wake_file"]))
+    events: list[dict[str, Any]] = []
     try:
         wake = read_json(wake_path)
         events = wake.get("events", [])
@@ -901,6 +1005,15 @@ def check_contract(
                 dispatch_state=dispatch_state,
                 owner=owner,
                 max_wait_seconds=max_relay_wait,
+            )
+        )
+    max_queue_age = int(runtime.get("max_queue_age_seconds", 0))
+    if max_queue_age > 0 and isinstance(events, list):
+        checks.append(
+            queue_latency_check(
+                events=events,
+                owner=owner,
+                max_age_seconds=max_queue_age,
             )
         )
 

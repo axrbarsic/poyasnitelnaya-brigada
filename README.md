@@ -20,8 +20,8 @@
        width="430">
 </p>
 
-> Статус deployment на 2026-07-31: входящий terminal-first контур работает
-> через Luna Low relay и постоянный Sol Max Browser owner. Маршрут
+> Статус deployment на 2026-08-01: входящий terminal-first контур работает
+> через Luna Low relay и выделенный Sol Max service worker. Маршрут
 > «Пояснительной бригады» перенесен из custom GPT в локальный versioned skill.
 > Генерация больше не открывает ChatGPT, использует Sol Max, точную SQLite
 > history и детерминированный верхний предел 4000 Unicode code points без
@@ -61,8 +61,9 @@
    не снимает событие с очереди и вызывает локальное уведомление.
 8. Один существующий in-app heartbeat на Luna Low вызывает `reserve-handoff`.
    Python атомарно резервирует единственный handoff. Затем relay отправляет
-   ровно один direct follow-up в закреплённый owner thread без чтения его
-   статуса. Codex ставит follow-up в очередь или направляет его в активный
+   ровно один direct follow-up в service worker без чтения его статуса. Точный
+   thread, model и thinking приходят из versioned contract, `hostId` не
+   передаётся. Codex ставит follow-up в очередь или направляет его в активный
    turn. Ошибка доставки освобождает точную reservation командой
    `release-handoff`. Reservation с TTL и глобальный owner claim не позволяют
    двум heartbeat создать двух Browser-owner.
@@ -108,7 +109,7 @@ Watcher и dispatcher сами никогда ничего не публикую
   Browser owner, пока идет обработка или локальная генерация.
 - Если задача упала, событие снова станет доступно после окончания аренды.
 - SQLite, ledger и история ветки защищают от повторной публикации.
-- Каждый непустой Sol turn в закрепленной сессии является единственным Browser
+- Каждый непустой Sol turn в выделенном service worker является единственным Browser
   owner своего batch. Аренда блокирует следующий claim, а не только уже
   известный ID.
 - Resource guard проверяет общий RSS Codex, рендереры, helper-процессы и
@@ -135,13 +136,16 @@ Watcher и dispatcher сами никогда ничего не публикую
   загружает poll LaunchAgent и подтверждает один успешный live poll.
 - Repair incident имеет reservation, claim token, cooldown и обязательный
   отчет. Одинаковая поломка не создает минутный шторм модельных пробуждений.
-- Событийный relay использует одну существующую heartbeat-сессию и одну
-  постоянную owner-сессию. Новая сессия на цикл не создается.
+- Событийный relay использует одну существующую heartbeat-сессию и один
+  выделенный service worker. Новая сессия на цикл не создается.
 - Relay никогда не будит активную owner-сессию. Mobile Remote, локальный Desktop
   и автоматический Browser owner используют один durable thread по очереди.
   Проверка состояния и отправка не являются одной атомарной операцией Codex,
   поэтому интерактивные сообщения с двух экранов также отправляются
   последовательно.
+- Doctor handoff также ждёт завершения активного X claim. Повторная проверка
+  owner после repair reservation освобождает только repair token, если X успел
+  выиграть гонку старта.
 - Блокировка экрана не является отказом Browser. Если Mac awake и read-only
   Browser preflight проходит, owner продолжает работу. Системный сон отключен.
 - Отдельный updater проверяет официальные Codex CLI releases только на idle
@@ -222,7 +226,7 @@ python3 xmention_watcher.py --config config.json status
 [`docs/x-api-cost-control.ru.md`](docs/x-api-cost-control.ru.md).
 
 После этого установите пять LaunchAgent, один in-app Luna relay heartbeat и
-одну закрепленную сессию Sol Max по
+один выделенный Sol Max service worker по
 [русскому руководству автопилота](docs/autopilot-setup.ru.md),
 [контракту локального skill](docs/local-explainer-skill.ru.md) и
 [deployment checklist](docs/deployment-checklist.md). Для iMac с 8 ГБ отдельно
@@ -486,3 +490,6 @@ python3 xmention_watcher.py --config config.json history-export \
 ```
 
 Подробная архитектура находится в [docs/architecture.md](docs/architecture.md).
+Причины пропусков, принятые промышленные паттерны, Browser 26.727 и безопасная
+граница обновления описаны в
+[аудите надёжности](docs/reliability-audit-2026-08-01.ru.md).

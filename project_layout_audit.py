@@ -23,6 +23,7 @@ REQUIRED_PATHS = (
     "docs/project-layout.ru.md",
     "docs/readiness-audit.md",
     "docs/readiness-audit.ru.md",
+    "docs/reliability-audit-2026-08-01.ru.md",
     "evidence_import.py",
     "macos/com.axrbarsic.xmention.poll.plist.example",
     "macos/com.axrbarsic.xmention.dispatch.plist.example",
@@ -41,6 +42,8 @@ REQUIRED_PATHS = (
     "scripts/outbound_cycle.py",
     "skill-backup/poyasnitelnaya-brigada/SKILL.md",
     "skill-backup/poyasnitelnaya-brigada/agents/openai.yaml",
+    "skill-backup/poyasnitelnaya-brigada-v2/SKILL.md",
+    "skill-backup/poyasnitelnaya-brigada-v2/agents/openai.yaml",
     "skill-backup/x-twitter-operator/SKILL.md",
     "restic_backup.py",
     "tests/test_archive_intake.py",
@@ -48,6 +51,8 @@ REQUIRED_PATHS = (
     "tests/test_codex_cli_updater.py",
     "tests/test_local_explainer_skill.py",
     "tests/test_outbound_cycle.py",
+    "tests/test_poyasnitelnaya_brigada_v2.py",
+    "tests/fixtures/poyasnitelnaya_brigada_v2_cases.json",
     "tests/test_readiness_audit.py",
     "tests/test_restic_backup.py",
     "tests/test_xmention_watcher.py",
@@ -96,6 +101,7 @@ def audit_layout(
     config_path: Path,
     installed_skill: Path | None,
     installed_generation_skill: Path | None = None,
+    installed_generation_skill_v2: Path | None = None,
     require_installed_skill: bool,
 ) -> dict[str, Any]:
     canonical_root = root.resolve()
@@ -162,12 +168,40 @@ def audit_layout(
     elif require_installed_skill:
         errors.append("installed_generation_skill_missing")
 
+    generation_skill_v2_backup = (
+        canonical_root / "skill-backup/poyasnitelnaya-brigada-v2"
+    )
+    generation_v2_backup_manifest = directory_manifest(
+        generation_skill_v2_backup
+    )
+    installed_generation_skill_v2_exists = (
+        installed_generation_skill_v2 is not None
+        and installed_generation_skill_v2.is_dir()
+    )
+    installed_generation_skill_v2_matches: bool | None = None
+    if (
+        installed_generation_skill_v2_exists
+        and installed_generation_skill_v2 is not None
+    ):
+        installed_generation_skill_v2_matches = (
+            directory_manifest(installed_generation_skill_v2.resolve())
+            == generation_v2_backup_manifest
+        )
+        if not installed_generation_skill_v2_matches:
+            errors.append(
+                "installed_generation_skill_v2_differs_from_repository_backup"
+            )
+    elif require_installed_skill:
+        errors.append("installed_generation_skill_v2_missing")
+
     if missing_paths:
         errors.append("required_project_paths_missing")
     if not backup_manifest:
         errors.append("skill_backup_empty")
     if not generation_backup_manifest:
         errors.append("generation_skill_backup_empty")
+    if not generation_v2_backup_manifest:
+        errors.append("generation_skill_v2_backup_empty")
 
     complete = not errors
     return {
@@ -198,6 +232,20 @@ def audit_layout(
         "installed_generation_skill_matches": (
             installed_generation_skill_matches
         ),
+        "generation_skill_v2_backup_files": len(
+            generation_v2_backup_manifest
+        ),
+        "installed_generation_skill_v2": (
+            str(installed_generation_skill_v2.resolve())
+            if (
+                installed_generation_skill_v2_exists
+                and installed_generation_skill_v2 is not None
+            )
+            else None
+        ),
+        "installed_generation_skill_v2_matches": (
+            installed_generation_skill_v2_matches
+        ),
         "errors": errors,
     }
 
@@ -220,6 +268,11 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path.home() / ".codex/skills/poyasnitelnaya-brigada",
     )
+    parser.add_argument(
+        "--installed-generation-skill-v2",
+        type=Path,
+        default=Path.home() / ".codex/skills/poyasnitelnaya-brigada-v2",
+    )
     parser.add_argument("--require-installed-skill", action="store_true")
     return parser.parse_args()
 
@@ -237,6 +290,7 @@ def main() -> int:
         config_path=config_path,
         installed_skill=args.installed_skill,
         installed_generation_skill=args.installed_generation_skill,
+        installed_generation_skill_v2=args.installed_generation_skill_v2,
         require_installed_skill=args.require_installed_skill,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

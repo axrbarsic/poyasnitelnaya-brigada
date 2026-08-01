@@ -37,13 +37,15 @@ an X reply.
     `relay-reserve-handoff`. Python selects either repair or X, creates at most
     one reservation, and returns one unambiguous `dispatch` plus `route`.
     The relay then sends one direct `send_message_to_thread` follow-up to the
-    pinned Sol Max Browser-owner without reading owner status. Codex queues or
-    steers the follow-up when a turn is active.
+    dedicated Sol Max service worker without reading owner status. The exact
+    thread, model, and thinking values come from the versioned contract, and no
+    process-local `hostId` is sent. Codex queues or steers the follow-up when a
+    turn is active.
     If delivery fails, the relay runs `release-handoff` with its exact
     reservation token and exits. The durable queue remains pending. Atomic
     reservation and the global owner claim prevent adjacent heartbeat ticks
     from creating concurrent Browser owners.
-12. The pinned task executes the atomic claim inside Codex Desktop and remains
+12. The dedicated service worker executes the atomic claim inside Codex Desktop and remains
     the only authenticated Browser publication owner. After the queue is empty,
     the supervisor may close only the exact Desktop PID that it launched.
 13. A separate one-minute watchdog checks poll freshness and failure count.
@@ -134,7 +136,7 @@ injects the known target ID into the queue or automation prompt.
 4. Run target-agnostic `mandatory-response-requeue` with one fixed lookback and
    `as-of`, first dry-run and then apply.
 5. Let the model-free dispatcher rediscover the event, launch Desktop when
-   needed, and let the existing in-app Luna relay wake the pinned Sol owner.
+   needed, and let the existing in-app Luna relay wake the dedicated Sol owner.
 6. Verify one live direct Alex child, exact history, durable resolution, empty
    queue and no active lease.
 
@@ -210,8 +212,8 @@ contradiction claim, or factual conclusion.
   state. An unresolved event becomes eligible again after the lease expires,
   so a crashed Browser-owner turn cannot strand the queue forever.
 - The built-in Browser is unavailable in an external app-server runtime.
-  Production therefore uses the existing in-app relay and pinned Codex Desktop
-  owner. The legacy app-server path remains only as a disabled diagnostic
+  Production therefore uses the existing in-app relay and dedicated Codex
+  Desktop service worker. The legacy app-server path remains only as a disabled diagnostic
   fallback.
 - The dispatcher never launches Desktop for an empty or deferred queue. It
   records the exact PID it starts and never closes a Desktop instance opened
@@ -221,10 +223,18 @@ contradiction claim, or factual conclusion.
 - Dispatcher state preserves the start of an unowned relay wait. The doctor
   escalates only after that wait exceeds the versioned recovery limit, while
   resource deferral and an active owner remain valid non-stalled states.
+- Queue latency is measured independently from poll and dispatcher heartbeat
+  freshness. An unowned oldest event over the versioned SLO is a failure. The
+  same event inside an active owner claim is a warning that requires lease and
+  durable-completion inspection.
 - The relay uses an atomic reservation and the global owner claim around direct
   delivery. Mobile Remote, local Desktop, and automated Browser work are
   serialized on the same durable thread. The direct follow-up is queued or
   steered by Codex when the owner turn is active.
+- A repair handoff never preempts an active X owner lease. The relay checks the
+  owner before repair reservation and again after reservation; if X wins the
+  race, it releases only the repair reservation and waits for the publication
+  transaction to finish.
 - An IAB timeout is classified per execution turn. One fresh turn in the same
   Browser-owner task may run the official bootstrap once; publication resumes
   only after an authenticated read-only preflight succeeds.

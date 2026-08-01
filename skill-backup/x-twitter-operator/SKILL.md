@@ -76,6 +76,22 @@ Reuse tabs instead of opening duplicates. Do not close or navigate a tab owned b
 
 Before switching a tab, record its role and current URL. After switching, verify origin and page identity before typing or clicking.
 
+For Browser 26.727 or newer:
+
+- The address bar and Browser history may help reacquire a task-owned page, but
+  they are navigation aids only. Never use browsing history as the durable X
+  queue, conversation memory, duplicate ledger, or proof of publication.
+- The built-in Browser has a profile separate from regular Chrome. Never assume
+  that a Chrome tab, login, or extension state is available in the built-in
+  Browser.
+- Use Computer Use to inspect rendered state and verify the exact target before
+  a mutation. Reusing a URL from history does not waive target revalidation.
+- Full CDP Developer mode is an optional diagnostic path for console, network,
+  DOM, style, or performance failures. It requires explicit approval and is not
+  part of routine X reading, composing, or publication.
+- Chrome extension context, page right-click actions, and YouTube helpers do not
+  replace the authenticated built-in Browser owner for X.
+
 On Alex's 8 GB iMac, let the resource guard choose efficiency, balanced, or
 performance automatically. The profile controls whether Browser work may
 start, never the required quality of Sol reasoning or fact checking:

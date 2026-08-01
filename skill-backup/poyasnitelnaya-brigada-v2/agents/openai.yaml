@@ -1,0 +1,4 @@
+interface:
+  display_name: "Пояснительная бригада v2"
+  short_description: "Удерживает тезис и ловит противоречия в X"
+  default_prompt: "Use $poyasnitelnaya-brigada-v2 to продолжить этот спор в X, удержать исходный тезис и ответить на последнее возражение без ухода в сторону."

@@ -27,7 +27,20 @@ class AutopilotSupervisorTests(unittest.TestCase):
             encoding="utf-8",
         )
         self.contract = self.root / "contract.json"
-        self.contract.write_text("{}", encoding="utf-8")
+        self.contract.write_text(
+            json.dumps(
+                {
+                    "threads": {
+                        "browser_owner": {
+                            "id": "owner",
+                            "model": "gpt-5.6-sol",
+                            "minimum_reasoning_effort": "max",
+                        }
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
         self.now = datetime(2026, 7, 27, 18, 0, tzinfo=timezone.utc)
 
     def tearDown(self) -> None:
@@ -200,6 +213,7 @@ class AutopilotSupervisorTests(unittest.TestCase):
         ) as reserve_x:
             result = autopilot_supervisor.relay_reserve_handoff(
                 self.config,
+                self.contract,
                 lease_seconds=1800,
                 now=self.now + timedelta(seconds=1),
             )
@@ -210,6 +224,9 @@ class AutopilotSupervisorTests(unittest.TestCase):
         )
         self.assertEqual(result["route"], "x")
         self.assertTrue(result["dispatch"])
+        self.assertEqual(result["owner_thread_id"], "owner")
+        self.assertEqual(result["owner_model"], "gpt-5.6-sol")
+        self.assertEqual(result["owner_thinking"], "max")
 
     def test_billing_incident_clears_after_poll_recovers(self) -> None:
         blocked = self.check(
@@ -343,6 +360,7 @@ class AutopilotSupervisorTests(unittest.TestCase):
         ) as reserve_x:
             result = autopilot_supervisor.relay_reserve_handoff(
                 self.config,
+                self.contract,
                 lease_seconds=1800,
                 now=self.now,
             )
@@ -355,6 +373,7 @@ class AutopilotSupervisorTests(unittest.TestCase):
         self.assertTrue(result["dispatch"])
         self.assertFalse(result["repair_pending"])
         self.assertEqual(result["event_ids"], ["synthetic-event"])
+        self.assertEqual(result["owner_thread_id"], "owner")
 
     def test_relay_does_not_check_x_while_repair_is_pending(self) -> None:
         database_failure = self.check("runtime.database", "fail")
@@ -373,6 +392,7 @@ class AutopilotSupervisorTests(unittest.TestCase):
         ):
             result = autopilot_supervisor.relay_reserve_handoff(
                 self.config,
+                self.contract,
                 lease_seconds=1800,
                 now=self.now,
             )
@@ -380,6 +400,171 @@ class AutopilotSupervisorTests(unittest.TestCase):
         self.assertEqual(result["route"], "repair")
         self.assertTrue(result["dispatch"])
         self.assertTrue(result["repair_pending"])
+        self.assertEqual(result["owner_thread_id"], "owner")
+
+    def test_relay_does_not_preempt_active_x_owner_for_repair(self) -> None:
+        database_failure = self.check("runtime.database", "fail")
+        autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now,
+            checks=[database_failure],
+        )
+        with (
+            mock.patch.object(
+                autopilot_supervisor,
+                "active_x_owner_snapshot",
+                return_value={
+                    "owner_busy": True,
+                    "active_event_ids": ["123"],
+                    "lease_expires_at": "2026-07-27T18:30:00Z",
+                },
+            ),
+            mock.patch.object(
+                autopilot_supervisor,
+                "reserve_handoff",
+                side_effect=AssertionError(
+                    "repair must wait for the active X owner"
+                ),
+            ),
+            mock.patch.object(
+                autopilot_supervisor.autopilot_bridge,
+                "reserve_handoff",
+                side_effect=AssertionError(
+                    "X must not receive another handoff"
+                ),
+            ),
+        ):
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        self.assertEqual(result["status"], "repair_waiting_for_x_owner")
+        self.assertFalse(result["dispatch"])
+        self.assertTrue(result["repair_pending"])
+        self.assertTrue(result["owner_busy"])
+        self.assertEqual(result["active_event_ids"], ["123"])
+
+    def test_active_x_owner_snapshot_honors_exact_lease(self) -> None:
+        state_path = self.root / "var" / "autopilot-dispatch.json"
+        state_path.parent.mkdir(parents=True)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "events": {},
+                    "owner": {
+                        "claim_token": "x-token",
+                        "event_ids": ["123"],
+                        "claimed_at": "2026-07-27T18:00:00Z",
+                        "lease_expires_at": "2026-07-27T18:30:00Z",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        active = autopilot_supervisor.active_x_owner_snapshot(
+            self.config,
+            lease_seconds=1800,
+            now=self.now + timedelta(minutes=29),
+        )
+        expired = autopilot_supervisor.active_x_owner_snapshot(
+            self.config,
+            lease_seconds=1800,
+            now=self.now + timedelta(minutes=31),
+        )
+
+        self.assertTrue(active["owner_busy"])
+        self.assertEqual(active["active_event_ids"], ["123"])
+        self.assertFalse(expired["owner_busy"])
+
+    def test_relay_releases_repair_reservation_if_x_owner_wins_race(
+        self,
+    ) -> None:
+        database_failure = self.check("runtime.database", "fail")
+        autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now,
+            checks=[database_failure],
+        )
+        repair = {
+            "status": "repair_handoff_pending",
+            "dispatch": True,
+            "repair_pending": True,
+            "incident_id": "incident",
+            "reservation_token": "repair-token",
+        }
+        snapshots = [
+            {"owner_busy": False, "active_event_ids": []},
+            {
+                "owner_busy": True,
+                "active_event_ids": ["123"],
+                "lease_expires_at": "2026-07-27T18:30:00Z",
+            },
+        ]
+        with (
+            mock.patch.object(
+                autopilot_supervisor,
+                "active_x_owner_snapshot",
+                side_effect=snapshots,
+            ),
+            mock.patch.object(
+                autopilot_supervisor,
+                "reserve_handoff",
+                return_value=repair,
+            ),
+            mock.patch.object(
+                autopilot_supervisor,
+                "release_handoff",
+            ) as release,
+        ):
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        release.assert_called_once_with(
+            self.config,
+            reservation_token="repair-token",
+            reason="x_owner_became_active",
+        )
+        self.assertEqual(result["status"], "repair_waiting_for_x_owner")
+        self.assertFalse(result["dispatch"])
+
+    def test_relay_rejects_owner_drift_before_reserving_work(self) -> None:
+        self.config.write_text(
+            json.dumps(
+                {
+                    "browser_owner_thread_id": "wrong-owner",
+                    "autopilot_supervisor_state_file": "var/supervisor.json",
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with mock.patch.object(
+            autopilot_supervisor.autopilot_bridge,
+            "reserve_handoff",
+        ) as reserve_x:
+            with self.assertRaisesRegex(
+                ValueError,
+                "browser owner differs",
+            ):
+                autopilot_supervisor.relay_reserve_handoff(
+                    self.config,
+                    self.contract,
+                    lease_seconds=1800,
+                    now=self.now,
+                )
+
+        reserve_x.assert_not_called()
 
     def test_changed_failures_do_not_replace_active_owner(self) -> None:
         first_failure = self.check("runtime.database", "fail")

@@ -13,6 +13,20 @@ The prompt now lives in Git as a local skill:
 - reasoning effort: `max` only;
 - ChatGPT and the custom GPT are not used for generation.
 
+The experimental v2 remains separate:
+
+- source: `skill-backup/poyasnitelnaya-brigada-v2`;
+- installed copy: `~/.codex/skills/poyasnitelnaya-brigada-v2`;
+- v1 remains available and no chain migrates implicitly;
+- v2 runs only when Alex explicitly selects it or the durable chain is already
+  marked for v2.
+
+V2 restores the full dispute, keeps the anchor claim and open question, and
+tracks exact claims, concessions, verified contradictions, and goalpost
+changes. It never treats a qualification as a contradiction or silence as a
+concession. Versioned cases live in
+`tests/fixtures/poyasnitelnaya_brigada_v2_cases.json`.
+
 ## Input
 
 The Browser owner restores the exact target and relevant chain from X, SQLite,
@@ -139,6 +153,6 @@ and timestamps. Follow-ups continue from local X history. Historical ChatGPT
 URLs remain audit metadata only.
 
 `system_doctor` and `project_layout_audit.py --require-installed-skill` compare
-both installed skills with their Git copies. The compatibility command
+all three installed skills with their Git copies. The compatibility command
 `pro-model-recovery-requeue` restores legacy model, conversation, and
 screenshot blockers from durable state without accepting an event ID.

@@ -31,20 +31,23 @@
     "scripts/lightpanda_worker.py",
     "scripts/lightpanda_mcp.py",
     "docs/lightpanda-integration.ru.md",
+    "docs/reliability-audit-2026-08-01.ru.md",
     "skill-backup/x-twitter-operator/SKILL.md",
     "skill-backup/poyasnitelnaya-brigada/SKILL.md",
     "skill-backup/poyasnitelnaya-brigada/agents/openai.yaml",
+    "skill-backup/poyasnitelnaya-brigada-v2/SKILL.md",
+    "skill-backup/poyasnitelnaya-brigada-v2/agents/openai.yaml",
     "macos/x-relay.prompt.txt",
     "macos/x-15.prompt.txt"
   ],
   "threads": {
     "browser_owner": {
-      "id": "019fa129-0483-7f20-ad9e-06c966d41df3",
+      "id": "019fbb76-1692-7cd3-a474-1f12d7971d6e",
       "model": "gpt-5.6-sol",
       "minimum_reasoning_effort": "max",
       "cwd": "/Users/alexlane/Developer/x-mention-watcher",
       "must_be_unarchived": true,
-      "pin_recommended": true
+      "pin_recommended": false
     },
     "heartbeat_relay": {
       "id": "019f9d46-67b0-72c1-aca6-406af579d5fa",
@@ -108,6 +111,7 @@
     "max_poll_age_seconds": 180,
     "max_dispatch_age_seconds": 180,
     "max_relay_wait_seconds": 180,
+    "max_queue_age_seconds": 300,
     "healthy_statuses": [
       "healthy",
       "healthy_silence_review"
@@ -125,6 +129,12 @@
       "display_name": "skill «Пояснительная бригада»",
       "source": "skill-backup/poyasnitelnaya-brigada",
       "installed": ".codex/skills/poyasnitelnaya-brigada"
+    },
+    {
+      "id": "poyasnitelnaya_brigada_v2_skill",
+      "display_name": "skill «Пояснительная бригада v2»",
+      "source": "skill-backup/poyasnitelnaya-brigada-v2",
+      "installed": ".codex/skills/poyasnitelnaya-brigada-v2"
     }
   ],
   "personality": {

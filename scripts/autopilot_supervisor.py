@@ -793,27 +793,119 @@ def reserve_handoff(
         }
 
 
+def active_x_owner_snapshot(
+    config_path: Path,
+    *,
+    lease_seconds: int,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Read the global X owner lease without opening or changing the queue."""
+
+    if lease_seconds <= 0:
+        raise ValueError("owner lease must be positive")
+    _, state_file = autopilot_dispatch.load_paths(config_path)
+    current = now or utc_now()
+    with autopilot_dispatch.locked_state(state_file):
+        state = autopilot_dispatch.load_state(state_file)
+        owner = state.get("owner")
+        if not isinstance(owner, dict):
+            return {"owner_busy": False, "active_event_ids": []}
+        claimed_at = autopilot_dispatch.parse_time(owner.get("claimed_at"))
+        lease_expires_at = autopilot_dispatch.parse_time(
+            owner.get("lease_expires_at")
+        )
+        if lease_expires_at is None and claimed_at is not None:
+            lease_expires_at = claimed_at + timedelta(seconds=lease_seconds)
+        owner_busy = (
+            claimed_at is not None
+            and lease_expires_at is not None
+            and current < lease_expires_at
+        )
+        return {
+            "owner_busy": owner_busy,
+            "active_event_ids": [
+                str(value) for value in owner.get("event_ids", [])
+            ],
+            "lease_expires_at": (
+                autopilot_dispatch.isoformat(lease_expires_at)
+                if lease_expires_at is not None
+                else None
+            ),
+        }
+
+
 def relay_reserve_handoff(
     config_path: Path,
+    contract_path: Path,
     *,
     lease_seconds: int,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return one unambiguous repair-or-X reservation decision."""
 
-    repair = reserve_handoff(
-        config_path,
-        lease_seconds=lease_seconds,
-        now=now,
-    )
-    if repair.get("repair_pending"):
-        return {**repair, "route": "repair"}
+    config = read_config(config_path)
+    contract = system_doctor.read_json(contract_path.expanduser().resolve())
+    owner = contract["threads"]["browser_owner"]
+    owner_thread_id = str(owner["id"])
+    if str(config.get("browser_owner_thread_id", "")) != owner_thread_id:
+        raise ValueError(
+            "browser owner differs between config and system contract"
+        )
+    owner_route = {
+        "owner_thread_id": owner_thread_id,
+        "owner_model": str(owner["model"]),
+        "owner_thinking": str(owner["minimum_reasoning_effort"]),
+    }
+
+    repair_state = gate(config_path, now=now)
+    if repair_state.get("repair_pending"):
+        x_owner = active_x_owner_snapshot(
+            config_path,
+            lease_seconds=lease_seconds,
+            now=now,
+        )
+        if x_owner["owner_busy"]:
+            return {
+                **repair_state,
+                **owner_route,
+                **x_owner,
+                "status": "repair_waiting_for_x_owner",
+                "dispatch": False,
+                "route": "repair",
+            }
+        repair = reserve_handoff(
+            config_path,
+            lease_seconds=lease_seconds,
+            now=now,
+        )
+        if repair.get("dispatch"):
+            x_owner = active_x_owner_snapshot(
+                config_path,
+                lease_seconds=lease_seconds,
+                now=now,
+            )
+            if x_owner["owner_busy"]:
+                release_handoff(
+                    config_path,
+                    reservation_token=str(repair["reservation_token"]),
+                    reason="x_owner_became_active",
+                )
+                return {
+                    **repair_state,
+                    **owner_route,
+                    **x_owner,
+                    "status": "repair_waiting_for_x_owner",
+                    "dispatch": False,
+                    "route": "repair",
+                }
+        return {**repair, **owner_route, "route": "repair"}
     x_result = autopilot_bridge.reserve_handoff(
         config_path,
         lease_seconds=lease_seconds,
     )
     return {
         **x_result,
+        **owner_route,
         "repair_pending": False,
         "route": "x",
     }
@@ -1126,6 +1218,7 @@ def main() -> int:
     elif args.command == "relay-reserve-handoff":
         result = relay_reserve_handoff(
             config,
+            contract,
             lease_seconds=args.lease_seconds,
         )
     elif args.command == "release-handoff":

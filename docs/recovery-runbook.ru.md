@@ -88,7 +88,7 @@ poll это один `launchctl kickstart`. Биллинговый `HTTP 402` я
 неоднозначному ресурсу, создается один durable incident.
 
 Dispatcher видит incident без модели, поднимает Codex Desktop штатным путем, а
-существующая Luna relay-сессия передает его существующей Sol Max owner-сессии.
+существующая Luna relay-сессия передает его выделенному Sol Max service worker.
 Одинаковый fingerprint не создает повторные incident каждую минуту.
 Reservation, claim token, started, completed и failed защищают ремонт от двух
 одновременных владельцев. `completed` для настоящей аварии принимается только
@@ -152,8 +152,10 @@ dirty, сначала сохранить и классифицировать и�
 ### 3. Запустить doctor
 
 Исправлять FAIL сверху вниз. WARN не означает потерю данных, но указывает на
-ослабленную защиту. Главную сессию нужно разархивировать и закрепить через
-официальные инструменты Codex, а не прямым редактированием state SQLite.
+ослабленную защиту. Выделенный service worker нужно разархивировать через
+официальные инструменты Codex и сверить с versioned contract, а не редактировать
+state SQLite вручную. Закрепление worker не требуется: в боковой панели должна
+оставаться одна основная пользовательская задача «Автопилот».
 
 ### 4. Восстановить deployment points
 
@@ -161,6 +163,8 @@ dirty, сначала сохранить и классифицировать и�
   `skill-backup/x-twitter-operator`;
 - `~/.codex/skills/poyasnitelnaya-brigada` восстановить только из
   `skill-backup/poyasnitelnaya-brigada`;
+- `~/.codex/skills/poyasnitelnaya-brigada-v2` восстановить только из
+  `skill-backup/poyasnitelnaya-brigada-v2`;
 - LaunchAgent перерендерить из `macos/*.plist.example` через
   `scripts/render_launchd.py`;
 - heartbeat `x-relay` и cron `x-15` восстановить только через официальный

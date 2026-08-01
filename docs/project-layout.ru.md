@@ -15,7 +15,7 @@ x-mention-watcher/
   docs/                    русская и английская документация
   macos/                   исходные шаблоны LaunchAgent
   scripts/                 dispatcher, bridge и служебные утилиты
-  skill-backup/            восстанавливаемые версии обеих skills
+  skill-backup/            восстанавливаемые версии всех трёх skills
   tests/                   все тесты
   var/                     изменяемое локальное состояние, вне Git
   *.py                     watcher, importer и snapshot tools
@@ -54,13 +54,15 @@ python3 evidence_import.py \
 - `~/.codex/skills/x-twitter-operator`, установленная копия X skill;
 - `~/.codex/skills/poyasnitelnaya-brigada`, установленная копия локального
   генератора;
+- `~/.codex/skills/poyasnitelnaya-brigada-v2`, установленная копия
+  экспериментального генератора продолжений;
 - `~/Library/LaunchAgents/com.axrbarsic.xmention.*.plist`, загруженные службы
   macOS;
 - macOS Data Protection Keychain, где хранятся секреты. Подписанный helper
   собирается из `macos/XMentionKeychainHelper*` и устанавливается под `var/`;
 - отдельный archive vault для исходных ZIP-архивов X.
 
-Это не отдельные исходники проекта. Обе skills восстанавливаются из
+Это не отдельные исходники проекта. Все три skills восстанавливаются из
 `skill-backup/`, LaunchAgent из `macos/`, а секреты никогда не копируются в
 репозиторий.
 

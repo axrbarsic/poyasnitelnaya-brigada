@@ -57,12 +57,32 @@ class ProjectLayoutAuditTests(unittest.TestCase):
                 ).read_text(encoding="utf-8"),
                 encoding="utf-8",
             )
+            generation_v2_installed = base / "installed-generation-skill-v2"
+            generation_v2_installed.mkdir()
+            (generation_v2_installed / "SKILL.md").write_text(
+                (
+                    root
+                    / "skill-backup/poyasnitelnaya-brigada-v2/SKILL.md"
+                ).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
+            (generation_v2_installed / "agents").mkdir()
+            (
+                generation_v2_installed / "agents" / "openai.yaml"
+            ).write_text(
+                (
+                    root
+                    / "skill-backup/poyasnitelnaya-brigada-v2/agents/openai.yaml"
+                ).read_text(encoding="utf-8"),
+                encoding="utf-8",
+            )
 
             result = project_layout_audit.audit_layout(
                 root=root,
                 config_path=config,
                 installed_skill=installed,
                 installed_generation_skill=generation_installed,
+                installed_generation_skill_v2=generation_v2_installed,
                 require_installed_skill=True,
             )
 
@@ -71,6 +91,9 @@ class ProjectLayoutAuditTests(unittest.TestCase):
             self.assertTrue(result["installed_skill_matches"])
             self.assertTrue(
                 result["installed_generation_skill_matches"]
+            )
+            self.assertTrue(
+                result["installed_generation_skill_v2_matches"]
             )
 
     def test_rejects_external_browser_workspace_and_skill_drift(self) -> None:
@@ -86,12 +109,18 @@ class ProjectLayoutAuditTests(unittest.TestCase):
             (generation_installed / "SKILL.md").write_text(
                 "different\n", encoding="utf-8"
             )
+            generation_v2_installed = base / "installed-generation-skill-v2"
+            generation_v2_installed.mkdir()
+            (generation_v2_installed / "SKILL.md").write_text(
+                "different\n", encoding="utf-8"
+            )
 
             result = project_layout_audit.audit_layout(
                 root=root,
                 config_path=config,
                 installed_skill=installed,
                 installed_generation_skill=generation_installed,
+                installed_generation_skill_v2=generation_v2_installed,
                 require_installed_skill=True,
             )
 
@@ -100,6 +129,9 @@ class ProjectLayoutAuditTests(unittest.TestCase):
             self.assertFalse(result["installed_skill_matches"])
             self.assertFalse(
                 result["installed_generation_skill_matches"]
+            )
+            self.assertFalse(
+                result["installed_generation_skill_v2_matches"]
             )
             self.assertIn(
                 "browser_owner_cwd_outside_canonical_root",
@@ -112,6 +144,13 @@ class ProjectLayoutAuditTests(unittest.TestCase):
             self.assertIn(
                 (
                     "installed_generation_skill_differs_from_"
+                    "repository_backup"
+                ),
+                result["errors"],
+            )
+            self.assertIn(
+                (
+                    "installed_generation_skill_v2_differs_from_"
                     "repository_backup"
                 ),
                 result["errors"],
