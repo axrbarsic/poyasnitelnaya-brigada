@@ -105,6 +105,10 @@ an X reply.
     Every handoff proves exactly one authorization route: a direct reply to
     Alex, a reply in a conversation with a stored Alex turn, or an explicit
     `@axrbarsic` mention returned by the authenticated mentions endpoint.
+    Multi-event claims use `finalize_browser_owner_session.py` as the single
+    deterministic commit boundary. It verifies the active claim set, merges
+    per-event JSONL atomically, reuses the idempotent sync, and creates the
+    immutable manifest before `completed` can run.
 19. `autopilot_bridge` enriches each claimed event with compact
     `commenter_memory` keyed by stable X user ID. It contains source-linked
     public turns and exact Alex children from any stored conversation. A deeper

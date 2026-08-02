@@ -10,6 +10,7 @@
     "xmention_watcher.py",
     "scripts/autopilot_bridge.py",
     "scripts/autopilot_contract.py",
+    "scripts/finalize_browser_owner_session.py",
     "scripts/autopilot_emulator.py",
     "scripts/autopilot_state_model.py",
     "scripts/autopilot_supervisor.py",

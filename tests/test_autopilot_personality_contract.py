@@ -76,6 +76,14 @@ class AutopilotPersonalityContractTests(unittest.TestCase):
             ["Пиши прямо.", "Объясни механизм."],
         )
         self.assertIn("Стиль ниже фактов", policy["precedence"])
+        self.assertIn(
+            "scripts/finalize_browser_owner_session.py",
+            prompt,
+        )
+        self.assertIn(
+            "Без успешного `finalized` или `already_finalized`",
+            prompt,
+        )
 
 
 if __name__ == "__main__":

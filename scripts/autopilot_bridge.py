@@ -33,6 +33,8 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import xmention_watcher as watcher  # type: ignore[no-redef]
 
+import evidence_import
+
 
 LOCAL_MAX_TURN_PROVENANCE = {
     "pro",
@@ -703,6 +705,12 @@ def mark_completed(
         raise ValueError(
             "claim still contains pending events: " + ", ".join(unresolved)
         )
+    require_durable_resolutions(config_path, event_ids)
+    evidence_manifest = verify_claim_evidence_manifest(
+        config_path,
+        claim_token=claim_token,
+        event_ids=event_ids,
+    )
     finished = autopilot_dispatch.finish(state_file, claim_token)
     if finished["finished"] != event_ids:
         state_warning = (
@@ -719,6 +727,7 @@ def mark_completed(
         )
         reconciled["requested_claim_token"] = claim_token
         reconciled["reconciled"] = True
+        reconciled["evidence_manifest"] = evidence_manifest
         return reconciled
     pending_events = autopilot_dispatch.load_wake_events(wake_file)
     pending_event_ids = [str(event["id"]) for event in pending_events]
@@ -750,28 +759,15 @@ def mark_completed(
         "pending_count": len(pending_events),
         "next_dispatch": next_dispatch,
         "warning": warning,
+        "evidence_manifest": evidence_manifest,
     }
 
 
-def reconcile_completed(
+def require_durable_resolutions(
     config_path: Path,
     event_ids: list[str],
-    *,
-    warning: str | None = None,
-) -> dict[str, Any]:
+) -> None:
     requested = sorted(set(event_ids), key=int)
-    if not requested or any(not event_id.isdigit() for event_id in requested):
-        raise ValueError("event ids must be numeric")
-    wake_file, _ = autopilot_dispatch.load_paths(config_path)
-    pending_ids = {
-        str(event["id"])
-        for event in autopilot_dispatch.load_wake_events(wake_file)
-    }
-    still_pending = sorted(pending_ids.intersection(requested), key=int)
-    if still_pending:
-        raise ValueError(
-            "events are still pending: " + ", ".join(still_pending)
-        )
     raw_config = autopilot_dispatch.read_json(config_path)
     database = resolve_path(
         config_path,
@@ -795,6 +791,91 @@ def reconcile_completed(
         raise ValueError(
             "events lack durable resolution: " + ", ".join(missing)
         )
+
+
+def verify_claim_evidence_manifest(
+    config_path: Path,
+    *,
+    claim_token: str,
+    event_ids: list[str],
+) -> dict[str, Any]:
+    if evidence_import.LABEL_PATTERN.fullmatch(claim_token) is None:
+        raise ValueError("claim token is not a valid evidence label")
+    evidence_root = (
+        config_path.resolve().parent / "var/evidence/browser-owner"
+    )
+    session_dir = evidence_root / claim_token
+    if session_dir.is_symlink():
+        raise ValueError("claim evidence directory must not be a symlink")
+    audit = evidence_import.audit_evidence(session_dir)
+    if not audit.get("complete"):
+        errors = audit.get("errors") or ["manifest_missing_or_invalid"]
+        raise ValueError(
+            "claim evidence manifest is incomplete: "
+            + ", ".join(str(value) for value in errors)
+        )
+    manifest = evidence_import.load_existing_manifest(session_dir)
+    if manifest is None:
+        raise ValueError("claim evidence manifest is missing")
+    if (
+        manifest.get("source") != "runtime_browser_owner"
+        or manifest.get("label") != claim_token
+    ):
+        raise ValueError("claim evidence manifest identity is invalid")
+    file_records = manifest.get("files")
+    if not isinstance(file_records, list):
+        raise ValueError("claim evidence manifest files are invalid")
+    paths = {
+        str(record.get("path"))
+        for record in file_records
+        if isinstance(record, dict)
+    }
+    required_paths = {"conversation-history.jsonl", "run-ledger.jsonl"}
+    if not required_paths.issubset(paths):
+        raise ValueError("claim evidence manifest lacks aggregate JSONL files")
+    proof = manifest.get("resolution_proof")
+    if not isinstance(proof, list) or not all(
+        isinstance(record, dict) for record in proof
+    ):
+        raise ValueError("claim evidence resolution proof is invalid")
+    proof_event_ids = [str(record.get("event_id") or "") for record in proof]
+    expected_event_ids = sorted(set(event_ids), key=int)
+    if (
+        len(proof_event_ids) != len(set(proof_event_ids))
+        or sorted(proof_event_ids, key=int) != expected_event_ids
+    ):
+        raise ValueError(
+            "claim evidence event set does not match completed claim"
+        )
+    return {
+        "status": "complete",
+        "session_dir": str(session_dir.resolve()),
+        "event_ids": expected_event_ids,
+        "file_count": audit["file_count"],
+        "source_fingerprint": audit["source_fingerprint"],
+    }
+
+
+def reconcile_completed(
+    config_path: Path,
+    event_ids: list[str],
+    *,
+    warning: str | None = None,
+) -> dict[str, Any]:
+    requested = sorted(set(event_ids), key=int)
+    if not requested or any(not event_id.isdigit() for event_id in requested):
+        raise ValueError("event ids must be numeric")
+    wake_file, _ = autopilot_dispatch.load_paths(config_path)
+    pending_ids = {
+        str(event["id"])
+        for event in autopilot_dispatch.load_wake_events(wake_file)
+    }
+    still_pending = sorted(pending_ids.intersection(requested), key=int)
+    if still_pending:
+        raise ValueError(
+            "events are still pending: " + ", ".join(still_pending)
+        )
+    require_durable_resolutions(config_path, requested)
     status = "completed_with_warning" if warning else "completed"
     recovery_token = "reconciled:" + autopilot_dispatch.isoformat()
     pending_event_ids = sorted(pending_ids, key=int)

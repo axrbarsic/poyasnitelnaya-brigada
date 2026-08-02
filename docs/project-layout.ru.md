@@ -28,10 +28,11 @@ x-mention-watcher/
 Новые screenshots, ledgers, payloads и другие evidence должны сохраняться под
 `var/evidence/browser-owner/<session-id>/`.
 
-После durable sync отдельный ручной шаг не требуется:
-`browser-handoff-sync` автоматически создаёт и проверяет `manifest.json`, если
-оба входных JSONL находятся в одном каноническом каталоге evidence. Неполный
-или несогласованный набор fail closed блокирует backup-plan.
+После durable работы с отдельными событиями ручная агрегация не требуется.
+`finalize_browser_owner_session.py` проверяет точное совпадение каталогов
+событий с активным claim, атомарно собирает два общих JSONL, вызывает
+идемпотентный `browser-handoff-sync` и требует проверенный `manifest.json`.
+Неполный или несогласованный набор блокирует завершение claim.
 
 Старые evidence переносятся без изменения источника:
 

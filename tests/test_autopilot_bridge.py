@@ -11,7 +11,8 @@ from unittest import mock
 
 import xmention_watcher as watcher
 import candidate_corpus
-from scripts import autopilot_bridge
+import evidence_import
+from scripts import autopilot_bridge, autopilot_dispatch
 from scripts import resource_guard
 
 
@@ -177,6 +178,83 @@ class AutopilotBridgeTests(unittest.TestCase):
             json.dumps({"pending_count": len(events), "events": events}),
             encoding="utf-8",
         )
+
+    def write_durable_resolutions(self, event_ids: list[str]) -> None:
+        database = self.root / "var" / "watcher.sqlite3"
+        connection = watcher.connect_database(database)
+        connection.close()
+        with sqlite3.connect(database) as connection:
+            for event_id in event_ids:
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO event_resolutions(
+                        event_id, disposition, reason, evidence_json,
+                        resolved_at
+                    ) VALUES(?, 'skip', 'verified test resolution', '[]', ?)
+                    """,
+                    (event_id, watcher.isoformat()),
+                )
+
+    def write_claim_manifest(
+        self,
+        claim_token: str,
+        event_ids: list[str],
+    ) -> None:
+        session_dir = (
+            self.root / "var/evidence/browser-owner" / claim_token
+        )
+        session_dir.mkdir(parents=True)
+        (session_dir / "conversation-history.jsonl").write_text(
+            "".join(
+                json.dumps({"event_id": event_id}) + "\n"
+                for event_id in event_ids
+            ),
+            encoding="utf-8",
+        )
+        (session_dir / "run-ledger.jsonl").write_text(
+            "".join(
+                json.dumps(
+                    {
+                        "event": "initial_audit_disposition",
+                        "event_id": event_id,
+                    }
+                )
+                + "\n"
+                for event_id in event_ids
+            ),
+            encoding="utf-8",
+        )
+        source_manifest = evidence_import.build_file_manifest(
+            session_dir,
+            evidence_import.collect_source_files(session_dir),
+        )
+        manifest = {
+            "format_version": 1,
+            "label": claim_token,
+            "source": "runtime_browser_owner",
+            "finalized_at": watcher.isoformat(),
+            "resolution_proof": [
+                {
+                    "event_id": event_id,
+                    "disposition": "skip",
+                    "reply_url": None,
+                }
+                for event_id in sorted(event_ids, key=int)
+            ],
+            **source_manifest,
+        }
+        (session_dir / "manifest.json").write_text(
+            json.dumps(manifest, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+
+    def prepare_completion(
+        self,
+        claim_token: str,
+        event_ids: list[str],
+    ) -> None:
+        self.write_durable_resolutions(event_ids)
+        self.write_claim_manifest(claim_token, event_ids)
 
     def event(self) -> dict:
         return {
@@ -546,6 +624,10 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertNotIn("\u2014", result["prompt"])
 
         self.write_events([])
+        self.prepare_completion(
+            result["claim_token"],
+            result["event_ids"],
+        )
         completed = autopilot_bridge.mark_completed(
             self.config,
             result["claim_token"],
@@ -1189,6 +1271,10 @@ class AutopilotBridgeTests(unittest.TestCase):
         first = autopilot_bridge.claim(self.config, lease_seconds=1800)
         autopilot_bridge.mark_started(self.config, first["claim_token"])
         self.write_events([])
+        self.prepare_completion(
+            first["claim_token"],
+            first["event_ids"],
+        )
 
         result = autopilot_bridge.mark_completed(
             self.config,
@@ -1204,6 +1290,53 @@ class AutopilotBridgeTests(unittest.TestCase):
         )
         self.assertEqual(health["handoff_count"], 1)
         self.assertEqual(health["error"], "postflight poll unavailable")
+
+    def test_completed_rejects_event_without_durable_resolution(self) -> None:
+        self.write_events([self.event()])
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+        self.write_events([])
+        self.write_claim_manifest(
+            claimed["claim_token"],
+            claimed["event_ids"],
+        )
+        connection = watcher.connect_database(
+            self.root / "var" / "watcher.sqlite3"
+        )
+        connection.close()
+
+        with self.assertRaisesRegex(ValueError, "lack durable resolution"):
+            autopilot_bridge.mark_completed(
+                self.config,
+                claimed["claim_token"],
+            )
+
+        state = autopilot_dispatch.load_state(
+            self.root / "var/autopilot-dispatch.json"
+        )
+        self.assertEqual(
+            state["owner"]["claim_token"],
+            claimed["claim_token"],
+        )
+
+    def test_completed_rejects_missing_evidence_manifest(self) -> None:
+        self.write_events([self.event()])
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+        self.write_events([])
+        self.write_durable_resolutions(claimed["event_ids"])
+
+        with self.assertRaisesRegex(ValueError, "manifest is incomplete"):
+            autopilot_bridge.mark_completed(
+                self.config,
+                claimed["claim_token"],
+            )
+
+        state = autopilot_dispatch.load_state(
+            self.root / "var/autopilot-dispatch.json"
+        )
+        self.assertEqual(
+            state["owner"]["claim_token"],
+            claimed["claim_token"],
+        )
 
     def test_three_completed_batches_kick_remaining_queue_immediately(
         self,
@@ -1261,6 +1394,10 @@ class AutopilotBridgeTests(unittest.TestCase):
                     if event["event_id"] not in claimed_ids
                 ]
                 self.write_events(remaining)
+                self.prepare_completion(
+                    claimed["claim_token"],
+                    claimed["event_ids"],
+                )
 
                 completed = autopilot_bridge.mark_completed(
                     self.config,
@@ -1346,6 +1483,10 @@ class AutopilotBridgeTests(unittest.TestCase):
                 """,
                 (current["event_id"], watcher.isoformat()),
             )
+        self.write_claim_manifest(
+            claimed["claim_token"],
+            claimed["event_ids"],
+        )
 
         result = autopilot_bridge.mark_completed(
             self.config,
@@ -1393,6 +1534,10 @@ class AutopilotBridgeTests(unittest.TestCase):
                 """,
                 (current["event_id"], watcher.isoformat()),
             )
+        self.write_claim_manifest(
+            claimed["claim_token"],
+            claimed["event_ids"],
+        )
 
         result = autopilot_bridge.mark_completed(
             self.config,

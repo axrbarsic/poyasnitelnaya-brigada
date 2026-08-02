@@ -70,6 +70,8 @@ python3 xmention_watcher.py --config config.json initial-audit-expire \
 python3 xmention_watcher.py --config config.json browser-handoff-sync \
   --history-file var/evidence/browser-owner/SESSION_ID/conversation-history.jsonl \
   --ledger-file var/evidence/browser-owner/SESSION_ID/run-ledger.jsonl
+python3 scripts/finalize_browser_owner_session.py --config config.json \
+  --session-dir var/evidence/browser-owner/CLAIM_TOKEN
 python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \
   --limit 50
 python3 candidate_corpus.py --config config.json history EVENT_ID --limit 20
@@ -180,6 +182,14 @@ For canonical runtime evidence, the same successful sync must also return a
 complete `evidence_manifest`. It atomically creates and self-audits
 `manifest.json` only after every handoff in that evidence directory is durably
 resolved. Do not create runtime manifests by hand.
+
+For a multi-event autopilot claim, write each event's two JSONL files below
+`var/evidence/browser-owner/CLAIM_TOKEN/EVENT_ID/`. Before `completed`, run
+`finalize_browser_owner_session.py` exactly once for the claim directory. It
+validates that the event directories exactly match the active claim, builds
+the two stable aggregate JSONL files atomically, runs the idempotent handoff
+sync, and requires a complete immutable manifest. Do not rediscover this flow
+from source code or assemble the aggregate files manually.
 
 When live X shows that Alex already answered an event before the current audit,
 record the audit disposition as `skip` with `reply_url=null`,

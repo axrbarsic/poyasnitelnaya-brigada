@@ -28,10 +28,11 @@ canonical directory and does not require a second project under
 `Documents/Codex`. New screenshots, ledgers, payloads, and other evidence must
 be stored below `var/evidence/browser-owner/<session-id>/`.
 
-No separate manual step is required after durable synchronization.
-`browser-handoff-sync` automatically creates and verifies `manifest.json`
-when both input JSONL files are in the same canonical evidence directory. An
-incomplete or inconsistent set fails closed and blocks the backup plan.
+No manual aggregation step is required after durable per-event work.
+`finalize_browser_owner_session.py` verifies that all event directories match
+the active claim, atomically builds the two aggregate JSONL files, invokes the
+idempotent `browser-handoff-sync`, and requires a verified `manifest.json`.
+An incomplete or inconsistent set fails closed before claim completion.
 
 Import legacy evidence without modifying its source:
 

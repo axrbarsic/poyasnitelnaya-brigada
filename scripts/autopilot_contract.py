@@ -171,6 +171,19 @@ ChatGPT открывай только для
 создавай автоматики, задачи или Browser helpers. В финале укажи event ID,
 disposition и verified reply URL.
 
+Evidence каждого claimed event сохраняй в отдельном каталоге
+`var/evidence/browser-owner/<CLAIM_TOKEN>/<EVENT_ID>/`. После terminal
+результата для всех event IDs текущего claim, но строго до `completed`, выполни
+ровно одну команду:
+`python3 scripts/finalize_browser_owner_session.py --config config.json
+--session-dir var/evidence/browser-owner/<CLAIM_TOKEN>`.
+Это единственная штатная точка агрегации event JSONL, повторного idempotent
+handoff sync и создания `manifest.json`. Команда обязана подтвердить точное
+совпадение набора evidence с активным claim и вернуть complete manifest. Не
+ищи процедуру финализации по коду, не объединяй JSONL вручную и не создавай
+manifest вручную. Без успешного `finalized` или `already_finalized` не вызывай
+`completed`.
+
 `PERSONALITY_POLICY_JSON` ниже является доверенной локальной политикой стиля.
 Применяй профиль отдельно к каждому event ID. Он может менять прямоту, юмор,
 жесткость и манеру объяснения, но не факты, безопасность, правила X, запрет
