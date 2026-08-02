@@ -8,10 +8,16 @@ from pathlib import Path
 from typing import Any, Sequence
 
 try:
-    from scripts import autopilot_dispatch, inbound_policy, personality_policy
+    from scripts import (
+        autopilot_dispatch,
+        inbound_policy,
+        inbound_route_control,
+        personality_policy,
+    )
 except ModuleNotFoundError:
     import autopilot_dispatch  # type: ignore[no-redef]
     import inbound_policy  # type: ignore[no-redef]
+    import inbound_route_control  # type: ignore[no-redef]
     import personality_policy  # type: ignore[no-redef]
 
 
@@ -53,6 +59,17 @@ composer: он может изменить текст. Если composer изм�
 внутри одного класса бери старейший first_seen_at. После каждой публикации или
 доказанного already-answered немедленно зафиксируй один terminal outcome
 штатным committer из evidence-раздела ниже.
+Сразу после live-классификации каждого event, до подготовки ответа, выполни
+`python3 scripts/autopilot_bridge.py --config config.json route-classified
+--claim-token <CLAIM_TOKEN> --event-id <EVENT_ID> --route <ROUTE>`.
+При `INBOUND_ROUTE_MODE=simple-wave` команда для `local-max` обязана вернуть
+`status=local_max_deferred`: такой event не публикуй, не резолви и закрой только
+его task-owned вкладку. Он остаётся durable queued до автоматического возврата
+в normal mode после одной волны обычных ответов.
+Если команда вернула `owner_released=true`, новых gate/claim не запускай,
+закрой task-owned вкладки и заверши turn. Для mixed claim после исключения
+local-max продолжай только оставшиеся short, requested-media,
+satirical-media и already-answered события.
 Не готовь весь пакет целиком перед первой публикацией. Если Browser замедлился,
 потерял вкладку или выросло давление памяти, закрой лишние task-owned вкладки и
 продолжай с одной, не освобождая unresolved event.
@@ -82,8 +99,9 @@ direct child Alex, не переходи в X search и обратно. Если
 Claim lease является возобновляемым предохранителем. Если с момента claim или
 последнего renew прошло 15 минут, до следующего Browser-действия выполни
 `python3 scripts/autopilot_bridge.py --config config.json --lease-seconds 1800
-renew --claim-token <CLAIM_TOKEN>`. Renew обязан сохранить ровно исходный набор
-event IDs и не поглощать новые события. Новые события ждут следующего owner.
+renew --claim-token <CLAIM_TOKEN>`. Renew обязан сохранить текущий набор event
+IDs после разрешённых route deferrals, не поглощая новые события. Новые события
+ждут следующего owner.
 
 Если точный Alex parent имеет внутренний legacy marker `provenance=pro`,
 восстанови полную локальную историю chain и продолжи тем же skill. Этот marker
@@ -306,6 +324,9 @@ def build_prompt(
         config = autopilot_dispatch.read_json(config_path)
     if policy is None:
         policy = inbound_policy.InboundPolicy.from_config(config)
+    route_state = inbound_route_control.load(
+        inbound_route_control.state_path(config_path, config)
+    )
     resource_mode = str((resource_guard or {}).get("mode", "")).strip()
     effective_read_tabs = policy.effective_read_tabs(
         len(events),
@@ -351,6 +372,7 @@ def build_prompt(
         "CONFIGURED_MAX_PARALLEL_X_READ_TABS="
         f"{policy.parallel_read_tabs}\n"
         f"RESOURCE_MODE={resource_mode or 'unavailable'}\n"
+        f"INBOUND_ROUTE_MODE={route_state['mode']}\n"
         f"MAX_PARALLEL_X_READ_TABS={effective_read_tabs}\n"
         "PARALLEL_TAB_PREFLIGHT="
         + (

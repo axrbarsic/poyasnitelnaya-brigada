@@ -20,6 +20,7 @@ try:
         browser_owner_evidence,
         browser_owner_claim,
         event_dispatch,
+        inbound_route_control,
         inbound_policy,
         resource_guard,
     )
@@ -30,6 +31,7 @@ except ModuleNotFoundError:
     import browser_owner_evidence  # type: ignore[no-redef]
     import browser_owner_claim  # type: ignore[no-redef]
     import event_dispatch  # type: ignore[no-redef]
+    import inbound_route_control  # type: ignore[no-redef]
     import inbound_policy  # type: ignore[no-redef]
     import resource_guard  # type: ignore[no-redef]
 
@@ -70,6 +72,29 @@ def handoff_reservation_path(config_path: Path) -> Path:
             )
         ),
     )
+
+
+def route_control_path(config_path: Path, config: dict[str, Any]) -> Path:
+    return inbound_route_control.state_path(config_path, config)
+
+
+def route_selection(
+    config_path: Path,
+    config: dict[str, Any],
+    pending_events: list[dict[str, Any]],
+) -> tuple[dict[str, Any], frozenset[str], frozenset[str]]:
+    path = route_control_path(config_path, config)
+    pending_ids = [str(event["id"]) for event in pending_events]
+    state = inbound_route_control.reconcile_wave(
+        path,
+        pending_event_ids=pending_ids,
+        updated_at=autopilot_dispatch.isoformat(),
+    )
+    priority_ids, excluded_ids = inbound_route_control.selection_sets(
+        state,
+        pending_ids,
+    )
+    return state, priority_ids, excluded_ids
 
 
 def active_supervisor_owner(
@@ -342,7 +367,7 @@ def _non_dispatch_claim_result(
             **result,
             "resource_guard": guard,
         }
-    status = "leased_waiting" if pending else "idle"
+    status = str(result.get("status") or ("leased_waiting" if pending else "idle"))
     write_health(
         config_path,
         status=status,
@@ -497,6 +522,12 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         config=config,
     )
     wake_file, state_file = autopilot_dispatch.load_paths(config_path)
+    pending_events = autopilot_dispatch.load_wake_events(wake_file)
+    route_state, priority_event_ids, excluded_event_ids = route_selection(
+        config_path,
+        config,
+        pending_events,
+    )
     guard = resource_guard.check(config_path)
     if guard.get("defer"):
         return _deferred_claim_result(wake_file, guard)
@@ -509,6 +540,8 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         priority_author_ids=(
             autopilot_dispatch.configured_priority_author_ids(config)
         ),
+        priority_event_ids=priority_event_ids,
+        excluded_event_ids=excluded_event_ids,
     )
     if not result["dispatch"]:
         return _non_dispatch_claim_result(
@@ -518,6 +551,8 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
             guard,
         )
     events = _enrich_claim_events(config_path, list(result["events"]))
+    for event in events:
+        event["inbound_route_mode"] = route_state["mode"]
     return _finalize_claim(
         config_path,
         browser_owner_cwd,
@@ -535,6 +570,11 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
     autopilot_contract.load_workspace(config_path, config=config)
     wake_file, state_file = autopilot_dispatch.load_paths(config_path)
     pending_events = autopilot_dispatch.load_wake_events(wake_file)
+    route_state, priority_event_ids, excluded_event_ids = route_selection(
+        config_path,
+        config,
+        pending_events,
+    )
     pending_event_ids = [str(event["id"]) for event in pending_events]
     selected_events = autopilot_dispatch.select_claim_events(
         pending_events,
@@ -542,6 +582,8 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         priority_author_ids=(
             autopilot_dispatch.configured_priority_author_ids(config)
         ),
+        priority_event_ids=priority_event_ids,
+        excluded_event_ids=excluded_event_ids,
     )
     selected_event_ids = [str(event["id"]) for event in selected_events]
     queue = autopilot_dispatch.status(
@@ -587,6 +629,23 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
             "event_ids": pending_event_ids,
             "resource_guard": guard,
         }
+    if not selected_event_ids:
+        paused_ids = sorted(
+            set(pending_event_ids).intersection(excluded_event_ids),
+            key=int,
+        )
+        return {
+            "status": "route_paused",
+            "dispatch": False,
+            "pending_count": len(pending_event_ids),
+            "eligible_count": 0,
+            "paused_count": len(paused_ids),
+            "paused_event_ids": paused_ids,
+            "event_ids": [],
+            "queued_event_ids": pending_event_ids,
+            "inbound_route_mode": route_state["mode"],
+            "resource_guard": guard,
+        }
     return {
         "status": "ready",
         "dispatch": True,
@@ -594,6 +653,7 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         "event_ids": selected_event_ids,
         "queued_event_ids": pending_event_ids,
         "claim_limit": policy.claim_events,
+        "inbound_route_mode": route_state["mode"],
         "resource_guard": guard,
     }
 
@@ -845,6 +905,109 @@ def renew_claim(
     }
 
 
+def record_route_classification(
+    config_path: Path,
+    claim_token: str,
+    event_id: str,
+    route: str,
+) -> dict[str, Any]:
+    """Persist one live route and defer local-max during the simple wave."""
+
+    config = autopilot_dispatch.read_json(config_path)
+    wake_file, state_file = autopilot_dispatch.load_paths(config_path)
+    dispatch_state = autopilot_dispatch.load_state(state_file)
+    active_ids = autopilot_dispatch.claim_event_ids(
+        dispatch_state,
+        claim_token,
+    )
+    path = route_control_path(config_path, config)
+    existing_state = inbound_route_control.load(path)
+    existing = existing_state["routes"].get(event_id)
+    if event_id not in active_ids:
+        if existing is not None and existing["route"] == route:
+            return {
+                "status": "route_already_recorded",
+                "claim_token": claim_token,
+                "event_id": event_id,
+                "route": route,
+                "inbound_route_mode": existing_state["mode"],
+                "active_event_ids": active_ids,
+            }
+        raise ValueError("event is not in the active claim")
+    route_state = inbound_route_control.record_route(
+        path,
+        event_id=event_id,
+        route=route,
+        classified_at=autopilot_dispatch.isoformat(),
+    )
+    result: dict[str, Any] = {
+        "status": "route_recorded",
+        "claim_token": claim_token,
+        "event_id": event_id,
+        "route": route,
+        "inbound_route_mode": route_state["mode"],
+        "active_event_ids": active_ids,
+    }
+    if (
+        route_state["mode"] != inbound_route_control.SIMPLE_WAVE_MODE
+        or route != "local-max"
+    ):
+        return result
+
+    deferred = autopilot_dispatch.defer_claim_events(
+        state_file,
+        claim_token,
+        [event_id],
+    )
+    remaining = list(deferred["remaining_event_ids"])
+    pending_ids = _pending_event_ids(wake_file)
+    status = "local_max_deferred"
+    write_health(
+        config_path,
+        status=status,
+        event_ids=remaining or [event_id],
+        claim_token=claim_token,
+    )
+    result.update(
+        {
+            "status": status,
+            "deferred_event_ids": [event_id],
+            "remaining_event_ids": remaining,
+            "owner_released": bool(deferred["owner_released"]),
+            "pending_count": len(pending_ids),
+        }
+    )
+    if deferred["owner_released"]:
+        result["next_dispatch"] = _trigger_next_dispatch(
+            config_path,
+            pending_ids,
+        )
+    return result
+
+
+def start_simple_wave(config_path: Path) -> dict[str, Any]:
+    """Snapshot the current queue for one ordinary-reply-first drain wave."""
+
+    config = autopilot_dispatch.read_json(config_path)
+    wake_file, _ = autopilot_dispatch.load_paths(config_path)
+    pending = autopilot_dispatch.load_wake_events(wake_file)
+    pending_ids = [str(event["id"]) for event in pending]
+    path = route_control_path(config_path, config)
+    state = inbound_route_control.set_mode(
+        path,
+        mode=inbound_route_control.SIMPLE_WAVE_MODE,
+        updated_at=autopilot_dispatch.isoformat(),
+        updated_by="Alex",
+        pending_event_ids=pending_ids,
+    )
+    return {
+        "status": "simple_wave_started",
+        "mode": state["mode"],
+        "wave_event_ids": state["simple_wave_event_ids"],
+        "wave_event_count": len(state["simple_wave_event_ids"]),
+    }
+
+
 def mark_failed(
     config_path: Path,
     claim_token: str,
@@ -882,6 +1045,15 @@ def build_parser() -> argparse.ArgumentParser:
     started.add_argument("--claim-token", required=True)
     renew = subparsers.add_parser("renew")
     renew.add_argument("--claim-token", required=True)
+    classified = subparsers.add_parser("route-classified")
+    classified.add_argument("--claim-token", required=True)
+    classified.add_argument("--event-id", required=True)
+    classified.add_argument(
+        "--route",
+        required=True,
+        choices=sorted(inbound_route_control.SUPPORTED_ROUTES),
+    )
+    subparsers.add_parser("start-simple-wave")
     completed = subparsers.add_parser("completed")
     completed.add_argument("--claim-token", required=True)
     completed.add_argument("--warning")
@@ -925,6 +1097,15 @@ def main(argv: list[str] | None = None) -> int:
             arguments.claim_token,
             lease_seconds=arguments.lease_seconds,
         )
+    elif arguments.command == "route-classified":
+        result = record_route_classification(
+            arguments.config,
+            arguments.claim_token,
+            arguments.event_id,
+            arguments.route,
+        )
+    elif arguments.command == "start-simple-wave":
+        result = start_simple_wave(arguments.config)
     elif arguments.command == "completed":
         result = mark_completed(
             arguments.config,

@@ -339,8 +339,10 @@ def select_claim_events(
     *,
     max_events: int,
     priority_author_ids: frozenset[str] = frozenset(),
+    priority_event_ids: frozenset[str] = frozenset(),
+    excluded_event_ids: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """Select a bounded claim, prioritizing requested authors then age."""
+    """Select a bounded claim by route, requested author, then age."""
 
     if not 1 <= max_events <= inbound_policy.MAX_SUPPORTED_CLAIM_EVENTS:
         raise ValueError(
@@ -349,16 +351,27 @@ def select_claim_events(
         )
     latest = datetime.max.replace(tzinfo=timezone.utc)
 
-    def priority(event: dict[str, Any]) -> tuple[int, datetime, int]:
+    def priority(event: dict[str, Any]) -> tuple[int, int, datetime, int]:
         observed_at = parse_time(
             str(event.get("first_seen_at") or event.get("created_at") or "")
         )
+        route_rank = 0 if str(event["id"]) in priority_event_ids else 1
         author_rank = (
             0 if str(event.get("author_id") or "") in priority_author_ids else 1
         )
-        return author_rank, observed_at or latest, int(str(event["id"]))
+        return (
+            route_rank,
+            author_rank,
+            observed_at or latest,
+            int(str(event["id"])),
+        )
 
-    return sorted(events, key=priority)[:max_events]
+    eligible = [
+        event
+        for event in events
+        if str(event["id"]) not in excluded_event_ids
+    ]
+    return sorted(eligible, key=priority)[:max_events]
 
 
 def _owner_runtime_changed(
@@ -458,6 +471,38 @@ def _idle_claim_result(
     }
 
 
+def _route_paused_claim_result(
+    state_file: Path,
+    state: dict[str, Any],
+    pending_events: list[dict[str, Any]],
+    *,
+    current_time: datetime,
+    lease_seconds: int,
+    excluded_event_ids: frozenset[str],
+) -> dict[str, Any]:
+    paused_ids = sorted(
+        {
+            str(event["id"])
+            for event in pending_events
+            if str(event["id"]) in excluded_event_ids
+        },
+        key=int,
+    )
+    state["updated_at"] = isoformat(current_time)
+    atomic_write_json(state_file, state)
+    return {
+        "status": "route_paused",
+        "dispatch": False,
+        "owner_busy": False,
+        "pending_count": len(pending_events),
+        "eligible_count": 0,
+        "paused_count": len(paused_ids),
+        "paused_event_ids": paused_ids,
+        "leased_count": 0,
+        "lease_seconds": lease_seconds,
+    }
+
+
 def _create_claim(
     state_file: Path,
     state: dict[str, Any],
@@ -506,6 +551,8 @@ def claim(
     now: datetime | None = None,
     runtime_id: str | None = None,
     priority_author_ids: frozenset[str] = frozenset(),
+    priority_event_ids: frozenset[str] = frozenset(),
+    excluded_event_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     if lease_seconds <= 0:
         raise ValueError("lease_seconds must be positive")
@@ -516,6 +563,8 @@ def claim(
             pending_events,
             max_events=max_events,
             priority_author_ids=priority_author_ids,
+            priority_event_ids=priority_event_ids,
+            excluded_event_ids=excluded_event_ids,
         )
         state, migrated = _load_state(state_file)
         owner = state.get("owner")
@@ -540,6 +589,15 @@ def claim(
                 state,
                 current_time=current_time,
                 lease_seconds=lease_seconds,
+            )
+        if not events:
+            return _route_paused_claim_result(
+                state_file,
+                state,
+                pending_events,
+                current_time=current_time,
+                lease_seconds=lease_seconds,
+                excluded_event_ids=excluded_event_ids,
             )
         return _create_claim(
             state_file,
@@ -588,6 +646,48 @@ def renew(
             "renewed_at": renewed_at,
             "lease_expires_at": lease_expires_at,
             "lease_seconds": lease_seconds,
+        }
+
+
+def defer_claim_events(
+    state_file: Path,
+    claim_token: str,
+    event_ids: list[str],
+) -> dict[str, Any]:
+    """Remove paused-route events from one exact active claim."""
+
+    requested = sorted({str(value) for value in event_ids}, key=int)
+    if not requested or any(
+        not event_id.isdigit() or len(event_id) > 19
+        for event_id in requested
+    ):
+        raise ValueError("deferred event ids must be numeric")
+    with locked_state(state_file):
+        state, _ = _load_state(state_file)
+        owner = state.get("owner")
+        if not isinstance(owner, dict) or owner.get("claim_token") != claim_token:
+            raise ValueError("claim token is not the active global owner")
+        active = [str(value) for value in owner.get("event_ids", [])]
+        unknown = sorted(set(requested).difference(active), key=int)
+        if unknown:
+            raise ValueError(
+                "deferred events are not in the active claim: "
+                + ", ".join(unknown)
+            )
+        remaining = [
+            event_id for event_id in active if event_id not in requested
+        ]
+        if remaining:
+            owner["event_ids"] = remaining
+        else:
+            state["owner"] = None
+        state["updated_at"] = isoformat()
+        atomic_write_json(state_file, state)
+        return {
+            "claim_token": claim_token,
+            "deferred_event_ids": requested,
+            "remaining_event_ids": remaining,
+            "owner_released": not remaining,
         }
 
 

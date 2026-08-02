@@ -97,6 +97,12 @@ receive one contextual short reply. Do not answer an insult with an insult.
 Use calm, evidence-backed superiority and address the argument or absence of
 one.
 
+After live classification and before drafting, persist the route with
+`autopilot_bridge.py route-classified`. When runtime mode is `simple-wave`, a
+`local-max` result is removed from the current claim but remains durably
+queued. Do not publish or resolve it. The snapshot's short and visual events
+finish first, then scheduling returns to normal FIFO automatically.
+
 ### Satirical media reply
 
 Use this experimental route only for a pure insult when a visual response adds

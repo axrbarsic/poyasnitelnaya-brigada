@@ -152,6 +152,14 @@ def _relay_immediate_result(
             "Проверь возраст очереди и освободи только безопасные ресурсы.",
             details,
         )
+    if dispatch_status == "route_paused":
+        return Check(
+            "runtime.relay_progress",
+            "pass",
+            "Relay удерживает только временно отложенные route events.",
+            "Проверь завершение simple-wave и автоматический возврат normal.",
+            details,
+        )
     return None
 
 
@@ -437,6 +445,7 @@ def _delivery_context(
         "age_seconds": age_seconds,
         "completion": completion,
         "active": app_active or completion["active"],
+        "route_paused": status == "route_paused",
         "source": (
             "event_dispatch"
             if completion["active"]
@@ -470,6 +479,7 @@ def _queue_details(
         "active_owner": owner_context["active_owner"],
         "active_repair": active_repair,
         "active_x_delivery": delivery_context["active"],
+        "route_paused": delivery_context["route_paused"],
         "owned": owner_context["owned"],
         "pending_count": pending_count,
     }
@@ -515,8 +525,14 @@ def _queue_message(
     active_owner: bool,
     active_repair: bool,
     active_x_delivery: bool,
+    route_paused: bool,
     age_seconds: float,
 ) -> tuple[str, str]:
+    if route_paused:
+        return (
+            "Старейшее событие временно отложено route policy.",
+            "Проверь завершение simple-wave и автоматический возврат normal.",
+        )
     if healthy:
         return (
             f"Старейшее событие ожидает {round(age_seconds, 1)}s.",
@@ -596,7 +612,7 @@ def queue_latency_check(
     healthy = 0 <= age_seconds <= max_age_seconds
     status = (
         "pass"
-        if healthy
+        if healthy or delivery_context["route_paused"]
         else "warn"
         if (
             owner_context["active_owner"]
@@ -622,6 +638,7 @@ def queue_latency_check(
         active_owner=owner_context["active_owner"],
         active_repair=active_repair,
         active_x_delivery=delivery_context["active"],
+        route_paused=delivery_context["route_paused"],
         age_seconds=age_seconds,
     )
     return Check("runtime.queue_latency", status, summary, repair, details)

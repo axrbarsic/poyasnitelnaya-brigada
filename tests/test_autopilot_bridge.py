@@ -13,6 +13,7 @@ import xmention_watcher as watcher
 import candidate_corpus
 import evidence_import
 from scripts import autopilot_bridge, autopilot_dispatch
+from scripts import inbound_route_control
 from scripts import resource_guard
 
 
@@ -88,6 +89,165 @@ class AutopilotBridgeTests(unittest.TestCase):
             result["prompt"],
         )
         self.assertNotIn("Жди готовый ответ до", result["prompt"])
+        self.assertIn("INBOUND_ROUTE_MODE=normal", result["prompt"])
+        self.assertIn("route-classified", result["prompt"])
+
+    def test_start_simple_wave_snapshots_only_current_queue(self) -> None:
+        first = self.event()
+        second = self.event()
+        second["event_id"] = "2081050838240211435"
+        second["event_url"] = (
+            "https://x.com/example/status/2081050838240211435"
+        )
+        self.write_events([first, second])
+
+        result = autopilot_bridge.start_simple_wave(self.config)
+
+        self.assertEqual(result["status"], "simple_wave_started")
+        self.assertEqual(result["wave_event_count"], 2)
+        self.assertEqual(
+            set(result["wave_event_ids"]),
+            {first["event_id"], second["event_id"]},
+        )
+
+    def test_simple_only_gate_prioritizes_known_short_and_skips_local_max(
+        self,
+    ) -> None:
+        payload = json.loads(self.config.read_text(encoding="utf-8"))
+        payload["autopilot_max_claim_events"] = 2
+        payload["autopilot_max_parallel_read_tabs"] = 2
+        self.config.write_text(json.dumps(payload), encoding="utf-8")
+        paused = self.event()
+        unknown = self.event()
+        known_short = self.event()
+        for event, event_id in (
+            (paused, "2081050838240211434"),
+            (unknown, "2081050838240211435"),
+            (known_short, "2081050838240211436"),
+        ):
+            event["event_id"] = event_id
+            event["event_url"] = f"https://x.com/example/status/{event_id}"
+        paused["first_seen_at"] = "2026-07-25T16:29:00Z"
+        unknown["first_seen_at"] = "2026-07-25T16:30:00Z"
+        known_short["first_seen_at"] = "2026-07-25T16:31:00Z"
+        self.write_events([paused, unknown, known_short])
+        state_path = self.root / "var" / "inbound-route-control.json"
+        inbound_route_control.set_mode(
+            state_path,
+            mode="simple-wave",
+            updated_at="2026-08-02T16:30:00Z",
+            updated_by="Alex",
+            pending_event_ids=[
+                paused["event_id"],
+                unknown["event_id"],
+                known_short["event_id"],
+            ],
+        )
+        inbound_route_control.record_route(
+            state_path,
+            event_id=paused["event_id"],
+            route="local-max",
+            classified_at="2026-08-02T16:31:00Z",
+        )
+        inbound_route_control.record_route(
+            state_path,
+            event_id=known_short["event_id"],
+            route="short",
+            classified_at="2026-08-02T16:31:01Z",
+        )
+
+        result = autopilot_bridge.gate(self.config, lease_seconds=1800)
+
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["inbound_route_mode"], "simple-wave")
+        self.assertEqual(
+            result["event_ids"],
+            [known_short["event_id"], unknown["event_id"]],
+        )
+
+    def test_live_local_max_classification_shrinks_simple_only_claim(
+        self,
+    ) -> None:
+        payload = json.loads(self.config.read_text(encoding="utf-8"))
+        payload["autopilot_max_claim_events"] = 2
+        payload["autopilot_max_parallel_read_tabs"] = 2
+        self.config.write_text(json.dumps(payload), encoding="utf-8")
+        first = self.event()
+        second = self.event()
+        for event, event_id in (
+            (first, "2081050838240211434"),
+            (second, "2081050838240211435"),
+        ):
+            event["event_id"] = event_id
+            event["event_url"] = f"https://x.com/example/status/{event_id}"
+        self.write_events([first, second])
+        inbound_route_control.set_mode(
+            self.root / "var" / "inbound-route-control.json",
+            mode="simple-wave",
+            updated_at="2026-08-02T16:30:00Z",
+            updated_by="Alex",
+            pending_event_ids=[first["event_id"], second["event_id"]],
+        )
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        result = autopilot_bridge.record_route_classification(
+            self.config,
+            claimed["claim_token"],
+            first["event_id"],
+            "local-max",
+        )
+
+        self.assertEqual(result["status"], "local_max_deferred")
+        self.assertFalse(result["owner_released"])
+        self.assertEqual(result["remaining_event_ids"], [second["event_id"]])
+        state = autopilot_dispatch.load_state(
+            self.root / "var" / "autopilot-dispatch.json"
+        )
+        self.assertEqual(
+            state["owner"]["event_ids"],
+            [second["event_id"]],
+        )
+
+    def test_all_local_max_claim_releases_owner_and_remains_queued(self) -> None:
+        event = self.event()
+        self.write_events([event])
+        inbound_route_control.set_mode(
+            self.root / "var" / "inbound-route-control.json",
+            mode="simple-wave",
+            updated_at="2026-08-02T16:30:00Z",
+            updated_by="Alex",
+            pending_event_ids=[event["event_id"]],
+        )
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        with mock.patch.object(
+            autopilot_bridge,
+            "_trigger_next_dispatch",
+            return_value={"status": "dispatch_kicked", "triggered": True},
+        ):
+            result = autopilot_bridge.record_route_classification(
+                self.config,
+                claimed["claim_token"],
+                event["event_id"],
+                "local-max",
+            )
+
+        self.assertTrue(result["owner_released"])
+        self.assertEqual(result["pending_count"], 1)
+        self.assertEqual(result["next_dispatch"]["status"], "dispatch_kicked")
+        self.assertIsNone(
+            autopilot_dispatch.load_state(
+                self.root / "var" / "autopilot-dispatch.json"
+            )["owner"]
+        )
+
+        repeated = autopilot_bridge.record_route_classification(
+            self.config,
+            claimed["claim_token"],
+            event["event_id"],
+            "local-max",
+        )
+        self.assertEqual(repeated["status"], "route_already_recorded")
 
     def test_claim_exposes_auditable_resolution_recovery(self) -> None:
         current = self.event()

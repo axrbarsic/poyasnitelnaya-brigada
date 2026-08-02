@@ -44,6 +44,14 @@
   finish and durably resolve one event at a time. Process already-answered and
   short events before local-max events, with oldest-first order inside one
   class. Never prepare the whole claim before the first publication.
+- The durable runtime file `var/inbound-route-control.json` may temporarily set
+  `mode=simple-wave` for one ordinary-reply cleanup wave. Start it with
+  `autopilot_bridge.py start-simple-wave`. After live classification, record
+  every event with `autopilot_bridge.py route-classified`. In simple-wave mode,
+  `local-max` stays queued and is removed from the current claim without skip,
+  blocker, publication or lost history. The queue snapshot is scanned once,
+  ordinary replies finish first, then the mode returns to normal FIFO
+  automatically. Events arriving after the snapshot wait for normal FIFO.
 - If the resource guard defers a run, leave every event unresolved and close
   the scheduled task without Browser work.
 - Use deterministic scripts for queue state, exact IDs, duplicate checks,

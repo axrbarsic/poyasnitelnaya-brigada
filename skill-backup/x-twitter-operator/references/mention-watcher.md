@@ -184,6 +184,14 @@ SHA-256, MIME, `composer_attachment_verified=true`, and exact official
 `reply.media`. Every profile keeps the owner on `gpt-5.6-sol` with effort
 `max`. ChatGPT web is forbidden outside `lozhkin_web`.
 
+Live route classification is persisted separately in
+`var/inbound-route-control.json`. It is scheduling state, not a resolution and
+not conversation history. In `simple-wave` mode, known `local-max` events stay
+queued but are excluded from the cleanup snapshot. Known non-v2 events are
+selected before unclassified events. When the snapshot has no unfinished
+ordinary replies, `normal` resumes automatically and every deferred local-max
+event becomes eligible without replay or database edits.
+
 For an existing conversation, omit `chain_provenance` unless it is needed for
 human-readable evidence. The committer always canonicalizes that field from
 the durable `conversation_chains` row before history import. A supplied value

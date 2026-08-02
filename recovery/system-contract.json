@@ -15,6 +15,7 @@
     "scripts/autopilot_contract.py",
     "scripts/autopilot_dispatch.py",
     "scripts/inbound_policy.py",
+    "scripts/inbound_route_control.py",
     "scripts/json_contract.py",
     "scripts/launchagent_runtime.py",
     "scripts/browser_owner_claim.py",

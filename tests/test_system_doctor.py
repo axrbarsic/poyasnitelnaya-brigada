@@ -526,6 +526,17 @@ class SystemDoctorTests(unittest.TestCase):
             "deferred_resources",
         )
 
+    def test_relay_progress_accepts_route_paused_queue(self) -> None:
+        check = system_doctor.relay_progress_check(
+            pending_count=2,
+            dispatch_state={"status": "route_paused", "work_kind": "x"},
+            owner=None,
+            max_wait_seconds=180,
+        )
+
+        self.assertEqual(check.status, "pass")
+        self.assertEqual(check.details["dispatch_status"], "route_paused")
+
     def test_relay_progress_rejects_failed_dispatch_with_queue(self) -> None:
         check = system_doctor.relay_progress_check(
             pending_count=1,
@@ -605,6 +616,23 @@ class SystemDoctorTests(unittest.TestCase):
         self.assertEqual(check.status, "fail")
         self.assertEqual(check.details["oldest_event_id"], "123")
         self.assertEqual(check.details["age_seconds"], 301.0)
+
+    def test_queue_latency_accepts_intentionally_route_paused_event(self) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[
+                {
+                    "id": "123",
+                    "first_seen_at": "2026-07-29T14:54:59Z",
+                }
+            ],
+            owner=None,
+            dispatch_state={"status": "route_paused", "work_kind": "x"},
+            max_age_seconds=300,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "pass")
+        self.assertTrue(check.details["route_paused"])
 
     def test_queue_latency_warns_for_owned_long_running_event(self) -> None:
         check = system_doctor.queue_latency_check(

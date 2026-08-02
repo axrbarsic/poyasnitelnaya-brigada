@@ -152,6 +152,78 @@ class AutopilotDispatchTests(unittest.TestCase):
             ["200", "200"],
         )
 
+    def test_claim_prioritizes_known_non_v2_and_excludes_paused_v2(self) -> None:
+        paused = self.event("2080998938828501439")
+        paused["first_seen_at"] = "2026-07-25T12:55:00Z"
+        unknown = self.event("2080998938828501440")
+        unknown["first_seen_at"] = "2026-07-25T12:56:00Z"
+        known_short = self.event("2080998938828501441")
+        known_short["first_seen_at"] = "2026-07-25T12:57:00Z"
+        self.write_events([paused, unknown, known_short])
+
+        result = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            max_events=2,
+            priority_event_ids=frozenset({known_short["event_id"]}),
+            excluded_event_ids=frozenset({paused["event_id"]}),
+        )
+
+        self.assertEqual(
+            [event["id"] for event in result["events"]],
+            [known_short["event_id"], unknown["event_id"]],
+        )
+
+    def test_claim_reports_route_paused_when_only_excluded_events_remain(
+        self,
+    ) -> None:
+        event = self.event()
+        self.write_events([event])
+
+        result = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            excluded_event_ids=frozenset({event["event_id"]}),
+        )
+
+        self.assertFalse(result["dispatch"])
+        self.assertEqual(result["status"], "route_paused")
+        self.assertEqual(result["paused_event_ids"], [event["event_id"]])
+        self.assertIsNone(
+            autopilot_dispatch.read_json(self.state_file)["owner"]
+        )
+
+    def test_defer_claim_events_shrinks_or_releases_exact_owner(self) -> None:
+        first = self.event("2080998938828501439")
+        second = self.event("2080998938828501440")
+        self.write_events([first, second])
+        claimed = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            max_events=2,
+        )
+
+        shrunk = autopilot_dispatch.defer_claim_events(
+            self.state_file,
+            claimed["claim_token"],
+            [first["event_id"]],
+        )
+        self.assertFalse(shrunk["owner_released"])
+        self.assertEqual(shrunk["remaining_event_ids"], [second["event_id"]])
+
+        released = autopilot_dispatch.defer_claim_events(
+            self.state_file,
+            claimed["claim_token"],
+            [second["event_id"]],
+        )
+        self.assertTrue(released["owner_released"])
+        self.assertIsNone(
+            autopilot_dispatch.read_json(self.state_file)["owner"]
+        )
+
     def test_priority_author_ids_reject_invalid_config(self) -> None:
         with self.assertRaisesRegex(ValueError, "must be numeric"):
             autopilot_dispatch.configured_priority_author_ids(

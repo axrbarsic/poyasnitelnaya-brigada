@@ -183,6 +183,22 @@ For each X target:
    target uses a precise terminal blocker code. Temporary Browser, local
    generation, rate, or validation failures remain queued for retry.
 
+After every live classification, persist the exact route before drafting:
+
+```bash
+python3 scripts/autopilot_bridge.py --config config.json route-classified \
+  --claim-token CLAIM_TOKEN --event-id EVENT_ID --route ROUTE
+```
+
+The runtime file `var/inbound-route-control.json` may temporarily set
+`mode=simple-wave` for one ordinary-reply cleanup wave. Under that mode, the command returns
+`local_max_deferred` for `local-max`: close that event's task-owned tab, do not
+publish it, do not resolve it, and continue only the remaining short, visual,
+or already-answered events. A deferred local-max event remains in the durable
+queue and is excluded from the wave. After the snapshot is scanned and its
+ordinary replies finish, mode returns to normal FIFO automatically. If the
+command releases an all-local-max owner, end the turn without another gate.
+
 ## Cross-thread commenter memory
 
 Before drafting every reply, inspect the event's `commenter_memory`. It is
