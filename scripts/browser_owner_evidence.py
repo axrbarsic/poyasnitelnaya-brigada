@@ -304,18 +304,11 @@ def _validate_report(
     return report_path
 
 
-def _published_fields(
-    event_dir: Path,
-    evidence: dict[str, Any],
-    history: dict[str, Any],
-    *,
-    event_id: str,
-) -> tuple[dict[str, Any], list[Path]]:
-    reply = _required_object(evidence, "reply")
+def _validate_generation(evidence: dict[str, Any]) -> None:
     generation = _required_object(evidence, "generation")
-    verification = _required_object(evidence, "verification")
-    generation_profile = _required_text(generation, "generation_profile")
-    generation_skill = generation.get("generation_skill")
+    profile = _required_text(generation, "generation_profile")
+    skill = generation.get("generation_skill")
+    web_used = generation.get("chatgpt_web_used")
     allowed_profiles = {
         "local_sol_max",
         "sol_short",
@@ -323,32 +316,41 @@ def _published_fields(
         "satirical_377",
         "lozhkin_web",
     }
-    if generation_profile not in allowed_profiles:
+    if profile not in allowed_profiles:
         raise ValueError("Published outcome has unknown generation profile")
     if _required_text(generation, "generation_model") != "gpt-5.6-sol":
         raise ValueError("Published outcome must use gpt-5.6-sol")
     if _required_text(generation, "reasoning_effort") != "max":
         raise ValueError("Published outcome must use reasoning_effort=max")
-    web_used = generation.get("chatgpt_web_used")
-    if generation_profile == "local_sol_max":
-        if generation_skill != "poyasnitelnaya-brigada-v2":
-            raise ValueError("local_sol_max must use poyasnitelnaya-brigada-v2")
+    if profile == "local_sol_max":
+        if skill != "poyasnitelnaya-brigada-v2":
+            raise ValueError(
+                "local_sol_max must use poyasnitelnaya-brigada-v2"
+            )
         if web_used is not False:
             raise ValueError("local_sol_max must not use ChatGPT web")
-    elif generation_profile in {"sol_short", "short_sol_max"}:
-        if generation_skill is not None:
-            raise ValueError("Sol short outcome must not name a generation skill")
+    elif profile in {"sol_short", "short_sol_max"}:
+        if skill is not None:
+            raise ValueError(
+                "Sol short outcome must not name a generation skill"
+            )
         if web_used is not False:
             raise ValueError("Sol short outcome must not use ChatGPT web")
-    elif generation_profile == "satirical_377":
-        if generation_skill != "377" or web_used is not False:
+    elif profile == "satirical_377":
+        if skill != "377" or web_used is not False:
             raise ValueError("satirical_377 must use local skill 377")
-    elif generation_skill != "lozhkin" or web_used is not True:
+    elif skill != "lozhkin" or web_used is not True:
         raise ValueError("lozhkin_web requires the explicit web visual bot")
 
-    reply_status_id = _required_text(reply, "status_id")
-    parent_status_id = _required_text(reply, "parent_status_id")
-    if parent_status_id != event_id:
+
+def _validated_published_reply(
+    event_dir: Path,
+    evidence: dict[str, Any],
+    *,
+    event_id: str,
+) -> tuple[dict[str, Any], Path, str]:
+    reply = _required_object(evidence, "reply")
+    if _required_text(reply, "parent_status_id") != event_id:
         raise ValueError("Published reply parent does not match event ID")
     reply_file = _evidence_file(event_dir, _required_text(reply, "file"))
     exact_text = build_outbound_history.read_exact_file(reply_file)
@@ -357,7 +359,36 @@ def _published_fields(
         raise ValueError("Evidence reply length does not match reply file")
     if str(reply.get("sha256_exact_text") or "") != exact_sha:
         raise ValueError("Evidence reply SHA-256 does not match reply file")
+    return reply, reply_file, exact_text
 
+
+def _require_exact_published_history(
+    history: dict[str, Any],
+    exact_text: str,
+) -> None:
+    alex_turns = [
+        turn
+        for turn in history.get("turns", [])
+        if isinstance(turn, dict) and turn.get("actor") == "alex"
+    ]
+    if len(alex_turns) != 1 or alex_turns[0].get("exact_text") != exact_text:
+        raise ValueError("Generated history lacks the exact published Alex turn")
+
+
+def _published_fields(
+    event_dir: Path,
+    evidence: dict[str, Any],
+    history: dict[str, Any],
+    *,
+    event_id: str,
+) -> tuple[dict[str, Any], list[Path]]:
+    _validate_generation(evidence)
+    verification = _required_object(evidence, "verification")
+    reply, reply_file, exact_text = _validated_published_reply(
+        event_dir,
+        evidence,
+        event_id=event_id,
+    )
     report_name = (
         _optional_text(verification, "official_api_note_tweet_report_file")
         or _optional_text(verification, "official_api_verification_file")
@@ -366,17 +397,11 @@ def _published_fields(
     report_path = _validate_report(
         event_dir,
         report_name,
-        status_id=reply_status_id,
+        status_id=_required_text(reply, "status_id"),
         parent_status_id=event_id,
         exact_text=exact_text,
     )
-    alex_turns = [
-        turn
-        for turn in history.get("turns", [])
-        if isinstance(turn, dict) and turn.get("actor") == "alex"
-    ]
-    if len(alex_turns) != 1 or alex_turns[0].get("exact_text") != exact_text:
-        raise ValueError("Generated history lacks the exact published Alex turn")
+    _require_exact_published_history(history, exact_text)
     return (
         {
             "reply_url": _required_text(reply, "url"),
@@ -421,16 +446,22 @@ def _skip_fields(
     )
 
 
-def build_event_records(
-    config: watcher.Config,
+def _validated_outcome(
     connection: sqlite3.Connection,
     *,
-    event_dir: Path,
+    evidence_path: Path,
     claim_token: str,
     event_id: str,
-    maximum_length: int = 4000,
-) -> tuple[dict[str, Any], dict[str, Any]]:
-    evidence_path = event_dir / EVIDENCE_NAME
+    maximum_length: int,
+) -> tuple[
+    dict[str, Any],
+    sqlite3.Row,
+    str,
+    str,
+    dict[str, Any],
+    dict[str, Any],
+    str,
+]:
     evidence = _read_object(evidence_path)
     if evidence.get("schema_version") != 1:
         raise ValueError("Unsupported Browser outcome schema_version")
@@ -439,7 +470,6 @@ def build_event_records(
     target = _required_object(evidence, "target")
     if _required_text(target, "status_id") != event_id:
         raise ValueError("Evidence target status ID does not match directory")
-
     event = _event_row(connection, event_id=event_id)
     _validate_target(evidence_path, target, event)
     conversation_id = str(event["conversation_id"] or "")
@@ -457,7 +487,6 @@ def build_event_records(
         resolution = evidence.get("blocker")
     if not isinstance(resolution, dict):
         raise ValueError("Evidence must contain resolution or blocker details")
-    reason = _required_text(resolution, "reason")
     verification = _required_object(evidence, "verification")
     checked_at = _required_text(verification, "verified_at")
     checked_time = watcher.parse_time(checked_at)
@@ -467,11 +496,33 @@ def build_event_records(
         or checked_time.utcoffset() is None
     ):
         raise ValueError("verification.verified_at must be timezone-aware")
+    return (
+        evidence,
+        event,
+        conversation_id,
+        disposition,
+        history,
+        resolution,
+        checked_at,
+    )
 
+
+def _base_ledger(
+    config: watcher.Config,
+    connection: sqlite3.Connection,
+    event: sqlite3.Row,
+    evidence: dict[str, Any],
+    *,
+    event_id: str,
+    conversation_id: str,
+    disposition: str,
+    reason: str,
+    checked_at: str,
+) -> dict[str, Any]:
     classification = evidence.get("classification")
     if not isinstance(classification, dict):
         classification = {}
-    ledger: dict[str, Any] = {
+    return {
         "event": "initial_audit_disposition",
         "event_id": event_id,
         "conversation_id": conversation_id,
@@ -493,62 +544,133 @@ def build_event_records(
         "checked_at": checked_at,
     }
 
-    extra_evidence: list[Path] = []
+
+def _apply_disposition_fields(
+    event_dir: Path,
+    evidence: dict[str, Any],
+    history: dict[str, Any],
+    ledger: dict[str, Any],
+    *,
+    event_id: str,
+    disposition: str,
+) -> list[Path]:
     if disposition == "published":
-        fields, extra_evidence = _published_fields(
+        fields, extra = _published_fields(
             event_dir,
             evidence,
             history,
             event_id=event_id,
         )
         ledger.update(fields)
-    elif disposition == "skip":
-        fields, extra_evidence = _skip_fields(
+        return extra
+    if disposition == "skip":
+        fields, extra = _skip_fields(
             event_dir,
             evidence,
             event_id=event_id,
         )
         ledger.update(fields)
-    else:
-        blocker = _required_object(evidence, "blocker")
-        blocker_code = _required_text(blocker, "code")
-        if blocker_code not in watcher.TERMINAL_BLOCKER_CODES:
-            raise ValueError("Evidence blocker code is not terminal")
-        ledger["blocker_code"] = blocker_code
+        return extra
+    blocker = _required_object(evidence, "blocker")
+    blocker_code = _required_text(blocker, "code")
+    if blocker_code not in watcher.TERMINAL_BLOCKER_CODES:
+        raise ValueError("Evidence blocker code is not terminal")
+    ledger["blocker_code"] = blocker_code
+    return []
 
-    relative_evidence = str(
-        evidence_path.relative_to(config.source_path.parent)
-    )
-    relative_extra_evidence = [
-        str(path.relative_to(config.source_path.parent))
-        for path in extra_evidence
-    ]
-    supplied_evidence = resolution.get("evidence", [])
-    if not isinstance(supplied_evidence, list):
+
+def _apply_ledger_evidence(
+    config: watcher.Config,
+    evidence_path: Path,
+    extra_evidence: list[Path],
+    resolution: dict[str, Any],
+    ledger: dict[str, Any],
+) -> None:
+    supplied = resolution.get("evidence", [])
+    if not isinstance(supplied, list):
         raise ValueError("resolution.evidence must be an array")
     ledger["evidence"] = sorted(
         {
-            relative_evidence,
+            str(evidence_path.relative_to(config.source_path.parent)),
+            *(str(value).strip() for value in supplied if str(value).strip()),
             *(
-                str(value).strip()
-                for value in supplied_evidence
-                if str(value).strip()
+                str(path.relative_to(config.source_path.parent))
+                for path in extra_evidence
             ),
-            *relative_extra_evidence,
         }
     )
 
+
+def _apply_resolution_recovery(
+    evidence: dict[str, Any],
+    ledger: dict[str, Any],
+) -> None:
     recovery = evidence.get("resolution_recovery")
-    if recovery is not None:
-        if not isinstance(recovery, dict):
-            raise ValueError("resolution_recovery must be an object")
-        if recovery.get("supersedes_existing_resolution") is not True:
-            raise ValueError("resolution_recovery must supersede a resolution")
-        ledger["supersedes_existing_resolution"] = True
-        ledger["resolution_revision_reason"] = _required_text(
-            recovery,
-            "resolution_revision_reason",
-        )
+    if recovery is None:
+        return
+    if not isinstance(recovery, dict):
+        raise ValueError("resolution_recovery must be an object")
+    if recovery.get("supersedes_existing_resolution") is not True:
+        raise ValueError("resolution_recovery must supersede a resolution")
+    ledger["supersedes_existing_resolution"] = True
+    ledger["resolution_revision_reason"] = _required_text(
+        recovery,
+        "resolution_revision_reason",
+    )
+
+
+def build_event_records(
+    config: watcher.Config,
+    connection: sqlite3.Connection,
+    *,
+    event_dir: Path,
+    claim_token: str,
+    event_id: str,
+    maximum_length: int = 4000,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    evidence_path = event_dir / EVIDENCE_NAME
+    (
+        evidence,
+        event,
+        conversation_id,
+        disposition,
+        history,
+        resolution,
+        checked_at,
+    ) = _validated_outcome(
+        connection,
+        evidence_path=evidence_path,
+        claim_token=claim_token,
+        event_id=event_id,
+        maximum_length=maximum_length,
+    )
+    ledger = _base_ledger(
+        config,
+        connection,
+        event,
+        evidence,
+        event_id=event_id,
+        conversation_id=conversation_id,
+        disposition=disposition,
+        reason=_required_text(resolution, "reason"),
+        checked_at=checked_at,
+    )
+    extra_evidence = _apply_disposition_fields(
+        event_dir,
+        evidence,
+        history,
+        ledger,
+        event_id=event_id,
+        disposition=disposition,
+    )
+    _apply_ledger_evidence(
+        config,
+        evidence_path,
+        extra_evidence,
+        resolution,
+        ledger,
+    )
+    _apply_resolution_recovery(evidence, ledger)
     return history, ledger
 
 
@@ -748,6 +870,66 @@ def _event_id_from_ledger(
     return event_id
 
 
+def _event_evidence_dirs(session_dir: Path) -> list[Path]:
+    directories: list[Path] = []
+    for child in sorted(session_dir.iterdir(), key=lambda path: path.name):
+        if child.name in AGGREGATE_NAMES or child.name == "manifest.json":
+            continue
+        if child.is_symlink():
+            raise ValueError(f"Symlink is not allowed in evidence: {child}")
+        if child.is_dir():
+            directories.append(child)
+    return directories
+
+
+def _event_directory_records(
+    child: Path,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]], str] | None:
+    history_path = child / HISTORY_NAME
+    ledger_path = child / LEDGER_NAME
+    if not history_path.exists() and not ledger_path.exists():
+        return None
+    if not history_path.is_file() or not ledger_path.is_file():
+        raise ValueError(
+            f"Event evidence must contain both JSONL files: {child}"
+        )
+    history_records = _read_jsonl(history_path)
+    ledger_records = _read_jsonl(ledger_path)
+    event_id = _event_id_from_ledger(ledger_records, source=ledger_path)
+    if child.name != event_id:
+        raise ValueError(
+            f"Event directory {child.name} does not match ledger "
+            f"event_id {event_id}"
+        )
+    history_status_ids = {
+        status_id
+        for record in history_records
+        for status_id in _status_ids_from_history(record)
+    }
+    if event_id not in history_status_ids:
+        raise ValueError(
+            f"History in {child} does not contain its exact event turn"
+        )
+    return history_records, ledger_records, event_id
+
+
+def _register_unique_records(
+    seen: dict[tuple[str, str], Path],
+    *,
+    kind: str,
+    source: Path,
+    records: list[dict[str, Any]],
+) -> None:
+    for record in records:
+        key = (kind, _canonical_record(record))
+        previous = seen.get(key)
+        if previous is not None:
+            raise ValueError(
+                f"Duplicate {kind} record in {previous} and {source}"
+            )
+        seen[key] = source
+
+
 def _collect_event_records(
     session_dir: Path,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], list[str]]:
@@ -755,59 +937,26 @@ def _collect_event_records(
     ledgers: list[dict[str, Any]] = []
     event_ids: list[str] = []
     seen_records: dict[tuple[str, str], Path] = {}
-
-    for child in sorted(session_dir.iterdir(), key=lambda path: path.name):
-        if child.name in AGGREGATE_NAMES or child.name == "manifest.json":
+    for child in _event_evidence_dirs(session_dir):
+        collected = _event_directory_records(child)
+        if collected is None:
             continue
-        if child.is_symlink():
-            raise ValueError(f"Symlink is not allowed in evidence: {child}")
-        if not child.is_dir():
-            continue
-        history_path = child / HISTORY_NAME
-        ledger_path = child / LEDGER_NAME
-        if not history_path.exists() and not ledger_path.exists():
-            continue
-        if not history_path.is_file() or not ledger_path.is_file():
-            raise ValueError(
-                f"Event evidence must contain both JSONL files: {child}"
-            )
-        history_records = _read_jsonl(history_path)
-        ledger_records = _read_jsonl(ledger_path)
-        event_id = _event_id_from_ledger(ledger_records, source=ledger_path)
-        if child.name != event_id:
-            raise ValueError(
-                f"Event directory {child.name} does not match ledger "
-                f"event_id {event_id}"
-            )
-        history_status_ids = {
-            status_id
-            for record in history_records
-            for status_id in _status_ids_from_history(record)
-        }
-        if event_id not in history_status_ids:
-            raise ValueError(
-                f"History in {child} does not contain its exact event turn"
-            )
+        history_records, ledger_records, event_id = collected
         if event_id in event_ids:
             raise ValueError(f"Duplicate event evidence: {event_id}")
         event_ids.append(event_id)
-
         for kind, source, records in (
-            ("history", history_path, history_records),
-            ("ledger", ledger_path, ledger_records),
+            ("history", child / HISTORY_NAME, history_records),
+            ("ledger", child / LEDGER_NAME, ledger_records),
         ):
-            for record in records:
-                fingerprint = _canonical_record(record)
-                key = (kind, fingerprint)
-                previous = seen_records.get(key)
-                if previous is not None:
-                    raise ValueError(
-                        f"Duplicate {kind} record in {previous} and {source}"
-                    )
-                seen_records[key] = source
+            _register_unique_records(
+                seen_records,
+                kind=kind,
+                source=source,
+                records=records,
+            )
         histories.extend(history_records)
         ledgers.extend(ledger_records)
-
     if not event_ids:
         raise ValueError("Browser-owner session contains no event evidence")
     return histories, ledgers, event_ids
@@ -860,6 +1009,122 @@ def _validated_session_dir(
     return session_dir, evidence_root
 
 
+def _existing_manifest_result(
+    session_dir: Path,
+    evidence_root: Path,
+    connection: sqlite3.Connection,
+) -> dict[str, Any] | None:
+    if not (session_dir / "manifest.json").is_file():
+        return None
+    result = evidence_import.finalize_runtime_evidence(
+        destination=session_dir,
+        connection=connection,
+        output_root=evidence_root,
+    )
+    return {
+        "status": result["status"],
+        "session_dir": str(session_dir),
+        "manifest": result,
+    }
+
+
+def _require_expected_event_set(
+    expected_event_ids: list[str],
+    evidence_event_ids: list[str],
+) -> None:
+    if set(evidence_event_ids) == set(expected_event_ids):
+        return
+    missing = sorted(
+        set(expected_event_ids) - set(evidence_event_ids),
+        key=int,
+    )
+    unexpected = sorted(
+        set(evidence_event_ids) - set(expected_event_ids),
+        key=int,
+    )
+    raise ValueError(
+        "Evidence event set does not match active claim: "
+        f"missing={missing}, unexpected={unexpected}"
+    )
+
+
+def _sync_staged_handoffs(
+    config: watcher.Config,
+    connection: sqlite3.Connection,
+    session_dir: Path,
+    histories: list[dict[str, Any]],
+    ledgers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(
+        prefix=".handoff-sync.",
+        dir=session_dir,
+    ) as temporary_name:
+        staging = Path(temporary_name)
+        staging_history = staging / HISTORY_NAME
+        staging_ledger = staging / LEDGER_NAME
+        _atomic_write_records(staging_history, histories)
+        _atomic_write_records(staging_ledger, ledgers)
+        return watcher.sync_browser_handoffs(
+            config,
+            connection,
+            history_path=staging_history,
+            ledger_path=staging_ledger,
+        )
+
+
+def _require_unchanged_event_records(
+    session_dir: Path,
+    histories: list[dict[str, Any]],
+    ledgers: list[dict[str, Any]],
+    event_ids: list[str],
+) -> None:
+    current_histories, current_ledgers, current_event_ids = (
+        _collect_event_records(session_dir)
+    )
+    if (
+        current_histories != histories
+        or current_ledgers != ledgers
+        or current_event_ids != event_ids
+    ):
+        raise ValueError("Per-event evidence changed during finalization")
+
+
+def _write_aggregates_and_manifest(
+    connection: sqlite3.Connection,
+    *,
+    session_dir: Path,
+    evidence_root: Path,
+    histories: list[dict[str, Any]],
+    ledgers: list[dict[str, Any]],
+) -> dict[str, Any]:
+    aggregate_paths = (session_dir / HISTORY_NAME, session_dir / LEDGER_NAME)
+    for path, records in zip(
+        aggregate_paths,
+        (histories, ledgers),
+        strict=True,
+    ):
+        _confirm_existing_aggregate(path, records)
+    created_paths: list[Path] = []
+    try:
+        for path, records in zip(
+            aggregate_paths,
+            (histories, ledgers),
+            strict=True,
+        ):
+            if _write_or_confirm_aggregate(path, records):
+                created_paths.append(path)
+        return evidence_import.finalize_runtime_evidence(
+            destination=session_dir,
+            connection=connection,
+            output_root=evidence_root,
+        )
+    except Exception:
+        if not (session_dir / "manifest.json").exists():
+            for path in created_paths:
+                path.unlink(missing_ok=True)
+        raise
+
+
 def finalize_session(
     *,
     config_path: Path,
@@ -872,18 +1137,13 @@ def finalize_session(
     )
     connection = watcher.connect_database(config.database)
     try:
-        if (session_dir / "manifest.json").is_file():
-            result = evidence_import.finalize_runtime_evidence(
-                destination=session_dir,
-                connection=connection,
-                output_root=evidence_root,
-            )
-            return {
-                "status": result["status"],
-                "session_dir": str(session_dir),
-                "manifest": result,
-            }
-
+        existing = _existing_manifest_result(
+            session_dir,
+            evidence_root,
+            connection,
+        )
+        if existing is not None:
+            return existing
         _, state_file = autopilot_dispatch.load_paths(config_path)
         with autopilot_dispatch.locked_state(state_file):
             expected_event_ids = active_claim_event_ids(
@@ -893,77 +1153,36 @@ def finalize_session(
             histories, ledgers, evidence_event_ids = _collect_event_records(
                 session_dir
             )
-            if set(evidence_event_ids) != set(expected_event_ids):
-                missing = sorted(
-                    set(expected_event_ids) - set(evidence_event_ids),
-                    key=int,
-                )
-                unexpected = sorted(
-                    set(evidence_event_ids) - set(expected_event_ids),
-                    key=int,
-                )
-                raise ValueError(
-                    "Evidence event set does not match active claim: "
-                    f"missing={missing}, unexpected={unexpected}"
-                )
-            aggregate_paths = (
-                session_dir / HISTORY_NAME,
-                session_dir / LEDGER_NAME,
+            _require_expected_event_set(
+                expected_event_ids,
+                evidence_event_ids,
             )
             for path, records in zip(
-                aggregate_paths,
+                (session_dir / HISTORY_NAME, session_dir / LEDGER_NAME),
                 (histories, ledgers),
                 strict=True,
             ):
                 _confirm_existing_aggregate(path, records)
-
-            with tempfile.TemporaryDirectory(
-                prefix=".handoff-sync.",
-                dir=session_dir,
-            ) as temporary_name:
-                staging = Path(temporary_name)
-                staging_history = staging / HISTORY_NAME
-                staging_ledger = staging / LEDGER_NAME
-                _atomic_write_records(staging_history, histories)
-                _atomic_write_records(staging_ledger, ledgers)
-                sync = watcher.sync_browser_handoffs(
-                    config,
-                    connection,
-                    history_path=staging_history,
-                    ledger_path=staging_ledger,
-                )
-
-            current_histories, current_ledgers, current_event_ids = (
-                _collect_event_records(session_dir)
+            sync = _sync_staged_handoffs(
+                config,
+                connection,
+                session_dir,
+                histories,
+                ledgers,
             )
-            if (
-                current_histories != histories
-                or current_ledgers != ledgers
-                or current_event_ids != evidence_event_ids
-            ):
-                raise ValueError(
-                    "Per-event evidence changed during finalization"
-                )
-            created_paths: list[Path] = []
-            try:
-                for path, records in zip(
-                    aggregate_paths,
-                    (histories, ledgers),
-                    strict=True,
-                ):
-                    if _write_or_confirm_aggregate(path, records):
-                        created_paths.append(path)
-                manifest = evidence_import.finalize_runtime_evidence(
-                    destination=session_dir,
-                    connection=connection,
-                    output_root=evidence_root,
-                )
-            except Exception:
-                if not (session_dir / "manifest.json").exists():
-                    for path in created_paths:
-                        path.unlink(missing_ok=True)
-                raise
-
+            _require_unchanged_event_records(
+                session_dir,
+                histories,
+                ledgers,
+                evidence_event_ids,
+            )
+            manifest = _write_aggregates_and_manifest(
+                connection,
+                session_dir=session_dir,
+                evidence_root=evidence_root,
+                histories=histories,
+                ledgers=ledgers,
+            )
         if not manifest.get("complete"):
             raise ValueError("Browser-owner evidence manifest is incomplete")
         sync["evidence_manifest"] = manifest

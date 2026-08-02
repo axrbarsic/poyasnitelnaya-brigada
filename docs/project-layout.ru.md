@@ -15,7 +15,7 @@ x-mention-watcher/
   docs/                    русская и английская документация
   macos/                   исходные шаблоны LaunchAgent
   scripts/                 dispatcher, bridge и служебные утилиты
-  skill-backup/            восстанавливаемые версии всех трёх skills
+  skill-backup/            восстанавливаемые версии всех четырёх skills
   tests/                   все тесты
   var/                     изменяемое локальное состояние, вне Git
   *.py                     watcher, importer и snapshot tools
@@ -27,6 +27,10 @@ Watcher entrypoint служит только composition root. Durable domains �
 в модулях `scripts/watcher_*.py`, а каждый tracked runtime module перечислен в
 `recovery/system-contract.json`. Поэтому deployment drift обнаруживается без
 создания копий исходного дерева.
+
+Публичные control-plane scripts также являются совместимыми facade. Их
+внутренние модули Desktop lifecycle, incident store, recovery routes и doctor
+runtime находятся в том же `scripts/` и перечислены в system contract.
 
 `browser_owner_cwd` равен `.`. Поэтому Browser owner запускается в том же
 каноническом каталоге и не требует отдельного проекта в `Documents/Codex`.

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -118,6 +119,121 @@ def reply_exact_text(
     return text
 
 
+@dataclass(frozen=True)
+class TargetIdentity:
+    status_id: str
+    parent_status_id: str | None
+    chain_id: str
+    root_status_id: str
+    chain_provenance: str
+
+
+def _target_identity(
+    evidence: dict[str, Any],
+    target: dict[str, Any],
+) -> TargetIdentity:
+    target_status_id = status_id(target, "status_id")
+    parent_status_id = optional_text(target, "parent_status_id")
+    if parent_status_id is not None:
+        parent_status_id = validate_status_id(
+            parent_status_id,
+            "target.parent_status_id",
+        )
+    chain_id = optional_text(target, "chain_id") or target_status_id
+    root_status_id = optional_text(target, "root_status_id") or chain_id
+    chain_provenance = (
+        optional_text(target, "chain_provenance")
+        or optional_text(evidence, "chain_provenance")
+        or "pro"
+    )
+    return TargetIdentity(
+        status_id=target_status_id,
+        parent_status_id=parent_status_id,
+        chain_id=validate_status_id(chain_id, "target.chain_id"),
+        root_status_id=validate_status_id(
+            root_status_id,
+            "target.root_status_id",
+        ),
+        chain_provenance=chain_provenance,
+    )
+
+
+def _evidence_collections(
+    evidence: dict[str, Any],
+    target: dict[str, Any],
+) -> tuple[list[Any], list[str]]:
+    target_media = target.get("media", [])
+    sources = evidence.get("sources", [])
+    if not isinstance(target_media, list):
+        raise ValueError("target media must be an array")
+    if not isinstance(sources, list) or not all(
+        isinstance(value, str) and value.strip() for value in sources
+    ):
+        raise ValueError("sources must be an array of non-empty strings")
+    return target_media, [value.strip() for value in sources]
+
+
+def _target_turn(
+    evidence_path: Path,
+    target: dict[str, Any],
+    identity: TargetIdentity,
+    target_media: list[Any],
+) -> dict[str, Any]:
+    return {
+        "status_id": identity.status_id,
+        "parent_status_id": identity.parent_status_id,
+        "actor": "target",
+        "author": author_handle(target),
+        "url": canonical_status_url(
+            target,
+            expected_status_id=identity.status_id,
+            field_name="target",
+        ),
+        "exact_text": target_exact_text(evidence_path, target),
+        "posted_at": optional_text(target, "posted_at")
+        or optional_text(target, "published_at"),
+        "provenance": optional_text(target, "provenance") or "pro",
+        "media": target_media,
+        "source_urls": [],
+    }
+
+
+def _reply_turn(
+    evidence_path: Path,
+    reply: dict[str, Any],
+    *,
+    target_status_id: str,
+    sources: list[str],
+    maximum_length: int,
+    enforce_reply_constraints: bool,
+) -> dict[str, Any]:
+    reply_status_id = status_id(reply, "status_id")
+    parent_status_id = status_id(reply, "parent_status_id")
+    if parent_status_id != target_status_id:
+        raise ValueError("reply parent_status_id does not match target")
+    return {
+        "status_id": reply_status_id,
+        "parent_status_id": parent_status_id,
+        "actor": "alex",
+        "author": author_handle(reply),
+        "url": canonical_status_url(
+            reply,
+            expected_status_id=reply_status_id,
+            field_name="reply",
+        ),
+        "exact_text": reply_exact_text(
+            evidence_path,
+            reply,
+            maximum_length=maximum_length,
+            enforce_publication_constraints=enforce_reply_constraints,
+        ),
+        "posted_at": optional_text(reply, "posted_at"),
+        "provenance": optional_text(reply, "provenance") or "pro",
+        "media": [],
+        "source_urls": sources,
+    }
+
+
 def build_record(
     evidence_path: Path,
     *,
@@ -150,94 +266,30 @@ def build_record_from_payload(
     if reply is not None and not isinstance(reply, dict):
         raise ValueError("evidence reply must be an object")
 
-    target_status_id = status_id(target, "status_id")
-    target_parent_status_id = optional_text(target, "parent_status_id")
-    if target_parent_status_id is not None:
-        target_parent_status_id = validate_status_id(
-            target_parent_status_id,
-            "target.parent_status_id",
-        )
-    chain_id = optional_text(target, "chain_id") or target_status_id
-    root_status_id = optional_text(target, "root_status_id") or chain_id
-    chain_provenance = (
-        optional_text(target, "chain_provenance")
-        or optional_text(evidence, "chain_provenance")
-        or "pro"
-    )
-    chain_id = validate_status_id(chain_id, "target.chain_id")
-    root_status_id = validate_status_id(
-        root_status_id,
-        "target.root_status_id",
-    )
-
-    target_media = target.get("media", [])
-    sources = evidence.get("sources", [])
-    if not isinstance(target_media, list):
-        raise ValueError("target media must be an array")
-    if not isinstance(sources, list) or not all(
-        isinstance(value, str) and value.strip() for value in sources
-    ):
-        raise ValueError("sources must be an array of non-empty strings")
-
-    target_turn = {
-        "status_id": target_status_id,
-        "parent_status_id": target_parent_status_id,
-        "actor": "target",
-        "author": author_handle(target),
-        "url": canonical_status_url(
-            target,
-            expected_status_id=target_status_id,
-            field_name="target",
-        ),
-        "exact_text": target_exact_text(evidence_path, target),
-        "posted_at": optional_text(
-            target,
-            "posted_at",
-        )
-        or optional_text(target, "published_at"),
-        "provenance": optional_text(target, "provenance") or "pro",
-        "media": target_media,
-        "source_urls": [],
-    }
+    identity = _target_identity(evidence, target)
+    target_media, sources = _evidence_collections(evidence, target)
     record = {
-        "chain_id": chain_id,
-        "root_status_id": root_status_id,
-        "provenance": chain_provenance,
-        "turns": [target_turn],
+        "chain_id": identity.chain_id,
+        "root_status_id": identity.root_status_id,
+        "provenance": identity.chain_provenance,
+        "turns": [
+            _target_turn(evidence_path, target, identity, target_media)
+        ],
     }
-    if chain_id == target_status_id:
+    if identity.chain_id == identity.status_id:
         record["ledger_reference"] = str(evidence_path)
     if reply is None:
         return record
-
-    reply_status_id = status_id(reply, "status_id")
-    reply_parent_status_id = status_id(reply, "parent_status_id")
-    if reply_parent_status_id != target_status_id:
-        raise ValueError("reply parent_status_id does not match target")
-    reply_url = canonical_status_url(
-        reply,
-        expected_status_id=reply_status_id,
-        field_name="reply",
-    )
-
-    reply_turn = {
-        "status_id": reply_status_id,
-        "parent_status_id": reply_parent_status_id,
-        "actor": "alex",
-        "author": author_handle(reply),
-        "url": reply_url,
-        "exact_text": reply_exact_text(
+    record["turns"].append(
+        _reply_turn(
             evidence_path,
             reply,
+            target_status_id=identity.status_id,
+            sources=sources,
             maximum_length=maximum_length,
-            enforce_publication_constraints=enforce_reply_constraints,
-        ),
-        "posted_at": optional_text(reply, "posted_at"),
-        "provenance": optional_text(reply, "provenance") or "pro",
-        "media": [],
-        "source_urls": [value.strip() for value in sources],
-    }
-    record["turns"].append(reply_turn)
+            enforce_reply_constraints=enforce_reply_constraints,
+        )
+    )
     return record
 
 

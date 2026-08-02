@@ -22,15 +22,39 @@ def _excerpt(value: str, limit: int = 400) -> dict[str, Any]:
     }
 
 
-def commenter_history_for_event(
+CANDIDATE_MEMORY_CONTRACT = (
+    "Unverified candidates are search hints only. Verify the exact "
+    "live X post before quoting or using it as evidence."
+)
+
+
+def _empty_commenter_history(event_id: str) -> dict[str, Any]:
+    return {
+        "event_id": event_id,
+        "identity_kind": "unavailable",
+        "author_id": None,
+        "username": None,
+        "total_prior_interactions": 0,
+        "first_interaction_at": None,
+        "last_interaction_at": None,
+        "returned_interactions": 0,
+        "interactions": [],
+        "total_prior_archive_alex_replies": 0,
+        "first_archive_alex_reply_at": None,
+        "last_archive_alex_reply_at": None,
+        "returned_archive_alex_replies": 0,
+        "archive_alex_replies": [],
+        "total_candidate_public_posts": 0,
+        "returned_candidate_public_posts": 0,
+        "candidate_public_posts": [],
+        "candidate_memory_contract": CANDIDATE_MEMORY_CONTRACT,
+    }
+
+
+def _commenter_identity(
     connection: sqlite3.Connection,
     event_id: str,
-    *,
-    limit: int,
-) -> dict[str, Any]:
-    if limit <= 0:
-        raise ValueError("Commenter history limit must be positive")
-    event_id = watcher_validation.validate_status_id(str(event_id), "event_id")
+) -> tuple[sqlite3.Row, str, str, str] | tuple[sqlite3.Row, None, None, None]:
     current = connection.execute(
         """
         SELECT event_id, author_id, username
@@ -44,38 +68,25 @@ def commenter_history_for_event(
     author_id = current["author_id"]
     username = current["username"]
     if author_id:
-        identity_clause = "e.author_id = ?"
-        identity_value = str(author_id)
-        identity_kind = "x_user_id"
-    elif username:
-        identity_clause = "LOWER(e.username) = LOWER(?)"
-        identity_value = str(username)
-        identity_kind = "x_handle_fallback"
-    else:
-        return {
-            "event_id": event_id,
-            "identity_kind": "unavailable",
-            "author_id": None,
-            "username": None,
-            "total_prior_interactions": 0,
-            "first_interaction_at": None,
-            "last_interaction_at": None,
-            "returned_interactions": 0,
-            "interactions": [],
-            "total_prior_archive_alex_replies": 0,
-            "first_archive_alex_reply_at": None,
-            "last_archive_alex_reply_at": None,
-            "returned_archive_alex_replies": 0,
-            "archive_alex_replies": [],
-            "total_candidate_public_posts": 0,
-            "returned_candidate_public_posts": 0,
-            "candidate_public_posts": [],
-            "candidate_memory_contract": (
-                "Unverified candidates are search hints only. Verify the "
-                "exact live X post before quoting or using it as evidence."
-            ),
-        }
+        return current, "e.author_id = ?", str(author_id), "x_user_id"
+    if username:
+        return (
+            current,
+            "LOWER(e.username) = LOWER(?)",
+            str(username),
+            "x_handle_fallback",
+        )
+    return current, None, None, None
 
+
+def _prior_interactions(
+    connection: sqlite3.Connection,
+    event_id: str,
+    *,
+    identity_clause: str,
+    identity_value: str,
+    limit: int,
+) -> tuple[sqlite3.Row, list[dict[str, Any]]]:
     aggregate = connection.execute(
         f"""
         SELECT COUNT(*) AS count,
@@ -102,13 +113,7 @@ def commenter_history_for_event(
     for row in rows:
         status_id = str(row["event_id"])
         payload = json.loads(str(row["payload_json"]))
-        exact_text = str(payload.get("text") or "")
         prior_username = row["username"]
-        target_url = (
-            f"https://x.com/{prior_username}/status/{status_id}"
-            if prior_username
-            else f"https://x.com/i/web/status/{status_id}"
-        )
         alex_rows = connection.execute(
             """
             SELECT status_id, url, exact_text, posted_at
@@ -119,148 +124,202 @@ def commenter_history_for_event(
             """,
             (status_id,),
         ).fetchall()
-        alex_replies = [
-            {
-                "status_id": str(reply["status_id"]),
-                "url": str(reply["url"]),
-                "posted_at": reply["posted_at"],
-                **_excerpt(str(reply["exact_text"])),
-            }
-            for reply in alex_rows
-        ]
         interactions.append(
             {
                 "status_id": status_id,
-                "url": target_url,
+                "url": (
+                    f"https://x.com/{prior_username}/status/{status_id}"
+                    if prior_username
+                    else f"https://x.com/i/web/status/{status_id}"
+                ),
                 "created_at": row["created_at"],
                 "conversation_id": row["conversation_id"],
                 "disposition": row["disposition"],
                 "stance": row["stance"],
                 "stance_detail": row["stance_detail"],
-                **_excerpt(exact_text),
-                "alex_replies": alex_replies,
+                **_excerpt(str(payload.get("text") or "")),
+                "alex_replies": [
+                    {
+                        "status_id": str(reply["status_id"]),
+                        "url": str(reply["url"]),
+                        "posted_at": reply["posted_at"],
+                        **_excerpt(str(reply["exact_text"])),
+                    }
+                    for reply in alex_rows
+                ],
             }
         )
-    archive_replies: list[dict[str, Any]] = []
+    return aggregate, interactions
+
+
+def _archive_commenter_memory(
+    connection: sqlite3.Connection,
+    author_id: str,
+    *,
+    limit: int,
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    aggregate_row = connection.execute(
+        """
+        SELECT COUNT(*) AS count,
+               MIN(post.posted_at) AS first_reply_at,
+               MAX(post.posted_at) AS last_reply_at
+        FROM archive_posts AS post
+        LEFT JOIN conversation_turns AS turn
+          ON turn.status_id = post.status_id
+        WHERE post.counterparty_user_id = ?
+          AND turn.status_id IS NULL
+        """,
+        (author_id,),
+    ).fetchone()
+    aggregate = {
+        "count": int(aggregate_row["count"]),
+        "first_reply_at": aggregate_row["first_reply_at"],
+        "last_reply_at": aggregate_row["last_reply_at"],
+    }
+    archive_limit = min(limit, max(3, math.ceil(limit / 3)))
+    rows = connection.execute(
+        """
+        SELECT post.status_id, post.parent_status_id, post.posted_at,
+               post.exact_text, post.canonical_url,
+               post.counterparty_username, post.source_member
+        FROM archive_posts AS post
+        LEFT JOIN conversation_turns AS turn
+          ON turn.status_id = post.status_id
+        WHERE post.counterparty_user_id = ?
+          AND turn.status_id IS NULL
+        ORDER BY post.posted_at DESC, CAST(post.status_id AS INTEGER) DESC
+        LIMIT ?
+        """,
+        (author_id, archive_limit),
+    ).fetchall()
+    return aggregate, [
+        {
+            "status_id": str(reply["status_id"]),
+            "parent_status_id": reply["parent_status_id"],
+            "url": str(reply["canonical_url"]),
+            "posted_at": reply["posted_at"],
+            "counterparty_username": reply["counterparty_username"],
+            "source_kind": "official_x_archive_alex_reply",
+            "source_member": str(reply["source_member"]),
+            **_excerpt(str(reply["exact_text"])),
+        }
+        for reply in rows
+    ]
+
+
+def _candidate_commenter_memory(
+    connection: sqlite3.Connection,
+    author_id: str,
+    *,
+    limit: int,
+) -> tuple[int, list[dict[str, Any]]]:
+    total = int(
+        connection.execute(
+            """
+            SELECT COUNT(*)
+            FROM candidate_public_posts
+            WHERE subject_user_id = ?
+            """,
+            (author_id,),
+        ).fetchone()[0]
+    )
+    rows = connection.execute(
+        """
+        SELECT post.status_id, post.created_at,
+               post.exact_text AS candidate_text,
+               post.canonical_url AS candidate_url,
+               post.text_state, post.source_verification_state,
+               post.source_file,
+               verification.exact_text AS verified_exact_text,
+               verification.canonical_url AS verified_url,
+               verification.observed_at AS verified_at,
+               verification.verification_method
+        FROM candidate_public_posts AS post
+        LEFT JOIN candidate_post_verifications AS verification
+          ON verification.status_id = post.status_id
+        WHERE post.subject_user_id = ?
+        ORDER BY post.created_at DESC, CAST(post.status_id AS INTEGER) DESC
+        LIMIT ?
+        """,
+        (author_id, min(limit, 3)),
+    ).fetchall()
+    result: list[dict[str, Any]] = []
+    for post in rows:
+        verified = post["verified_exact_text"] is not None
+        text = (
+            str(post["verified_exact_text"])
+            if verified
+            else str(post["candidate_text"] or "")
+        )
+        result.append(
+            {
+                "status_id": str(post["status_id"]),
+                "url": str(
+                    post["verified_url"] if verified else post["candidate_url"]
+                ),
+                "created_at": post["created_at"],
+                "text_state": str(post["text_state"]),
+                "source_verification_state": str(
+                    post["source_verification_state"]
+                ),
+                "source_file": str(post["source_file"]),
+                "verification_method": post["verification_method"],
+                "verified_at": post["verified_at"],
+                "usable_as_evidence": verified,
+                **_excerpt(text),
+            }
+        )
+    return total, result
+
+
+def commenter_history_for_event(
+    connection: sqlite3.Connection,
+    event_id: str,
+    *,
+    limit: int,
+) -> dict[str, Any]:
+    if limit <= 0:
+        raise ValueError("Commenter history limit must be positive")
+    event_id = watcher_validation.validate_status_id(str(event_id), "event_id")
+    current, identity_clause, identity_value, identity_kind = _commenter_identity(
+        connection,
+        event_id,
+    )
+    if identity_clause is None or identity_value is None or identity_kind is None:
+        return _empty_commenter_history(event_id)
+
+    aggregate, interactions = _prior_interactions(
+        connection,
+        event_id,
+        identity_clause=identity_clause,
+        identity_value=identity_value,
+        limit=limit,
+    )
     archive_aggregate = {
         "count": 0,
         "first_reply_at": None,
         "last_reply_at": None,
     }
-    candidate_posts: list[dict[str, Any]] = []
+    archive_replies: list[dict[str, Any]] = []
     candidate_total = 0
+    candidate_posts: list[dict[str, Any]] = []
+    author_id = current["author_id"]
     if author_id:
-        archive_aggregate_row = connection.execute(
-            """
-            SELECT COUNT(*) AS count,
-                   MIN(post.posted_at) AS first_reply_at,
-                   MAX(post.posted_at) AS last_reply_at
-            FROM archive_posts AS post
-            LEFT JOIN conversation_turns AS turn
-              ON turn.status_id = post.status_id
-            WHERE post.counterparty_user_id = ?
-              AND turn.status_id IS NULL
-            """,
-            (str(author_id),),
-        ).fetchone()
-        archive_aggregate = {
-            "count": int(archive_aggregate_row["count"]),
-            "first_reply_at": archive_aggregate_row["first_reply_at"],
-            "last_reply_at": archive_aggregate_row["last_reply_at"],
-        }
-        archive_limit = min(limit, max(3, math.ceil(limit / 3)))
-        archive_rows = connection.execute(
-            """
-            SELECT post.status_id, post.parent_status_id, post.posted_at,
-                   post.exact_text, post.canonical_url,
-                   post.counterparty_username, post.source_member
-            FROM archive_posts AS post
-            LEFT JOIN conversation_turns AS turn
-              ON turn.status_id = post.status_id
-            WHERE post.counterparty_user_id = ?
-              AND turn.status_id IS NULL
-            ORDER BY post.posted_at DESC, CAST(post.status_id AS INTEGER) DESC
-            LIMIT ?
-            """,
-            (str(author_id), archive_limit),
-        ).fetchall()
-        archive_replies = [
-            {
-                "status_id": str(reply["status_id"]),
-                "parent_status_id": reply["parent_status_id"],
-                "url": str(reply["canonical_url"]),
-                "posted_at": reply["posted_at"],
-                "counterparty_username": reply["counterparty_username"],
-                "source_kind": "official_x_archive_alex_reply",
-                "source_member": str(reply["source_member"]),
-                **_excerpt(str(reply["exact_text"])),
-            }
-            for reply in archive_rows
-        ]
-        candidate_total = int(
-            connection.execute(
-                """
-                SELECT COUNT(*)
-                FROM candidate_public_posts
-                WHERE subject_user_id = ?
-                """,
-                (str(author_id),),
-            ).fetchone()[0]
+        archive_aggregate, archive_replies = _archive_commenter_memory(
+            connection,
+            str(author_id),
+            limit=limit,
         )
-        candidate_limit = min(limit, 3)
-        candidate_rows = connection.execute(
-            """
-            SELECT post.status_id, post.created_at,
-                   post.exact_text AS candidate_text,
-                   post.canonical_url AS candidate_url,
-                   post.text_state, post.source_verification_state,
-                   post.source_file,
-                   verification.exact_text AS verified_exact_text,
-                   verification.canonical_url AS verified_url,
-                   verification.observed_at AS verified_at,
-                   verification.verification_method
-            FROM candidate_public_posts AS post
-            LEFT JOIN candidate_post_verifications AS verification
-              ON verification.status_id = post.status_id
-            WHERE post.subject_user_id = ?
-            ORDER BY post.created_at DESC,
-                     CAST(post.status_id AS INTEGER) DESC
-            LIMIT ?
-            """,
-            (str(author_id), candidate_limit),
-        ).fetchall()
-        for post in candidate_rows:
-            verified = post["verified_exact_text"] is not None
-            candidate_text = (
-                str(post["verified_exact_text"])
-                if verified
-                else str(post["candidate_text"] or "")
-            )
-            candidate_posts.append(
-                {
-                    "status_id": str(post["status_id"]),
-                    "url": str(
-                        post["verified_url"]
-                        if verified
-                        else post["candidate_url"]
-                    ),
-                    "created_at": post["created_at"],
-                    "text_state": str(post["text_state"]),
-                    "source_verification_state": str(
-                        post["source_verification_state"]
-                    ),
-                    "source_file": str(post["source_file"]),
-                    "verification_method": post["verification_method"],
-                    "verified_at": post["verified_at"],
-                    "usable_as_evidence": verified,
-                    **_excerpt(candidate_text),
-                }
-            )
+        candidate_total, candidate_posts = _candidate_commenter_memory(
+            connection,
+            str(author_id),
+            limit=limit,
+        )
     return {
         "event_id": event_id,
         "identity_kind": identity_kind,
         "author_id": str(author_id) if author_id else None,
-        "username": username,
+        "username": current["username"],
         "total_prior_interactions": int(aggregate["count"]),
         "first_interaction_at": aggregate["first_interaction_at"],
         "last_interaction_at": aggregate["last_interaction_at"],
@@ -274,30 +333,12 @@ def commenter_history_for_event(
         "total_candidate_public_posts": candidate_total,
         "returned_candidate_public_posts": len(candidate_posts),
         "candidate_public_posts": candidate_posts,
-        "candidate_memory_contract": (
-            "Unverified candidates are search hints only. Verify the exact "
-            "live X post before quoting or using it as evidence."
-        ),
+        "candidate_memory_contract": CANDIDATE_MEMORY_CONTRACT,
     }
 
-
-def memory_audit(
-    config: Any,
+def _identity_memory_rows(
     connection: sqlite3.Connection,
-    *,
-    get_meta: Any,
-    initial_audit_status: Any,
-) -> dict[str, Any]:
-    integrity_rows = [
-        str(row[0])
-        for row in connection.execute("PRAGMA integrity_check").fetchall()
-    ]
-    foreign_key_violations = len(
-        connection.execute("PRAGMA foreign_key_check").fetchall()
-    )
-    configured_user_id = get_meta(connection, "configured_user_id")
-    initial_audit = initial_audit_status(connection)
-    history = watcher_history.history_status(connection)
+) -> tuple[sqlite3.Row, sqlite3.Row]:
     event_row = connection.execute(
         """
         SELECT COUNT(*) AS event_count,
@@ -325,16 +366,20 @@ def memory_audit(
         FROM conversation_turns
         """
     ).fetchone()
-    archive_row = connection.execute(
+    return event_row, turn_row
+
+
+def _archive_memory_rows(
+    connection: sqlite3.Connection,
+    user_id: str,
+) -> tuple[sqlite3.Row, sqlite3.Row, int]:
+    import_row = connection.execute(
         """
         SELECT COUNT(*) AS import_count,
                COALESCE(SUM(post_count), 0) AS declared_post_count,
                COALESCE(SUM(inserted_post_count), 0) AS inserted_post_count,
                SUM(
-                   CASE
-                       WHEN account_user_id <> ?
-                       THEN 1 ELSE 0
-                   END
+                   CASE WHEN account_user_id <> ? THEN 1 ELSE 0 END
                ) AS owner_mismatch_count,
                SUM(
                    CASE
@@ -346,16 +391,13 @@ def memory_audit(
                ) AS invalid_count_count
         FROM archive_imports
         """,
-        (config.user_id,),
+        (user_id,),
     ).fetchone()
-    archive_post_row = connection.execute(
+    post_row = connection.execute(
         """
         SELECT COUNT(*) AS post_count,
                SUM(
-                   CASE
-                       WHEN author_id <> ?
-                       THEN 1 ELSE 0
-                   END
+                   CASE WHEN author_id <> ? THEN 1 ELSE 0 END
                ) AS owner_mismatch_count,
                SUM(
                    CASE
@@ -367,9 +409,9 @@ def memory_audit(
                ) AS invalid_record_count
         FROM archive_posts
         """,
-        (config.user_id,),
+        (user_id,),
     ).fetchone()
-    archive_alias_mismatch = int(
+    alias_mismatch = int(
         connection.execute(
             """
             SELECT COUNT(*)
@@ -381,7 +423,13 @@ def memory_audit(
             """
         ).fetchone()[0]
     )
-    candidate_row = connection.execute(
+    return import_row, post_row, alias_mismatch
+
+
+def _candidate_memory_rows(
+    connection: sqlite3.Connection,
+) -> tuple[sqlite3.Row, sqlite3.Row, int]:
+    import_row = connection.execute(
         """
         SELECT COUNT(*) AS import_count,
                COALESCE(SUM(inserted_record_count), 0) AS inserted_count,
@@ -396,7 +444,7 @@ def memory_audit(
         FROM candidate_corpus_imports
         """
     ).fetchone()
-    candidate_post_row = connection.execute(
+    post_row = connection.execute(
         """
         SELECT COUNT(*) AS post_count,
                SUM(
@@ -412,58 +460,138 @@ def memory_audit(
           ON import.id = post.first_import_id
         """
     ).fetchone()
-    candidate_verification_count = int(
+    verification_count = int(
         connection.execute(
             "SELECT COUNT(*) FROM candidate_post_verifications"
         ).fetchone()[0]
     )
+    return import_row, post_row, verification_count
 
-    current_errors: list[str] = []
-    if integrity_rows != ["ok"]:
-        current_errors.append("sqlite_integrity_check_failed")
-    if foreign_key_violations:
-        current_errors.append("foreign_key_violations")
-    if configured_user_id != config.user_id:
-        current_errors.append("configured_user_id_mismatch")
-    if int(event_row["missing_identity_count"] or 0):
-        current_errors.append("events_missing_stable_identity")
-    if int(turn_row["missing_user_author_count"] or 0):
-        current_errors.append("history_turns_missing_author")
-    if not initial_audit["complete"]:
-        current_errors.append("initial_audit_incomplete")
-    if not initial_audit["history_complete"]:
-        current_errors.append("resolution_history_incomplete")
-    if not initial_audit["invariant_ok"]:
-        current_errors.append("resolution_invariant_failed")
-    if int(candidate_row["invalid_count_count"] or 0):
-        current_errors.append("candidate_import_counts_invalid")
-    if int(candidate_post_row["invalid_record_count"] or 0):
-        current_errors.append("candidate_records_invalid")
-    if (
-        int(candidate_row["inserted_count"] or 0)
-        != int(candidate_post_row["post_count"] or 0)
-    ):
-        current_errors.append("candidate_inserted_count_mismatch")
 
-    archive_errors: list[str] = []
+def _current_memory_errors(
+    *,
+    integrity_rows: list[str],
+    foreign_key_violations: int,
+    configured_user_id: str | None,
+    expected_user_id: str,
+    event_row: sqlite3.Row,
+    turn_row: sqlite3.Row,
+    initial_audit: dict[str, Any],
+    candidate_row: sqlite3.Row,
+    candidate_post_row: sqlite3.Row,
+) -> list[str]:
+    errors: list[str] = []
+    checks = (
+        (integrity_rows != ["ok"], "sqlite_integrity_check_failed"),
+        (bool(foreign_key_violations), "foreign_key_violations"),
+        (configured_user_id != expected_user_id, "configured_user_id_mismatch"),
+        (
+            bool(int(event_row["missing_identity_count"] or 0)),
+            "events_missing_stable_identity",
+        ),
+        (
+            bool(int(turn_row["missing_user_author_count"] or 0)),
+            "history_turns_missing_author",
+        ),
+        (not initial_audit["complete"], "initial_audit_incomplete"),
+        (
+            not initial_audit["history_complete"],
+            "resolution_history_incomplete",
+        ),
+        (not initial_audit["invariant_ok"], "resolution_invariant_failed"),
+        (
+            bool(int(candidate_row["invalid_count_count"] or 0)),
+            "candidate_import_counts_invalid",
+        ),
+        (
+            bool(int(candidate_post_row["invalid_record_count"] or 0)),
+            "candidate_records_invalid",
+        ),
+        (
+            int(candidate_row["inserted_count"] or 0)
+            != int(candidate_post_row["post_count"] or 0),
+            "candidate_inserted_count_mismatch",
+        ),
+    )
+    return [code for failed, code in checks if failed]
+
+
+def _archive_memory_errors(
+    archive_row: sqlite3.Row,
+    archive_post_row: sqlite3.Row,
+    *,
+    alias_mismatch: int,
+) -> list[str]:
+    post_count = int(archive_post_row["post_count"] or 0)
+    checks = (
+        (
+            bool(int(archive_row["owner_mismatch_count"] or 0)),
+            "archive_import_owner_mismatch",
+        ),
+        (
+            bool(int(archive_post_row["owner_mismatch_count"] or 0)),
+            "archive_post_owner_mismatch",
+        ),
+        (
+            bool(int(archive_row["invalid_count_count"] or 0)),
+            "archive_import_counts_invalid",
+        ),
+        (
+            bool(int(archive_post_row["invalid_record_count"] or 0)),
+            "archive_records_invalid",
+        ),
+        (bool(alias_mismatch), "archive_account_alias_missing"),
+        (
+            int(archive_row["inserted_post_count"] or 0) != post_count,
+            "archive_inserted_count_mismatch",
+        ),
+    )
+    return [code for failed, code in checks if failed]
+
+
+def memory_audit(
+    config: Any,
+    connection: sqlite3.Connection,
+    *,
+    get_meta: Any,
+    initial_audit_status: Any,
+) -> dict[str, Any]:
+    integrity_rows = [
+        str(row[0])
+        for row in connection.execute("PRAGMA integrity_check").fetchall()
+    ]
+    foreign_key_violations = len(
+        connection.execute("PRAGMA foreign_key_check").fetchall()
+    )
+    configured_user_id = get_meta(connection, "configured_user_id")
+    initial_audit = initial_audit_status(connection)
+    history = watcher_history.history_status(connection)
+    event_row, turn_row = _identity_memory_rows(connection)
+    archive_row, archive_post_row, archive_alias_mismatch = _archive_memory_rows(
+        connection,
+        config.user_id,
+    )
+    candidate_row, candidate_post_row, verification_count = (
+        _candidate_memory_rows(connection)
+    )
+    current_errors = _current_memory_errors(
+        integrity_rows=integrity_rows,
+        foreign_key_violations=foreign_key_violations,
+        configured_user_id=configured_user_id,
+        expected_user_id=config.user_id,
+        event_row=event_row,
+        turn_row=turn_row,
+        initial_audit=initial_audit,
+        candidate_row=candidate_row,
+        candidate_post_row=candidate_post_row,
+    )
+    archive_errors = _archive_memory_errors(
+        archive_row,
+        archive_post_row,
+        alias_mismatch=archive_alias_mismatch,
+    )
     archive_import_count = int(archive_row["import_count"] or 0)
     archive_post_count = int(archive_post_row["post_count"] or 0)
-    if int(archive_row["owner_mismatch_count"] or 0):
-        archive_errors.append("archive_import_owner_mismatch")
-    if int(archive_post_row["owner_mismatch_count"] or 0):
-        archive_errors.append("archive_post_owner_mismatch")
-    if int(archive_row["invalid_count_count"] or 0):
-        archive_errors.append("archive_import_counts_invalid")
-    if int(archive_post_row["invalid_record_count"] or 0):
-        archive_errors.append("archive_records_invalid")
-    if archive_alias_mismatch:
-        archive_errors.append("archive_account_alias_missing")
-    if (
-        int(archive_row["inserted_post_count"] or 0)
-        != archive_post_count
-    ):
-        archive_errors.append("archive_inserted_count_mismatch")
-
     current_memory_ok = not current_errors and not archive_errors
     archive_ready = (
         archive_import_count > 0
@@ -471,15 +599,14 @@ def memory_audit(
         and not archive_errors
     )
     final_complete = current_memory_ok and archive_ready
-    status = (
-        "complete"
-        if final_complete
-        else "archive_pending"
-        if current_memory_ok
-        else "invalid"
-    )
     return {
-        "status": status,
+        "status": (
+            "complete"
+            if final_complete
+            else "archive_pending"
+            if current_memory_ok
+            else "invalid"
+        ),
         "schema_version": watcher_constants.SCHEMA_VERSION,
         "current_memory_ok": current_memory_ok,
         "archive_ready": archive_ready,
@@ -503,10 +630,7 @@ def memory_audit(
                 turn_row["missing_user_author_count"] or 0
             ),
         },
-        "history": {
-            **history,
-            "initial_audit": initial_audit,
-        },
+        "history": {**history, "initial_audit": initial_audit},
         "archive": {
             "import_count": archive_import_count,
             "declared_post_count": int(
@@ -523,7 +647,7 @@ def memory_audit(
             "import_count": int(candidate_row["import_count"] or 0),
             "inserted_count": int(candidate_row["inserted_count"] or 0),
             "post_count": int(candidate_post_row["post_count"] or 0),
-            "verified_post_count": candidate_verification_count,
+            "verified_post_count": verification_count,
             "unverified_posts_usable_as_evidence": 0,
         },
     }

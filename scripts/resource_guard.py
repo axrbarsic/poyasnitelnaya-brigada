@@ -52,80 +52,79 @@ class ResourceSample:
     mcp_raw_process_count: int = 0
 
 
+@dataclass
+class ProcessTotals:
+    codex_rss_kib: int = 0
+    renderer_process_count: int = 0
+    renderer_rss_kib: int = 0
+    node_repl_process_count: int = 0
+    node_repl_rss_kib: int = 0
+    mcp_raw_process_count: int = 0
+    mcp_process_rss_kib: int = 0
+
+    def add(self, rss_kib: int, command: str) -> None:
+        is_codex = any(marker in command for marker in CODEX_MARKERS)
+        if is_codex:
+            self.codex_rss_kib += rss_kib
+        if is_codex and "(Renderer)" in command:
+            self.renderer_process_count += 1
+            self.renderer_rss_kib += rss_kib
+        if "node_repl" in command:
+            self.node_repl_process_count += 1
+            self.node_repl_rss_kib += rss_kib
+        lowered = command.lower()
+        if "mcp" in lowered and any(
+            marker in lowered for marker in ("python", "node", "uv")
+        ):
+            self.mcp_raw_process_count += 1
+            self.mcp_process_rss_kib += rss_kib
+
+    def sample(self) -> ResourceSample:
+        return ResourceSample(
+            codex_rss_mb=round(self.codex_rss_kib / 1024, 1),
+            renderer_count=_equivalent_count(
+                self.renderer_rss_kib,
+                self.renderer_process_count,
+                RENDERER_EQUIVALENT_RSS_KIB,
+            ),
+            node_repl_count=_equivalent_count(
+                self.node_repl_rss_kib,
+                self.node_repl_process_count,
+                HELPER_EQUIVALENT_RSS_KIB,
+            ),
+            mcp_process_count=_equivalent_count(
+                self.mcp_process_rss_kib,
+                self.mcp_raw_process_count,
+                HELPER_EQUIVALENT_RSS_KIB,
+            ),
+            free_percent=None,
+            node_repl_rss_mb=round(self.node_repl_rss_kib / 1024, 1),
+            mcp_process_rss_mb=round(self.mcp_process_rss_kib / 1024, 1),
+            renderer_process_count=self.renderer_process_count,
+            renderer_rss_mb=round(self.renderer_rss_kib / 1024, 1),
+            node_repl_process_count=self.node_repl_process_count,
+            mcp_raw_process_count=self.mcp_raw_process_count,
+        )
+
+
+def _equivalent_count(
+    rss_kib: int,
+    process_count: int,
+    equivalent_rss_kib: int,
+) -> int:
+    if process_count == 0:
+        return 0
+    return (rss_kib + equivalent_rss_kib - 1) // equivalent_rss_kib
+
+
 def parse_processes(output: str) -> ResourceSample:
-    codex_rss_kib = 0
-    renderer_process_count = 0
-    renderer_rss_kib = 0
-    node_repl_process_count = 0
-    mcp_raw_process_count = 0
-    node_repl_rss_kib = 0
-    mcp_process_rss_kib = 0
+    totals = ProcessTotals()
     for raw_line in output.splitlines():
         match = re.match(r"^\s*(\d+)\s+(.+)$", raw_line)
         if match is None:
             continue
-        rss_kib = int(match.group(1))
-        command = match.group(2)
-        if any(marker in command for marker in CODEX_MARKERS):
-            codex_rss_kib += rss_kib
-        if "(Renderer)" in command and any(
-            marker in command for marker in CODEX_MARKERS
-        ):
-            renderer_process_count += 1
-            renderer_rss_kib += rss_kib
-        if "node_repl" in command:
-            node_repl_process_count += 1
-            node_repl_rss_kib += rss_kib
-        if "mcp" in command.lower() and (
-            "python" in command.lower()
-            or "node" in command.lower()
-            or "uv" in command.lower()
-        ):
-            mcp_raw_process_count += 1
-            mcp_process_rss_kib += rss_kib
-    renderer_count = (
-        (
-            renderer_rss_kib
-            + RENDERER_EQUIVALENT_RSS_KIB
-            - 1
-        )
-        // RENDERER_EQUIVALENT_RSS_KIB
-        if renderer_process_count
-        else 0
-    )
-    node_repl_count = (
-        (
-            node_repl_rss_kib
-            + HELPER_EQUIVALENT_RSS_KIB
-            - 1
-        )
-        // HELPER_EQUIVALENT_RSS_KIB
-        if node_repl_process_count
-        else 0
-    )
-    mcp_process_count = (
-        (
-            mcp_process_rss_kib
-            + HELPER_EQUIVALENT_RSS_KIB
-            - 1
-        )
-        // HELPER_EQUIVALENT_RSS_KIB
-        if mcp_raw_process_count
-        else 0
-    )
-    return ResourceSample(
-        codex_rss_mb=round(codex_rss_kib / 1024, 1),
-        renderer_count=renderer_count,
-        node_repl_count=node_repl_count,
-        mcp_process_count=mcp_process_count,
-        free_percent=None,
-        node_repl_rss_mb=round(node_repl_rss_kib / 1024, 1),
-        mcp_process_rss_mb=round(mcp_process_rss_kib / 1024, 1),
-        renderer_process_count=renderer_process_count,
-        renderer_rss_mb=round(renderer_rss_kib / 1024, 1),
-        node_repl_process_count=node_repl_process_count,
-        mcp_raw_process_count=mcp_raw_process_count,
-    )
+        totals.add(int(match.group(1)), match.group(2))
+    return totals.sample()
 
 
 def parse_runtime_id(output: str) -> str | None:
@@ -212,9 +211,8 @@ def _native_command(libc: Any, pid: int, path: str) -> str:
     return " ".join(arguments) if arguments else path
 
 
-def collect_native_processes() -> ResourceSample:
+def _load_libproc() -> Any:
     libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-    libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
     libproc.proc_listpids.argtypes = [
         ctypes.c_uint32,
         ctypes.c_uint32,
@@ -236,6 +234,11 @@ def collect_native_processes() -> ResourceSample:
         ctypes.c_int,
     ]
     libproc.proc_pidinfo.restype = ctypes.c_int
+    return libproc
+
+
+def _load_libc() -> Any:
+    libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
     libc.sysctl.argtypes = [
         ctypes.POINTER(ctypes.c_int),
         ctypes.c_uint,
@@ -245,7 +248,10 @@ def collect_native_processes() -> ResourceSample:
         ctypes.c_size_t,
     ]
     libc.sysctl.restype = ctypes.c_int
+    return libc
 
+
+def _native_pids(libproc: Any) -> list[int]:
     required = libproc.proc_listpids(1, 0, None, 0)
     if required <= 0:
         raise OSError(ctypes.get_errno(), "proc_listpids size failed")
@@ -259,66 +265,54 @@ def collect_native_processes() -> ResourceSample:
     )
     if written <= 0:
         raise OSError(ctypes.get_errno(), "proc_listpids failed")
+    return [
+        int(pid)
+        for pid in pids[: written // ctypes.sizeof(ctypes.c_int)]
+        if pid > 0
+    ]
 
+
+def _native_process_path(libproc: Any, pid: int) -> str | None:
+    path_buffer = ctypes.create_string_buffer(4096)
+    if libproc.proc_pidpath(pid, path_buffer, len(path_buffer)) <= 0:
+        return None
+    return path_buffer.value.decode("utf-8", errors="replace")
+
+
+def _native_process_row(libproc: Any, libc: Any, pid: int) -> str | None:
+    path = _native_process_path(libproc, pid)
+    if path is None:
+        return None
+    info = ProcTaskInfo()
+    info_size = libproc.proc_pidinfo(
+        pid,
+        4,
+        0,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    )
+    if info_size != ctypes.sizeof(info):
+        return None
+    command = _native_command(libc, pid, path)
+    return f"{info.resident_size // 1024} {command}"
+
+
+def collect_native_processes() -> ResourceSample:
+    libproc = _load_libproc()
+    libc = _load_libc()
     rows: list[str] = []
-    for pid in pids[: written // ctypes.sizeof(ctypes.c_int)]:
-        if pid <= 0:
-            continue
-        path_buffer = ctypes.create_string_buffer(4096)
-        if libproc.proc_pidpath(pid, path_buffer, len(path_buffer)) <= 0:
-            continue
-        path = path_buffer.value.decode("utf-8", errors="replace")
-        info = ProcTaskInfo()
-        info_size = libproc.proc_pidinfo(
-            pid,
-            4,
-            0,
-            ctypes.byref(info),
-            ctypes.sizeof(info),
-        )
-        if info_size != ctypes.sizeof(info):
-            continue
-        command = _native_command(libc, pid, path)
-        rows.append(f"{info.resident_size // 1024} {command}")
+    for pid in _native_pids(libproc):
+        row = _native_process_row(libproc, libc, pid)
+        if row is not None:
+            rows.append(row)
     return parse_processes("\n".join(rows))
 
 
 def collect_native_runtime_id() -> str | None:
-    libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-    libproc.proc_listpids.argtypes = [
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-        ctypes.c_int,
-    ]
-    libproc.proc_listpids.restype = ctypes.c_int
-    libproc.proc_pidpath.argtypes = [
-        ctypes.c_int,
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-    ]
-    libproc.proc_pidpath.restype = ctypes.c_int
-    required = libproc.proc_listpids(1, 0, None, 0)
-    if required <= 0:
-        raise OSError(ctypes.get_errno(), "proc_listpids size failed")
-    capacity = max(required // ctypes.sizeof(ctypes.c_int) + 64, 128)
-    pids = (ctypes.c_int * capacity)()
-    written = libproc.proc_listpids(
-        1,
-        0,
-        pids,
-        ctypes.sizeof(pids),
-    )
-    if written <= 0:
-        raise OSError(ctypes.get_errno(), "proc_listpids failed")
+    libproc = _load_libproc()
     matches: list[str] = []
-    for pid in pids[: written // ctypes.sizeof(ctypes.c_int)]:
-        if pid <= 0:
-            continue
-        path_buffer = ctypes.create_string_buffer(4096)
-        if libproc.proc_pidpath(pid, path_buffer, len(path_buffer)) <= 0:
-            continue
-        path = path_buffer.value.decode("utf-8", errors="replace")
+    for pid in _native_pids(libproc):
+        path = _native_process_path(libproc, pid)
         if path in CODEX_MAIN_EXECUTABLES:
             matches.append(f"{path}:{pid}")
     return "|".join(sorted(matches)) if matches else None
@@ -338,7 +332,15 @@ def fourcc(value: str) -> int:
     return int.from_bytes(value.encode("ascii"), byteorder="big")
 
 
-def active_audio_input_pids() -> tuple[int, ...]:
+def _audio_address(selector: str) -> AudioObjectPropertyAddress:
+    return AudioObjectPropertyAddress(
+        fourcc(selector),
+        fourcc("glob"),
+        0,
+    )
+
+
+def _load_core_audio() -> Any:
     core_audio = ctypes.CDLL(
         "/System/Library/Frameworks/CoreAudio.framework/CoreAudio"
     )
@@ -359,11 +361,11 @@ def active_audio_input_pids() -> tuple[int, ...]:
         ctypes.c_void_p,
     ]
     core_audio.AudioObjectGetPropertyData.restype = ctypes.c_int32
-    process_list = AudioObjectPropertyAddress(
-        fourcc("prs#"),
-        fourcc("glob"),
-        0,
-    )
+    return core_audio
+
+
+def _audio_process_objects(core_audio: Any) -> tuple[int, ...]:
+    process_list = _audio_address("prs#")
     byte_count = ctypes.c_uint32()
     status = core_audio.AudioObjectGetPropertyDataSize(
         1,
@@ -386,60 +388,58 @@ def active_audio_input_pids() -> tuple[int, ...]:
     )
     if status != 0:
         return ()
+    return tuple(int(object_id) for object_id in objects)
 
+
+def _audio_property_value(
+    core_audio: Any,
+    object_id: int,
+    selector: str,
+    value_type: Any,
+) -> int | None:
+    address = _audio_address(selector)
+    value = value_type()
+    value_size = ctypes.c_uint32(ctypes.sizeof(value))
+    status = core_audio.AudioObjectGetPropertyData(
+        object_id,
+        ctypes.byref(address),
+        0,
+        None,
+        ctypes.byref(value_size),
+        ctypes.byref(value),
+    )
+    return int(value.value) if status == 0 else None
+
+
+def active_audio_input_pids() -> tuple[int, ...]:
+    core_audio = _load_core_audio()
     active: list[int] = []
-    for object_id in objects:
-        running_address = AudioObjectPropertyAddress(
-            fourcc("piri"),
-            fourcc("glob"),
-            0,
+    for object_id in _audio_process_objects(core_audio):
+        running = _audio_property_value(
+            core_audio,
+            object_id,
+            "piri",
+            ctypes.c_uint32,
         )
-        running = ctypes.c_uint32()
-        running_size = ctypes.c_uint32(ctypes.sizeof(running))
-        if (
-            core_audio.AudioObjectGetPropertyData(
-                object_id,
-                ctypes.byref(running_address),
-                0,
-                None,
-                ctypes.byref(running_size),
-                ctypes.byref(running),
-            )
-            != 0
-            or running.value == 0
-        ):
+        if not running:
             continue
-        pid_address = AudioObjectPropertyAddress(
-            fourcc("ppid"),
-            fourcc("glob"),
-            0,
+        pid = _audio_property_value(
+            core_audio,
+            object_id,
+            "ppid",
+            ctypes.c_int32,
         )
-        pid = ctypes.c_int32()
-        pid_size = ctypes.c_uint32(ctypes.sizeof(pid))
-        if (
-            core_audio.AudioObjectGetPropertyData(
-                object_id,
-                ctypes.byref(pid_address),
-                0,
-                None,
-                ctypes.byref(pid_size),
-                ctypes.byref(pid),
-            )
-            == 0
-            and pid.value > 0
-        ):
-            active.append(pid.value)
+        if pid is not None and pid > 0:
+            active.append(pid)
     return tuple(sorted(set(active)))
 
 
 def native_process_command(pid: int) -> str:
-    libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-    libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
-    path_buffer = ctypes.create_string_buffer(4096)
-    if libproc.proc_pidpath(pid, path_buffer, len(path_buffer)) <= 0:
+    libproc = _load_libproc()
+    path = _native_process_path(libproc, pid)
+    if path is None:
         return ""
-    path = path_buffer.value.decode("utf-8", errors="replace")
-    return _native_command(libc, pid, path)
+    return _native_command(_load_libc(), pid, path)
 
 
 def is_codex_audio_command(command: str) -> bool:
@@ -499,7 +499,7 @@ def codex_runtime_id() -> str | None:
     return runtime_id
 
 
-def collect() -> ResourceSample:
+def _collect_process_sample() -> ResourceSample:
     try:
         process_result = subprocess.run(
             ["ps", "-axo", "rss=,command="],
@@ -508,9 +508,12 @@ def collect() -> ResourceSample:
             text=True,
             timeout=10,
         )
-        sample = parse_processes(process_result.stdout)
+        return parse_processes(process_result.stdout)
     except (OSError, subprocess.SubprocessError):
-        sample = collect_native_processes()
+        return collect_native_processes()
+
+
+def _collect_free_percent() -> int | None:
     try:
         memory_result = subprocess.run(
             ["/usr/bin/memory_pressure", "-Q"],
@@ -519,12 +522,17 @@ def collect() -> ResourceSample:
             text=True,
             timeout=10,
         )
-        free_percent = parse_free_percent(memory_result.stdout)
+        return parse_free_percent(memory_result.stdout)
     except (OSError, subprocess.SubprocessError):
-        free_percent = None
-    idle_seconds: int | None = None
-    on_ac_power: bool | None = None
-    swap_used_mb: float | None = None
+        return None
+
+
+def _collect_optional_metrics() -> tuple[
+    int | None,
+    bool | None,
+    float | None,
+]:
+    values: dict[str, Any] = {"idle": None, "power": None, "swap": None}
     commands = (
         (
             ["/usr/sbin/ioreg", "-c", "IOHIDSystem"],
@@ -554,30 +562,44 @@ def collect() -> ResourceSample:
             value = parser(result.stdout)
         except (OSError, subprocess.SubprocessError):
             value = None
-        if metric == "idle":
-            idle_seconds = value
-        elif metric == "power":
-            on_ac_power = value
-        else:
-            swap_used_mb = value
-    voice_active, voice_input_pids = detect_realtime_voice()
-    return ResourceSample(
-        codex_rss_mb=sample.codex_rss_mb,
-        renderer_count=sample.renderer_count,
-        node_repl_count=sample.node_repl_count,
-        mcp_process_count=sample.mcp_process_count,
+        values[metric] = value
+    return values["idle"], values["power"], values["swap"]
+
+
+def _merge_resource_sample(
+    sample: ResourceSample,
+    *,
+    free_percent: int | None,
+    idle_seconds: int | None,
+    on_ac_power: bool | None,
+    swap_used_mb: float | None,
+    voice_active: bool,
+    voice_input_pids: tuple[int, ...],
+) -> ResourceSample:
+    return replace(
+        sample,
         free_percent=free_percent,
         user_idle_seconds=idle_seconds,
         on_ac_power=on_ac_power,
         swap_used_mb=swap_used_mb,
         voice_active=voice_active,
         voice_input_pids=voice_input_pids,
-        node_repl_rss_mb=sample.node_repl_rss_mb,
-        mcp_process_rss_mb=sample.mcp_process_rss_mb,
-        renderer_process_count=sample.renderer_process_count,
-        renderer_rss_mb=sample.renderer_rss_mb,
-        node_repl_process_count=sample.node_repl_process_count,
-        mcp_raw_process_count=sample.mcp_raw_process_count,
+    )
+
+
+def collect() -> ResourceSample:
+    sample = _collect_process_sample()
+    free_percent = _collect_free_percent()
+    idle_seconds, on_ac_power, swap_used_mb = _collect_optional_metrics()
+    voice_active, voice_input_pids = detect_realtime_voice()
+    return _merge_resource_sample(
+        sample,
+        free_percent=free_percent,
+        idle_seconds=idle_seconds,
+        on_ac_power=on_ac_power,
+        swap_used_mb=swap_used_mb,
+        voice_active=voice_active,
+        voice_input_pids=voice_input_pids,
     )
 
 
@@ -790,6 +812,70 @@ def _assess_limits(
     return reasons
 
 
+def _load_guard_state(state_path: Path) -> dict[str, Any]:
+    if not state_path.exists():
+        return {}
+    try:
+        return autopilot_dispatch.read_json(state_path)
+    except (OSError, ValueError):
+        return {}
+
+
+def _apply_voice_priority(
+    sample: ResourceSample,
+    previous: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    enabled: bool,
+) -> tuple[ResourceSample, str | None, bool]:
+    if not enabled:
+        return sample, None, sample.voice_active
+    hold_seconds = int(config.get("voice_priority_hold_seconds", 300))
+    if hold_seconds < 0:
+        raise ValueError("voice_priority_hold_seconds must not be negative")
+    return apply_voice_hold(
+        sample,
+        previous,
+        now=datetime.now(timezone.utc),
+        hold_seconds=hold_seconds,
+    )
+
+
+def _guard_result(
+    sample: ResourceSample,
+    config: dict[str, Any],
+    *,
+    memory_enabled: bool,
+    voice_priority_enabled: bool,
+    voice_priority_until: str | None,
+    voice_observed: bool,
+) -> dict[str, Any]:
+    mode = select_mode(sample, config)
+    reasons = assess(sample, config, mode=mode) if memory_enabled else []
+    if voice_priority_enabled and sample.voice_active:
+        reasons.insert(
+            0,
+            "voice_active=true reserves resources for realtime conversation",
+        )
+    result: dict[str, Any] = {
+        "enabled": memory_enabled,
+        "voice_priority_enabled": voice_priority_enabled,
+        "available": True,
+        "defer": bool(reasons),
+        "reasons": reasons,
+        "mode": mode,
+        "swap_blocks_dispatch": bool(
+            config.get("memory_guard_swap_blocks_dispatch", False)
+        ),
+        "sample": asdict(sample),
+        "checked_at": autopilot_dispatch.isoformat(),
+    }
+    if voice_priority_enabled:
+        result["voice_observed"] = voice_observed
+        result["voice_priority_until"] = voice_priority_until
+    return result
+
+
 def check(config_path: Path) -> dict[str, Any]:
     config = autopilot_dispatch.read_json(config_path)
     memory_enabled = bool(config.get("memory_guard_enabled", False))
@@ -807,53 +893,23 @@ def check(config_path: Path) -> dict[str, Any]:
         config.get("memory_guard_state_file", "var/resource-health.json")
     )
     state_path = autopilot_dispatch.resolve_path(config_path, state_value)
-    previous: dict[str, Any] = {}
-    if state_path.exists():
-        try:
-            previous = autopilot_dispatch.read_json(state_path)
-        except (OSError, ValueError):
-            previous = {}
+    previous = _load_guard_state(state_path)
     try:
         sample = collect()
-        voice_priority_until: str | None = None
-        voice_observed = sample.voice_active
-        if voice_priority_enabled:
-            hold_seconds = int(
-                config.get("voice_priority_hold_seconds", 300)
-            )
-            if hold_seconds < 0:
-                raise ValueError(
-                    "voice_priority_hold_seconds must not be negative"
-                )
-            sample, voice_priority_until, voice_observed = apply_voice_hold(
-                sample,
-                previous,
-                now=datetime.now(timezone.utc),
-                hold_seconds=hold_seconds,
-            )
-        mode = select_mode(sample, config)
-        reasons = assess(sample, config, mode=mode) if memory_enabled else []
-        if voice_priority_enabled and sample.voice_active:
-            reasons.insert(
-                0,
-                "voice_active=true reserves resources for realtime conversation",
-            )
-        result: dict[str, Any] = {
-            "enabled": memory_enabled,
-            "voice_priority_enabled": voice_priority_enabled,
-            "available": True,
-            "defer": bool(reasons),
-            "reasons": reasons,
-            "mode": mode,
-            "swap_blocks_dispatch": bool(
-                config.get("memory_guard_swap_blocks_dispatch", False)
-            ),
-            "sample": asdict(sample),
-            "checked_at": autopilot_dispatch.isoformat(),
-        }
-        if voice_priority_enabled:
-            result["voice_observed"] = voice_observed
-            result["voice_priority_until"] = voice_priority_until
+        sample, voice_priority_until, voice_observed = _apply_voice_priority(
+            sample,
+            previous,
+            config,
+            enabled=voice_priority_enabled,
+        )
+        result = _guard_result(
+            sample,
+            config,
+            memory_enabled=memory_enabled,
+            voice_priority_enabled=voice_priority_enabled,
+            voice_priority_until=voice_priority_until,
+            voice_observed=voice_observed,
+        )
     except (OSError, subprocess.SubprocessError, ValueError, KeyError) as error:
         result = {
             "enabled": True,

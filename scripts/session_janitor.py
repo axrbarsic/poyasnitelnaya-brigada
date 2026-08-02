@@ -12,6 +12,7 @@ import signal
 import subprocess
 import time
 from contextlib import closing
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
@@ -394,6 +395,364 @@ def eligible_threads(
     return eligible
 
 
+@dataclass(frozen=True)
+class ThreadInventory:
+    all_threads: list[dict[str, Any]]
+    matched: list[dict[str, Any]]
+
+
+@dataclass(frozen=True)
+class OwnerThreads:
+    inbound: dict[str, Any] | None
+    outbound: dict[str, Any] | None
+    protected_ids: set[str]
+
+
+@dataclass(frozen=True)
+class HelperCleanup:
+    candidates: list[int]
+    terminated: list[int]
+    survivors: list[int]
+    error: str | None
+
+    def fields(self) -> dict[str, Any]:
+        return {
+            "helper_candidates": self.candidates,
+            "helpers_terminated": self.terminated,
+            "helper_survivors": self.survivors,
+            "helper_error": self.error,
+        }
+
+
+@dataclass(frozen=True)
+class ArchiveResult:
+    candidates: list[str]
+    archived: list[str]
+
+
+class AppServerClient:
+    def __init__(self, process: subprocess.Popen[str]) -> None:
+        if process.stdin is None or process.stdout is None:
+            process.kill()
+            raise RuntimeError("failed to open app-server stdio")
+        self.process = process
+        self.stdin = process.stdin
+        self.stdout = process.stdout
+        self.request_id = 1
+
+    @classmethod
+    def start(cls, cli_path: str) -> AppServerClient:
+        return cls(
+            subprocess.Popen(
+                [cli_path, "app-server", "--stdio"],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+        )
+
+    def call(self, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        request_id = self.request_id
+        send(self.stdin, request_id, method, params)
+        result = receive(self.stdout, request_id)
+        self.request_id += 1
+        return result
+
+    def initialize(self) -> None:
+        self.call(
+            "initialize",
+            {
+                "clientInfo": {
+                    "name": "x-session-janitor",
+                    "version": "1.0",
+                },
+                "capabilities": {"experimentalApi": True},
+            },
+        )
+
+    def close(self) -> None:
+        self.stdin.close()
+        try:
+            self.process.wait(timeout=10)
+        except subprocess.TimeoutExpired:
+            self.process.kill()
+            self.process.wait(timeout=5)
+
+
+def _thread_summary(thread: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(thread.get("id", "")),
+        "name": thread.get("name"),
+        "status": status_type(thread),
+        "thread_source": thread.get("threadSource"),
+        "source": thread.get("source"),
+        "preview": str(thread.get("preview", ""))[:120],
+        "created_at": thread.get("createdAt"),
+        "updated_at": thread.get("updatedAt"),
+    }
+
+
+def _list_automation_threads(
+    client: AppServerClient,
+    *,
+    page_limit: int,
+) -> ThreadInventory:
+    all_threads: list[dict[str, Any]] = []
+    matched: list[dict[str, Any]] = []
+    seen_thread_ids: set[str] = set()
+    for _, title in AUTOMATION_IDENTITIES:
+        cursor: str | None = None
+        while True:
+            result = client.call(
+                "thread/list",
+                {
+                    "archived": False,
+                    "cursor": cursor,
+                    "limit": page_limit,
+                    "searchTerm": title,
+                    "sortDirection": "desc",
+                    "sortKey": "updated_at",
+                    "sourceKinds": ["vscode"],
+                    "useStateDbOnly": True,
+                },
+            )
+            data = result.get("data", [])
+            if not isinstance(data, list):
+                raise RuntimeError("thread/list data is not an array")
+            for item in data:
+                if not isinstance(item, dict):
+                    continue
+                thread_id = str(item.get("id", ""))
+                if not thread_id or thread_id in seen_thread_ids:
+                    continue
+                seen_thread_ids.add(thread_id)
+                all_threads.append(item)
+                if matches_automation(item):
+                    matched.append(_thread_summary(item))
+            next_cursor = result.get("nextCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                break
+            cursor = next_cursor
+    return ThreadInventory(all_threads=all_threads, matched=matched)
+
+
+def _owner_threads(
+    config: dict[str, Any],
+    all_threads: list[dict[str, Any]],
+    owner: dict[str, Any] | None,
+    outbound_owner: dict[str, Any] | None,
+) -> OwnerThreads:
+    inbound_thread = (
+        owning_automation_thread(all_threads, owner)
+        if owner is not None
+        else None
+    )
+    outbound_identities = tuple(
+        identity
+        for identity in AUTOMATION_IDENTITIES
+        if identity[0] == OUTBOUND_AUTOMATION_ID
+    )
+    outbound_thread = (
+        owning_automation_thread(
+            all_threads,
+            outbound_owner,
+            identities=outbound_identities,
+        )
+        if outbound_owner is not None
+        else None
+    )
+    protected_ids = {
+        str(value)
+        for value in config.get("session_janitor_protected_thread_ids", [])
+    }
+    for thread in (inbound_thread, outbound_thread):
+        if thread is not None:
+            protected_ids.add(str(thread.get("id", "")))
+    return OwnerThreads(
+        inbound=inbound_thread,
+        outbound=outbound_thread,
+        protected_ids=protected_ids,
+    )
+
+
+def _clean_helpers(
+    config: dict[str, Any],
+    all_threads: list[dict[str, Any]],
+    *,
+    protected_ids: set[str],
+    apply: bool,
+) -> HelperCleanup:
+    if not bool(config.get("session_janitor_reap_helpers", True)):
+        return HelperCleanup([], [], [], None)
+    candidates: list[int] = []
+    try:
+        candidates = helper_process_candidates(
+            collect_processes(),
+            all_threads,
+            now_epoch=int(time.time()),
+            grace_seconds=int(
+                config.get("session_janitor_helper_grace_seconds", 120)
+            ),
+            protected_ids=protected_ids,
+        )
+        terminated, survivors = reap_helpers(candidates, apply=apply)
+        return HelperCleanup(candidates, terminated, survivors, None)
+    except (OSError, subprocess.SubprocessError, ValueError) as error:
+        return HelperCleanup(candidates, [], [], str(error))
+
+
+def _archive_eligible_threads(
+    client: AppServerClient,
+    all_threads: list[dict[str, Any]],
+    *,
+    protected_ids: set[str],
+    minimum_age_seconds: int,
+    apply: bool,
+) -> ArchiveResult:
+    threads = eligible_threads(
+        all_threads,
+        now=int(time.time()),
+        minimum_age_seconds=minimum_age_seconds,
+        protected_ids=protected_ids,
+    )
+    candidates = [str(thread["id"]) for thread in threads]
+    archived: list[str] = []
+    if apply:
+        for thread_id in candidates:
+            client.call("thread/archive", {"threadId": thread_id})
+            archived.append(thread_id)
+    return ArchiveResult(candidates=candidates, archived=archived)
+
+
+def _owner_busy_result(
+    owner: dict[str, Any],
+    owning_thread: dict[str, Any] | None,
+    *,
+    age_seconds: float | None,
+    lease_remaining_seconds: float | None,
+    thread_is_live: bool,
+    helpers: HelperCleanup,
+    archive: ArchiveResult,
+) -> dict[str, Any]:
+    return {
+        "status": "owner_busy",
+        "owner_age_seconds": (
+            round(age_seconds, 1) if age_seconds is not None else None
+        ),
+        "owner_lease_remaining_seconds": (
+            round(lease_remaining_seconds, 1)
+            if lease_remaining_seconds is not None
+            else None
+        ),
+        "owner_lease_expires_at": owner.get("lease_expires_at"),
+        "owner_last_renewed_at": owner.get("last_renewed_at"),
+        "active_thread_ids": (
+            [str(owning_thread.get("id", ""))]
+            if thread_is_live and owning_thread is not None
+            else []
+        ),
+        "owner_thread_status": (
+            status_type(owning_thread) if owning_thread is not None else None
+        ),
+        "owner_thread_updated_at": (
+            owning_thread.get("updatedAt")
+            if owning_thread is not None
+            else None
+        ),
+        **helpers.fields(),
+        "archived": archive.archived,
+        "candidates": archive.candidates,
+    }
+
+
+def _recover_or_report_busy_owner(
+    state_path: Path,
+    owner: dict[str, Any] | None,
+    owning_thread: dict[str, Any] | None,
+    *,
+    age_seconds: float | None,
+    lease_remaining_seconds: float | None,
+    orphan_owner_seconds: int,
+    apply: bool,
+    helpers: HelperCleanup,
+    archive: ArchiveResult,
+) -> tuple[
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+    dict[str, Any] | None,
+]:
+    if owner is None:
+        return None, None, None
+    current_time = datetime.now(timezone.utc)
+    thread_is_live = owning_thread_is_live(
+        owning_thread,
+        now_epoch=int(current_time.timestamp()),
+        freshness_seconds=orphan_owner_seconds,
+    )
+    recovery_allowed = owner_recovery_allowed(
+        owner,
+        owning_thread,
+        now=current_time,
+        orphan_owner_seconds=orphan_owner_seconds,
+    )
+    if thread_is_live or not recovery_allowed:
+        return (
+            _owner_busy_result(
+                owner,
+                owning_thread,
+                age_seconds=age_seconds,
+                lease_remaining_seconds=lease_remaining_seconds,
+                thread_is_live=thread_is_live,
+                helpers=helpers,
+                archive=archive,
+            ),
+            None,
+            None,
+        )
+    candidate, recovered = recover_owner(
+        state_path,
+        owner,
+        owner_age=age_seconds,
+        apply=apply,
+    )
+    return None, candidate, recovered
+
+
+def _completed_result(
+    *,
+    apply: bool,
+    outbound_owner: dict[str, Any] | None,
+    outbound_thread: dict[str, Any] | None,
+    helpers: HelperCleanup,
+    recovery_candidate: dict[str, Any] | None,
+    recovered_owner: dict[str, Any] | None,
+    inventory: ThreadInventory,
+    archive: ArchiveResult,
+) -> dict[str, Any]:
+    return {
+        "status": "completed",
+        "apply": apply,
+        "outbound_owner_active": outbound_owner is not None,
+        "outbound_owner_expires_at": (
+            outbound_owner.get("expires_at")
+            if outbound_owner is not None
+            else None
+        ),
+        "outbound_thread_id": (
+            str(outbound_thread.get("id", ""))
+            if outbound_thread is not None
+            else None
+        ),
+        **helpers.fields(),
+        "recovery_candidate": recovery_candidate,
+        "recovered_owner": recovered_owner,
+        "matched": inventory.matched,
+        "candidates": archive.candidates,
+        "archived": archive.archived,
+    }
+
+
 def run_janitor(
     config_path: Path,
     *,
@@ -407,285 +766,56 @@ def run_janitor(
     age_seconds = owner_age_seconds(owner)
     lease_remaining_seconds = owner_lease_remaining_seconds(owner)
     outbound_owner = active_outbound_owner(config_path)
-    cli_path = str(config.get("codex_cli_path", "codex"))
-    process = subprocess.Popen(
-        [cli_path, "app-server", "--stdio"],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        text=True,
-    )
-    if process.stdin is None or process.stdout is None:
-        process.kill()
-        raise RuntimeError("failed to open app-server stdio")
-    archived: list[str] = []
-    candidates: list[str] = []
-    matched: list[dict[str, Any]] = []
-    all_threads: list[dict[str, Any]] = []
-    recovered_owner: dict[str, Any] | None = None
-    recovery_candidate: dict[str, Any] | None = None
-    helper_candidates: list[int] = []
-    helpers_terminated: list[int] = []
-    helper_survivors: list[int] = []
-    helper_error: str | None = None
+    client = AppServerClient.start(str(config.get("codex_cli_path", "codex")))
     try:
-        send(
-            process.stdin,
-            1,
-            "initialize",
-            {
-                "clientInfo": {
-                    "name": "x-session-janitor",
-                    "version": "1.0",
-                },
-                "capabilities": {"experimentalApi": True},
-            },
+        client.initialize()
+        inventory = _list_automation_threads(client, page_limit=page_limit)
+        owner_threads = _owner_threads(
+            config,
+            inventory.all_threads,
+            owner,
+            outbound_owner,
         )
-        receive(process.stdout, 1)
-        request_id = 2
-        seen_thread_ids: set[str] = set()
-        for _, title in AUTOMATION_IDENTITIES:
-            cursor: str | None = None
-            while True:
-                send(
-                    process.stdin,
-                    request_id,
-                    "thread/list",
-                    {
-                        "archived": False,
-                        "cursor": cursor,
-                        "limit": page_limit,
-                        "searchTerm": title,
-                        "sortDirection": "desc",
-                        "sortKey": "updated_at",
-                        "sourceKinds": ["vscode"],
-                        "useStateDbOnly": True,
-                    },
-                )
-                result = receive(process.stdout, request_id)
-                request_id += 1
-                data = result.get("data", [])
-                if not isinstance(data, list):
-                    raise RuntimeError("thread/list data is not an array")
-                for item in data:
-                    if not isinstance(item, dict):
-                        continue
-                    thread_id = str(item.get("id", ""))
-                    if not thread_id or thread_id in seen_thread_ids:
-                        continue
-                    seen_thread_ids.add(thread_id)
-                    all_threads.append(item)
-                    if not matches_automation(item):
-                        continue
-                    matched.append(
-                        {
-                            "id": thread_id,
-                            "name": item.get("name"),
-                            "status": status_type(item),
-                            "thread_source": item.get("threadSource"),
-                            "source": item.get("source"),
-                            "preview": str(item.get("preview", ""))[:120],
-                            "created_at": item.get("createdAt"),
-                            "updated_at": item.get("updatedAt"),
-                        }
-                    )
-                next_cursor = result.get("nextCursor")
-                if not isinstance(next_cursor, str) or not next_cursor:
-                    break
-                cursor = next_cursor
-
-        owning_thread = (
-            owning_automation_thread(all_threads, owner)
-            if owner is not None
-            else None
+        helpers = _clean_helpers(
+            config,
+            inventory.all_threads,
+            protected_ids=owner_threads.protected_ids,
+            apply=apply,
         )
-        outbound_identity = tuple(
-            identity
-            for identity in AUTOMATION_IDENTITIES
-            if identity[0] == OUTBOUND_AUTOMATION_ID
-        )
-        outbound_thread = (
-            owning_automation_thread(
-                all_threads,
-                outbound_owner,
-                identities=outbound_identity,
-            )
-            if outbound_owner is not None
-            else None
-        )
-        protected_ids = {
-            str(value)
-            for value in config.get(
-                "session_janitor_protected_thread_ids", []
-            )
-        }
-        if owning_thread is not None:
-            protected_ids.add(str(owning_thread.get("id", "")))
-        if outbound_thread is not None:
-            protected_ids.add(str(outbound_thread.get("id", "")))
-
-        if bool(config.get("session_janitor_reap_helpers", True)):
-            try:
-                helper_candidates = helper_process_candidates(
-                    collect_processes(),
-                    all_threads,
-                    now_epoch=int(time.time()),
-                    grace_seconds=int(
-                        config.get(
-                            "session_janitor_helper_grace_seconds",
-                            120,
-                        )
-                    ),
-                    protected_ids=protected_ids,
-                )
-                helpers_terminated, helper_survivors = reap_helpers(
-                    helper_candidates,
-                    apply=apply,
-                )
-            except (OSError, subprocess.SubprocessError, ValueError) as error:
-                helper_error = str(error)
-
-        eligible = eligible_threads(
-            all_threads,
-            now=int(time.time()),
+        archive = _archive_eligible_threads(
+            client,
+            inventory.all_threads,
+            protected_ids=owner_threads.protected_ids,
             minimum_age_seconds=minimum_age_seconds,
-            protected_ids=protected_ids,
+            apply=apply,
         )
-        for thread in eligible:
-            thread_id = str(thread["id"])
-            candidates.append(thread_id)
-            if not apply:
-                continue
-            send(
-                process.stdin,
-                request_id,
-                "thread/archive",
-                {"threadId": thread_id},
-            )
-            receive(process.stdout, request_id)
-            request_id += 1
-            archived.append(thread_id)
-
-        if owner is not None:
-            current_time = datetime.now(timezone.utc)
-            thread_is_live = owning_thread_is_live(
-                owning_thread,
-                now_epoch=int(current_time.timestamp()),
-                freshness_seconds=orphan_owner_seconds,
-            )
-            if thread_is_live:
-                return {
-                    "status": "owner_busy",
-                    "owner_age_seconds": (
-                        round(age_seconds, 1)
-                        if age_seconds is not None
-                        else None
-                    ),
-                    "owner_lease_remaining_seconds": (
-                        round(lease_remaining_seconds, 1)
-                        if lease_remaining_seconds is not None
-                        else None
-                    ),
-                    "owner_lease_expires_at": owner.get(
-                        "lease_expires_at"
-                    ),
-                    "owner_last_renewed_at": owner.get(
-                        "last_renewed_at"
-                    ),
-                    "active_thread_ids": [
-                        str(owning_thread.get("id", ""))
-                    ],
-                    "owner_thread_status": status_type(owning_thread),
-                    "owner_thread_updated_at": owning_thread.get(
-                        "updatedAt"
-                    ),
-                    "helper_candidates": helper_candidates,
-                    "helpers_terminated": helpers_terminated,
-                    "helper_survivors": helper_survivors,
-                    "helper_error": helper_error,
-                    "archived": archived,
-                    "candidates": candidates,
-                }
-            if not owner_recovery_allowed(
-                owner,
-                owning_thread,
-                now=current_time,
-                orphan_owner_seconds=orphan_owner_seconds,
-            ):
-                return {
-                    "status": "owner_busy",
-                    "owner_age_seconds": (
-                        round(age_seconds, 1)
-                        if age_seconds is not None
-                        else None
-                    ),
-                    "owner_lease_remaining_seconds": (
-                        round(lease_remaining_seconds, 1)
-                        if lease_remaining_seconds is not None
-                        else None
-                    ),
-                    "owner_lease_expires_at": owner.get(
-                        "lease_expires_at"
-                    ),
-                    "owner_last_renewed_at": owner.get(
-                        "last_renewed_at"
-                    ),
-                    "active_thread_ids": [],
-                    "owner_thread_status": (
-                        status_type(owning_thread)
-                        if owning_thread is not None
-                        else None
-                    ),
-                    "owner_thread_updated_at": (
-                        owning_thread.get("updatedAt")
-                        if owning_thread is not None
-                        else None
-                    ),
-                    "helper_candidates": helper_candidates,
-                    "helpers_terminated": helpers_terminated,
-                    "helper_survivors": helper_survivors,
-                    "helper_error": helper_error,
-                    "archived": archived,
-                    "candidates": candidates,
-                }
-            recovery_candidate, recovered_owner = recover_owner(
+        busy, recovery_candidate, recovered_owner = (
+            _recover_or_report_busy_owner(
                 state_path,
                 owner,
-                owner_age=age_seconds,
+                owner_threads.inbound,
+                age_seconds=age_seconds,
+                lease_remaining_seconds=lease_remaining_seconds,
+                orphan_owner_seconds=orphan_owner_seconds,
                 apply=apply,
+                helpers=helpers,
+                archive=archive,
             )
-
-        return {
-            "status": "completed",
-            "apply": apply,
-            "outbound_owner_active": outbound_owner is not None,
-            "outbound_owner_expires_at": (
-                outbound_owner.get("expires_at")
-                if outbound_owner is not None
-                else None
-            ),
-            "outbound_thread_id": (
-                str(outbound_thread.get("id", ""))
-                if outbound_thread is not None
-                else None
-            ),
-            "helper_candidates": helper_candidates,
-            "helpers_terminated": helpers_terminated,
-            "helper_survivors": helper_survivors,
-            "helper_error": helper_error,
-            "recovery_candidate": recovery_candidate,
-            "recovered_owner": recovered_owner,
-            "matched": matched,
-            "candidates": candidates,
-            "archived": archived,
-        }
+        )
+        if busy is not None:
+            return busy
+        return _completed_result(
+            apply=apply,
+            outbound_owner=outbound_owner,
+            outbound_thread=owner_threads.outbound,
+            helpers=helpers,
+            recovery_candidate=recovery_candidate,
+            recovered_owner=recovered_owner,
+            inventory=inventory,
+            archive=archive,
+        )
     finally:
-        process.stdin.close()
-        try:
-            process.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            process.kill()
-            process.wait(timeout=5)
+        client.close()
 
 
 def main() -> int:

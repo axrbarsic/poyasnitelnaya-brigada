@@ -60,14 +60,12 @@ def replied_to_status_id(payload: dict[str, Any]) -> str | None:
     return None
 
 
-def manual_parent_continuation_profile(
+def _manual_parent_reference(
     connection: sqlite3.Connection,
     event_id: str,
     *,
     configured_user_id: str,
-) -> dict[str, Any] | None:
-    """Classify how to continue an exact Alex parent without guessing origin."""
-
+) -> tuple[str, bool] | None:
     event = connection.execute(
         """
         SELECT in_reply_to_user_id, payload_json
@@ -91,6 +89,102 @@ def manual_parent_continuation_profile(
         bool(configured_user_id)
         and str(event["in_reply_to_user_id"] or "") == configured_user_id
     )
+    return parent_status_id, is_direct_reply
+
+
+def _missing_parent_profile(parent_status_id: str) -> dict[str, Any]:
+    return {
+        "parent_status_id": parent_status_id,
+        "parent_history_status": "missing_exact_alex_parent",
+        "parent_origin_provenance": "unknown",
+        "origin_proven": False,
+        "recommended_route": "pending_exact_parent_restore",
+        "required_action": "restore_exact_live_x_parent_then_classify_adaptively",
+        "chatgpt_web_allowed": False,
+    }
+
+
+def _content_profile(exact_text: str) -> tuple[dict[str, Any], bool]:
+    paragraphs = [
+        value.strip()
+        for value in re.split(r"\n\s*\n", exact_text)
+        if value.strip()
+    ]
+    source_url_count = len(SOURCE_URL_PATTERN.findall(exact_text))
+    substantive = (
+        len(exact_text) >= 500
+        or len(paragraphs) >= 3
+        or source_url_count >= 1
+    )
+    return (
+        {
+            "code_points": len(exact_text),
+            "paragraph_count": len(paragraphs),
+            "source_url_count": source_url_count,
+            "substantive": substantive,
+        },
+        substantive,
+    )
+
+
+def _continuation_basis(
+    *,
+    proven_local_max: bool,
+    substantive: bool,
+) -> str:
+    if proven_local_max:
+        return "proven_local_max_origin"
+    if substantive:
+        return "adaptive_manual_parent_content"
+    return "concise_manual_parent_content"
+
+
+def _exact_parent_profile(
+    parent_status_id: str,
+    parent: sqlite3.Row,
+) -> dict[str, Any]:
+    exact_text = str(parent["exact_text"] or "")
+    provenance = str(parent["provenance"] or "").strip()
+    content_profile, substantive = _content_profile(exact_text)
+    proven_local_max = provenance in LOCAL_MAX_TURN_PROVENANCE
+    adaptive_local_max = proven_local_max or substantive
+    return {
+        "parent_status_id": parent_status_id,
+        "parent_history_status": "exact_alex_parent",
+        "parent_origin_provenance": provenance or "manual_unknown",
+        "origin_proven": bool(provenance),
+        "content_profile": content_profile,
+        "adaptive_local_max": adaptive_local_max,
+        "recommended_route": "local-max" if adaptive_local_max else "short",
+        "continuation_basis": _continuation_basis(
+            proven_local_max=proven_local_max,
+            substantive=substantive,
+        ),
+        "required_action": (
+            "use_complete_local_history_and_poyasnitelnaya_brigada"
+            if adaptive_local_max
+            else "use_complete_local_history_and_sol_short"
+        ),
+        "chatgpt_web_allowed": False,
+    }
+
+
+def manual_parent_continuation_profile(
+    connection: sqlite3.Connection,
+    event_id: str,
+    *,
+    configured_user_id: str,
+) -> dict[str, Any] | None:
+    """Classify how to continue an exact Alex parent without guessing origin."""
+
+    reference = _manual_parent_reference(
+        connection,
+        event_id,
+        configured_user_id=configured_user_id,
+    )
+    if reference is None:
+        return None
+    parent_status_id, is_direct_reply = reference
     parent = connection.execute(
         """
         SELECT actor, exact_text, provenance
@@ -102,62 +196,10 @@ def manual_parent_continuation_profile(
     if parent is None:
         if not is_direct_reply:
             return None
-        return {
-            "parent_status_id": parent_status_id,
-            "parent_history_status": "missing_exact_alex_parent",
-            "parent_origin_provenance": "unknown",
-            "origin_proven": False,
-            "recommended_route": "pending_exact_parent_restore",
-            "required_action": (
-                "restore_exact_live_x_parent_then_classify_adaptively"
-            ),
-            "chatgpt_web_allowed": False,
-        }
+        return _missing_parent_profile(parent_status_id)
     if str(parent["actor"]) != "alex":
         return None
-
-    exact_text = str(parent["exact_text"] or "")
-    provenance = str(parent["provenance"] or "").strip()
-    paragraphs = [
-        value.strip()
-        for value in re.split(r"\n\s*\n", exact_text)
-        if value.strip()
-    ]
-    source_url_count = len(SOURCE_URL_PATTERN.findall(exact_text))
-    proven_local_max = provenance in LOCAL_MAX_TURN_PROVENANCE
-    substantive = (
-        len(exact_text) >= 500
-        or len(paragraphs) >= 3
-        or source_url_count >= 1
-    )
-    adaptive_local_max = proven_local_max or substantive
-    if proven_local_max:
-        basis = "proven_local_max_origin"
-    elif substantive:
-        basis = "adaptive_manual_parent_content"
-    else:
-        basis = "concise_manual_parent_content"
-    return {
-        "parent_status_id": parent_status_id,
-        "parent_history_status": "exact_alex_parent",
-        "parent_origin_provenance": provenance or "manual_unknown",
-        "origin_proven": bool(provenance),
-        "content_profile": {
-            "code_points": len(exact_text),
-            "paragraph_count": len(paragraphs),
-            "source_url_count": source_url_count,
-            "substantive": substantive,
-        },
-        "adaptive_local_max": adaptive_local_max,
-        "recommended_route": "local-max" if adaptive_local_max else "short",
-        "continuation_basis": basis,
-        "required_action": (
-            "use_complete_local_history_and_poyasnitelnaya_brigada"
-            if adaptive_local_max
-            else "use_complete_local_history_and_sol_short"
-        ),
-        "chatgpt_web_allowed": False,
-    }
+    return _exact_parent_profile(parent_status_id, parent)
 
 
 def resolve_path(config_path: Path, value: str) -> Path:
@@ -442,136 +484,149 @@ def write_health(
         autopilot_dispatch.atomic_write_json(path, payload)
 
 
-def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
-    browser_owner_cwd = autopilot_contract.load_workspace(config_path)
-    wake_file, state_file = autopilot_dispatch.load_paths(config_path)
-    guard = resource_guard.check(config_path)
-    if guard.get("defer"):
-        pending = autopilot_dispatch.load_wake_events(wake_file)
+def _deferred_claim_result(
+    wake_file: Path,
+    guard: dict[str, Any],
+) -> dict[str, Any]:
+    pending = autopilot_dispatch.load_wake_events(wake_file)
+    return {
+        "status": "memory_deferred",
+        "dispatch": False,
+        "pending_count": len(pending),
+        "event_ids": [str(event["id"]) for event in pending],
+        "resource_guard": guard,
+    }
+
+
+def _non_dispatch_claim_result(
+    config_path: Path,
+    wake_file: Path,
+    result: dict[str, Any],
+    guard: dict[str, Any],
+) -> dict[str, Any]:
+    pending = autopilot_dispatch.load_wake_events(wake_file)
+    if result.get("owner_busy"):
+        path = health_path(config_path)
+        previous = autopilot_dispatch.read_json(path) if path.exists() else {}
         return {
-            "status": "memory_deferred",
-            "dispatch": False,
-            "pending_count": len(pending),
-            "event_ids": [str(event["id"]) for event in pending],
+            "status": str(previous.get("status", "leased_waiting")),
+            **result,
             "resource_guard": guard,
         }
-    result = autopilot_dispatch.claim(
-        wake_file,
-        state_file,
-        lease_seconds=lease_seconds,
-        max_events=max_claim_events(config_path),
-        runtime_id=resource_guard.codex_runtime_id(),
+    status = "leased_waiting" if pending else "idle"
+    write_health(
+        config_path,
+        status=status,
+        event_ids=[str(event["id"]) for event in pending],
     )
-    if not result["dispatch"]:
-        pending = autopilot_dispatch.load_wake_events(wake_file)
-        if result.get("owner_busy"):
-            path = health_path(config_path)
-            previous = (
-                autopilot_dispatch.read_json(path) if path.exists() else {}
-            )
-            status = str(previous.get("status", "leased_waiting"))
-            return {
-                "status": status,
-                **result,
-                "resource_guard": guard,
-            }
-        status = "leased_waiting" if pending else "idle"
-        write_health(
-            config_path,
-            status=status,
-            event_ids=[str(event["id"]) for event in pending],
-        )
-        return {"status": status, **result, "resource_guard": guard}
+    return {"status": status, **result, "resource_guard": guard}
 
-    events = list(result["events"])
+
+def _fallback_commenter_memory(event_id: str) -> dict[str, Any]:
+    return {
+        "event_id": event_id,
+        "identity_kind": "unavailable",
+        "total_prior_interactions": 0,
+        "returned_interactions": 0,
+        "interactions": [],
+    }
+
+
+def _resolution_recovery(
+    connection: sqlite3.Connection,
+    event_id: str,
+) -> dict[str, Any] | None:
+    existing = connection.execute(
+        """
+        SELECT disposition, reason, blocker_code, resolved_at
+        FROM event_resolutions
+        WHERE event_id = ?
+        """,
+        (event_id,),
+    ).fetchone()
+    if existing is None:
+        return None
+    latest_requeue = connection.execute(
+        """
+        SELECT reason, requeued_at
+        FROM response_policy_requeues
+        WHERE event_id = ?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (event_id,),
+    ).fetchone()
+    requeue_reason = (
+        str(latest_requeue["reason"])
+        if latest_requeue is not None
+        else "queued_event_with_existing_resolution"
+    )
+    revision_reason = (
+        "The local poyasnitelnaya-brigada skill removed the legacy "
+        "ChatGPT dependency"
+        if requeue_reason == "local_poyasnitelnaya_brigada_skill_recovery"
+        else "Auditable requeue after durable resolution: " + requeue_reason
+    )
+    return {
+        "supersedes_existing_resolution": True,
+        "existing_disposition": existing["disposition"],
+        "existing_blocker_code": existing["blocker_code"],
+        "existing_resolved_at": existing["resolved_at"],
+        "requeue_reason": requeue_reason,
+        "resolution_revision_reason": revision_reason,
+    }
+
+
+def _enriched_claim_event(
+    connection: sqlite3.Connection,
+    event: dict[str, Any],
+    watcher_config: Any,
+) -> dict[str, Any]:
+    event_id = str(event["id"])
+    try:
+        memory = watcher.commenter_history_for_event(
+            connection,
+            event_id,
+            limit=watcher_config.commenter_memory_limit,
+        )
+    except (KeyError, ValueError):
+        memory = _fallback_commenter_memory(event_id)
+    enriched = {**event, "commenter_memory": memory}
+    parent_profile = manual_parent_continuation_profile(
+        connection,
+        event_id,
+        configured_user_id=watcher_config.user_id,
+    )
+    if parent_profile is not None:
+        enriched["manual_parent_continuation"] = parent_profile
+    recovery = _resolution_recovery(connection, event_id)
+    if recovery is not None:
+        enriched["resolution_recovery"] = recovery
+    return enriched
+
+
+def _enrich_claim_events(
+    config_path: Path,
+    events: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     watcher_config = watcher.load_config(config_path)
     connection = watcher.connect_database(watcher_config.database)
     try:
-        enriched_events: list[dict[str, Any]] = []
-        for event in events:
-            event_id = str(event["id"])
-            try:
-                memory = watcher.commenter_history_for_event(
-                    connection,
-                    event_id,
-                    limit=watcher_config.commenter_memory_limit,
-                )
-            except (KeyError, ValueError):
-                memory = {
-                    "event_id": str(event["id"]),
-                    "identity_kind": "unavailable",
-                    "total_prior_interactions": 0,
-                    "returned_interactions": 0,
-                    "interactions": [],
-                }
-            enriched_event = {
-                **event,
-                "commenter_memory": memory,
-            }
-            parent_profile = manual_parent_continuation_profile(
-                connection,
-                event_id,
-                configured_user_id=watcher_config.user_id,
-            )
-            if parent_profile is not None:
-                enriched_event["manual_parent_continuation"] = parent_profile
-            existing_resolution = connection.execute(
-                """
-                SELECT disposition, reason, blocker_code, resolved_at
-                FROM event_resolutions
-                WHERE event_id = ?
-                """,
-                (event_id,),
-            ).fetchone()
-            if existing_resolution is not None:
-                latest_requeue = connection.execute(
-                    """
-                    SELECT reason, requeued_at
-                    FROM response_policy_requeues
-                    WHERE event_id = ?
-                    ORDER BY id DESC
-                    LIMIT 1
-                    """,
-                    (event_id,),
-                ).fetchone()
-                requeue_reason = (
-                    str(latest_requeue["reason"])
-                    if latest_requeue is not None
-                    else "queued_event_with_existing_resolution"
-                )
-                if (
-                    requeue_reason
-                    == "local_poyasnitelnaya_brigada_skill_recovery"
-                ):
-                    revision_reason = (
-                        "The local poyasnitelnaya-brigada skill removed "
-                        "the legacy ChatGPT dependency"
-                    )
-                else:
-                    revision_reason = (
-                        "Auditable requeue after durable resolution: "
-                        + requeue_reason
-                    )
-                enriched_event["resolution_recovery"] = {
-                    "supersedes_existing_resolution": True,
-                    "existing_disposition": existing_resolution[
-                        "disposition"
-                    ],
-                    "existing_blocker_code": existing_resolution[
-                        "blocker_code"
-                    ],
-                    "existing_resolved_at": existing_resolution[
-                        "resolved_at"
-                    ],
-                    "requeue_reason": requeue_reason,
-                    "resolution_revision_reason": revision_reason,
-                }
-            enriched_events.append(
-                enriched_event
-            )
-        events = enriched_events
+        return [
+            _enriched_claim_event(connection, event, watcher_config)
+            for event in events
+        ]
     finally:
         connection.close()
+
+
+def _finalize_claim(
+    config_path: Path,
+    browser_owner_cwd: Path,
+    result: dict[str, Any],
+    events: list[dict[str, Any]],
+    guard: dict[str, Any],
+) -> dict[str, Any]:
     event_ids = [str(event["id"]) for event in events]
     claim_token = str(result["claim_token"])
     clear_handoff_reservation(
@@ -598,6 +653,36 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         "prompt": prompt,
         "resource_guard": guard,
     }
+
+
+def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
+    browser_owner_cwd = autopilot_contract.load_workspace(config_path)
+    wake_file, state_file = autopilot_dispatch.load_paths(config_path)
+    guard = resource_guard.check(config_path)
+    if guard.get("defer"):
+        return _deferred_claim_result(wake_file, guard)
+    result = autopilot_dispatch.claim(
+        wake_file,
+        state_file,
+        lease_seconds=lease_seconds,
+        max_events=max_claim_events(config_path),
+        runtime_id=resource_guard.codex_runtime_id(),
+    )
+    if not result["dispatch"]:
+        return _non_dispatch_claim_result(
+            config_path,
+            wake_file,
+            result,
+            guard,
+        )
+    events = _enrich_claim_events(config_path, list(result["events"]))
+    return _finalize_claim(
+        config_path,
+        browser_owner_cwd,
+        result,
+        events,
+        guard,
+    )
 
 
 def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
@@ -664,13 +749,11 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
     }
 
 
-def mark_completed(
+def _recover_claim_event_ids(
     config_path: Path,
+    state_file: Path,
     claim_token: str,
-    *,
-    warning: str | None = None,
-) -> dict[str, Any]:
-    wake_file, state_file = autopilot_dispatch.load_paths(config_path)
+) -> list[str]:
     state = autopilot_dispatch.load_state(state_file)
     event_ids = sorted(
         (
@@ -681,30 +764,107 @@ def mark_completed(
         ),
         key=int,
     )
-    if not event_ids:
-        previous = {}
-        path = health_path(config_path)
-        if path.exists():
-            previous = autopilot_dispatch.read_json(path)
-        if previous.get("claim_token") == claim_token:
-            event_ids = sorted(
-                (str(value) for value in previous.get("event_ids", [])),
-                key=int,
-            )
-    if not event_ids:
-        raise ValueError("claim token is not active or recoverable")
-    pending_ids = {
-        str(event["id"])
-        for event in autopilot_dispatch.load_wake_events(wake_file)
-    }
-    unresolved = sorted(
-        (event_id for event_id in event_ids if event_id in pending_ids),
+    if event_ids:
+        return event_ids
+    path = health_path(config_path)
+    previous = autopilot_dispatch.read_json(path) if path.exists() else {}
+    if previous.get("claim_token") != claim_token:
+        return []
+    return sorted(
+        (str(value) for value in previous.get("event_ids", [])),
         key=int,
     )
+
+
+def _pending_event_ids(wake_file: Path) -> list[str]:
+    return [
+        str(event["id"])
+        for event in autopilot_dispatch.load_wake_events(wake_file)
+    ]
+
+
+def _require_not_pending(
+    wake_file: Path,
+    event_ids: list[str],
+    *,
+    message_prefix: str,
+) -> list[str]:
+    pending_ids = _pending_event_ids(wake_file)
+    unresolved = sorted(set(event_ids).intersection(pending_ids), key=int)
     if unresolved:
-        raise ValueError(
-            "claim still contains pending events: " + ", ".join(unresolved)
+        raise ValueError(message_prefix + ", ".join(unresolved))
+    return pending_ids
+
+
+def _trigger_next_dispatch(
+    config_path: Path,
+    pending_event_ids: list[str],
+) -> dict[str, Any]:
+    try:
+        return event_dispatch.trigger_pending_events(
+            config_path,
+            pending_event_ids,
         )
+    except (OSError, TypeError, ValueError) as error:
+        return {
+            "status": "dispatch_trigger_failed",
+            "triggered": False,
+            "event_ids": pending_event_ids,
+            "reason": event_dispatch.CLAIM_COMPLETED_REASON,
+            "error": f"{type(error).__name__}: {error}",
+        }
+
+
+def _completed_result(
+    config_path: Path,
+    *,
+    claim_token: str,
+    event_ids: list[str],
+    pending_event_ids: list[str],
+    warning: str | None,
+    evidence_manifest: dict[str, Any],
+) -> dict[str, Any]:
+    status = "completed_with_warning" if warning else "completed"
+    write_health(
+        config_path,
+        status=status,
+        event_ids=event_ids,
+        claim_token=claim_token,
+        error=warning,
+    )
+    return {
+        "status": status,
+        "claim_token": claim_token,
+        "event_ids": event_ids,
+        "pending_count": len(pending_event_ids),
+        "next_dispatch": _trigger_next_dispatch(
+            config_path,
+            pending_event_ids,
+        ),
+        "warning": warning,
+        "evidence_manifest": evidence_manifest,
+    }
+
+
+def mark_completed(
+    config_path: Path,
+    claim_token: str,
+    *,
+    warning: str | None = None,
+) -> dict[str, Any]:
+    wake_file, state_file = autopilot_dispatch.load_paths(config_path)
+    event_ids = _recover_claim_event_ids(
+        config_path,
+        state_file,
+        claim_token,
+    )
+    if not event_ids:
+        raise ValueError("claim token is not active or recoverable")
+    pending_event_ids = _require_not_pending(
+        wake_file,
+        event_ids,
+        message_prefix="claim still contains pending events: ",
+    )
     browser_owner_claim.require_durable_resolutions(
         config_path,
         event_ids,
@@ -732,38 +892,14 @@ def mark_completed(
         reconciled["reconciled"] = True
         reconciled["evidence_manifest"] = evidence_manifest
         return reconciled
-    pending_events = autopilot_dispatch.load_wake_events(wake_file)
-    pending_event_ids = [str(event["id"]) for event in pending_events]
-    try:
-        next_dispatch = event_dispatch.trigger_pending_events(
-            config_path,
-            pending_event_ids,
-        )
-    except (OSError, TypeError, ValueError) as error:
-        next_dispatch = {
-            "status": "dispatch_trigger_failed",
-            "triggered": False,
-            "event_ids": pending_event_ids,
-            "reason": event_dispatch.CLAIM_COMPLETED_REASON,
-            "error": f"{type(error).__name__}: {error}",
-        }
-    status = "completed_with_warning" if warning else "completed"
-    write_health(
+    return _completed_result(
         config_path,
-        status=status,
-        event_ids=event_ids,
         claim_token=claim_token,
-        error=warning,
+        event_ids=event_ids,
+        pending_event_ids=pending_event_ids,
+        warning=warning,
+        evidence_manifest=evidence_manifest,
     )
-    return {
-        "status": status,
-        "claim_token": claim_token,
-        "event_ids": event_ids,
-        "pending_count": len(pending_events),
-        "next_dispatch": next_dispatch,
-        "warning": warning,
-        "evidence_manifest": evidence_manifest,
-    }
 
 
 def reconcile_completed(

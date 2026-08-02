@@ -507,6 +507,27 @@ class SystemDoctorTests(unittest.TestCase):
         self.assertEqual(check.status, "fail")
         self.assertFalse(check.details["active_owner"])
 
+    def test_queue_latency_never_calls_expired_oldest_owner_active(self) -> None:
+        check = system_doctor.queue_latency_check(
+            events=[
+                {
+                    "id": "123",
+                    "first_seen_at": "2026-07-29T14:54:59Z",
+                }
+            ],
+            owner={
+                "event_ids": ["123"],
+                "lease_expires_at": "2026-07-29T14:59:59Z",
+            },
+            max_age_seconds=300,
+            now=datetime(2026, 7, 29, 15, 0, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(check.status, "fail")
+        self.assertTrue(check.details["owned"])
+        self.assertFalse(check.details["active_owner"])
+        self.assertIn("без активного owner", check.summary)
+
     def test_queue_latency_warns_during_active_repair_handoff(self) -> None:
         check = system_doctor.queue_latency_check(
             events=[

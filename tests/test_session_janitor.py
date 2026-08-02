@@ -336,6 +336,84 @@ class SessionJanitorTests(unittest.TestCase):
             self.assertIsNone(recovered)
             release.assert_not_called()
 
+    def test_live_owner_path_never_attempts_recovery(self) -> None:
+        owner = {
+            "claim_token": "claim",
+            "claimed_at": "2020-01-01T00:00:00Z",
+            "lease_expires_at": "2020-01-01T00:30:00Z",
+            "event_ids": ["123"],
+        }
+        thread = {
+            "id": "owner-task",
+            "status": {"type": "active"},
+            "updatedAt": 0,
+        }
+        helpers = session_janitor.HelperCleanup([10], [], [], None)
+        archive = session_janitor.ArchiveResult(["old"], [])
+
+        with mock.patch.object(session_janitor, "recover_owner") as recover:
+            busy, candidate, recovered = (
+                session_janitor._recover_or_report_busy_owner(
+                    Path("unused.json"),
+                    owner,
+                    thread,
+                    age_seconds=3600,
+                    lease_remaining_seconds=-1,
+                    orphan_owner_seconds=300,
+                    apply=True,
+                    helpers=helpers,
+                    archive=archive,
+                )
+            )
+
+        recover.assert_not_called()
+        self.assertEqual(busy["status"], "owner_busy")
+        self.assertEqual(busy["active_thread_ids"], ["owner-task"])
+        self.assertIsNone(candidate)
+        self.assertIsNone(recovered)
+
+    def test_expired_owner_path_delegates_one_exact_recovery(self) -> None:
+        owner = {
+            "claim_token": "claim",
+            "claimed_at": "2020-01-01T00:00:00Z",
+            "lease_expires_at": "2020-01-01T00:30:00Z",
+            "event_ids": ["123"],
+        }
+        state_path = Path("state.json")
+        helpers = session_janitor.HelperCleanup([], [], [], None)
+        archive = session_janitor.ArchiveResult([], [])
+        expected_candidate = {"claim_token": "claim"}
+        expected_recovered = {"claim_token": "claim", "event_ids": ["123"]}
+
+        with mock.patch.object(
+            session_janitor,
+            "recover_owner",
+            return_value=(expected_candidate, expected_recovered),
+        ) as recover:
+            busy, candidate, recovered = (
+                session_janitor._recover_or_report_busy_owner(
+                    state_path,
+                    owner,
+                    None,
+                    age_seconds=3600,
+                    lease_remaining_seconds=-1,
+                    orphan_owner_seconds=300,
+                    apply=True,
+                    helpers=helpers,
+                    archive=archive,
+                )
+            )
+
+        recover.assert_called_once_with(
+            state_path,
+            owner,
+            owner_age=3600,
+            apply=True,
+        )
+        self.assertIsNone(busy)
+        self.assertEqual(candidate, expected_candidate)
+        self.assertEqual(recovered, expected_recovered)
+
     def test_helper_reaper_matches_only_inactive_task_start_bundle(self) -> None:
         prefix = {
             "name": session_janitor.AUTOMATION_TITLE,

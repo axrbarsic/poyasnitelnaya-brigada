@@ -261,6 +261,47 @@ class CommitBrowserOwnerEventTests(unittest.TestCase):
         self.assertEqual(result["event_ids"], [self.event_id])
         self.assertTrue((self.session_dir / "manifest.json").is_file())
 
+    def test_finalize_checks_aggregate_conflict_before_database_replay(
+        self,
+    ) -> None:
+        self._write_evidence(self._published_evidence())
+        browser_owner_evidence.commit_event(
+            config_path=self.config_path,
+            claim_token=self.claim_token,
+            requested_event_dir=self.event_dir,
+        )
+        (self.session_dir / "conversation-history.jsonl").write_text(
+            "{}\n",
+            encoding="utf-8",
+        )
+
+        with (
+            mock.patch.object(watcher, "sync_browser_handoffs") as sync,
+            self.assertRaisesRegex(ValueError, "differs from event evidence"),
+        ):
+            finalizer.finalize_session(
+                config_path=self.config_path,
+                requested_session_dir=self.session_dir,
+            )
+
+        sync.assert_not_called()
+        self.assertFalse((self.session_dir / "manifest.json").exists())
+
+    def test_explicit_empty_resolution_never_falls_back_to_blocker(self) -> None:
+        payload = self._published_evidence()
+        payload["resolution"] = {}
+        payload["blocker"] = {
+            "reason": "This alternate object must not be selected.",
+        }
+        self._write_evidence(payload)
+
+        with self.assertRaisesRegex(ValueError, "non-empty text: reason"):
+            browser_owner_evidence.commit_event(
+                config_path=self.config_path,
+                claim_token=self.claim_token,
+                requested_event_dir=self.event_dir,
+            )
+
     def test_rejects_invalid_official_verification_before_writing(self) -> None:
         payload = self._published_evidence()
         report_path = self.event_dir / "api-verification.json"

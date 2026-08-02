@@ -18,12 +18,16 @@ from typing import Any, Iterator
 
 try:
     from scripts import (
+        app_server_desktop,
+        app_server_external,
         autopilot_bridge,
         autopilot_dispatch,
         autopilot_supervisor,
         resource_guard,
     )
 except ModuleNotFoundError:
+    import app_server_desktop  # type: ignore[no-redef]
+    import app_server_external  # type: ignore[no-redef]
     import autopilot_bridge  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
     import autopilot_supervisor  # type: ignore[no-redef]
@@ -552,252 +556,93 @@ def wait_owner_resolution(
     raise AppServerError("Browser owner completion timeout")
 
 
+def _desktop_dependencies() -> app_server_desktop.Dependencies:
+    return app_server_desktop.Dependencies(
+        supervisor_gate=autopilot_supervisor.gate,
+        bridge_gate=autopilot_bridge.gate,
+        dispatch_state_path=dispatch_state_path,
+        read_json=autopilot_dispatch.read_json,
+        load_paths=autopilot_dispatch.load_paths,
+        queue_status=autopilot_dispatch.status,
+        resource_check=resource_guard.check,
+        isoformat=autopilot_dispatch.isoformat,
+        parse_time=autopilot_dispatch.parse_time,
+        utc_now=autopilot_dispatch.utc_now,
+        stop_managed_desktop=stop_managed_desktop,
+        resolve_path=resolve_path,
+        desktop_processes=desktop_processes,
+        launch_desktop=launch_desktop,
+        notify_desktop_failure=notify_desktop_failure,
+        write_state=write_state,
+        recoverable_launch_errors=(
+            OSError,
+            subprocess.SubprocessError,
+            AppServerError,
+        ),
+    )
+
+
 def desktop_supervisor_dispatch(
     config_path: Path,
     config: dict[str, Any],
     *,
     lease_seconds: int,
 ) -> dict[str, Any]:
-    """Keep empty cycles model-free and launch Desktop only for real work."""
-
-    repair_gate = autopilot_supervisor.gate(config_path)
-    if repair_gate.get("repair_pending"):
-        gate = {
-            "status": str(repair_gate.get("status", "repair_pending")),
-            "dispatch": bool(repair_gate.get("dispatch")),
-            "event_ids": [],
-            "pending_count": 0,
-        }
-        work_kind = "repair"
-    else:
-        gate = autopilot_bridge.gate(
-            config_path,
-            lease_seconds=lease_seconds,
-        )
-        work_kind = "x"
-    state_path = dispatch_state_path(config_path, config)
-    previous = (
-        autopilot_dispatch.read_json(state_path)
-        if state_path.exists()
-        else {}
-    )
-    event_ids = list(gate.get("event_ids", []))
-    pending_count = int(gate.get("pending_count", 0))
-    if not gate.get("dispatch"):
-        managed_pid = previous.get("managed_desktop_pid")
-        managed = (
-            previous.get("managed_by_supervisor") is True
-            and isinstance(managed_pid, int)
-        )
-        process_executable = str(
-            config.get(
-                "codex_desktop_process_path",
-                "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
-            )
-        )
-        closed = False
-        idle_since = previous.get("idle_since")
-        if (
-            str(gate.get("status", "idle")) == "idle"
-            and managed
-            and bool(config.get("desktop_auto_quit_after_work", False))
-        ):
-            wake_file, owner_state_file = autopilot_dispatch.load_paths(
-                config_path
-            )
-            queue = autopilot_dispatch.status(
-                wake_file,
-                owner_state_file,
-                lease_seconds=lease_seconds,
-            )
-            guard = resource_guard.check(config_path)
-            if (
-                not queue["owner_busy"]
-                and not guard.get("defer")
-                and not idle_since
-            ):
-                idle_since = autopilot_dispatch.isoformat()
-            elif (
-                not queue["owner_busy"]
-                and not guard.get("defer")
-                and idle_since
-            ):
-                parsed_idle = autopilot_dispatch.parse_time(str(idle_since))
-                grace = int(
-                    config.get(
-                        "desktop_auto_quit_grace_seconds",
-                        180,
-                    )
-                )
-                if grace < 0:
-                    raise ValueError(
-                        "desktop auto quit grace must not be negative"
-                    )
-                if (
-                    parsed_idle is not None
-                    and (
-                        autopilot_dispatch.utc_now() - parsed_idle
-                    ).total_seconds()
-                    >= grace
-                ):
-                    closed = stop_managed_desktop(
-                        managed_pid,
-                        process_executable=process_executable,
-                    )
-        result = {
-            "status": (
-                "desktop_closed_after_work"
-                if closed
-                else str(gate.get("status", "idle"))
-            ),
-            "mode": "in_app_heartbeat",
-            "dispatched": False,
-            "desktop_launched": False,
-            "desktop_closed": closed,
-            "event_ids": event_ids,
-            "pending_count": pending_count,
-            "work_kind": work_kind,
-        }
-        if repair_gate.get("incident_id"):
-            result["repair_incident_id"] = repair_gate["incident_id"]
-        if managed and not closed:
-            result["managed_by_supervisor"] = True
-            result["managed_desktop_pid"] = managed_pid
-        if idle_since and not closed:
-            result["idle_since"] = idle_since
-        write_state(config_path, config, result)
-        return result
-
-    owner_thread_id = str(
-        config.get("browser_owner_thread_id", "")
-    ).strip()
-    if not owner_thread_id:
-        raise ValueError("browser_owner_thread_id is required")
-    cwd = resolve_path(
+    return app_server_desktop.dispatch(
         config_path,
-        str(config.get("browser_owner_cwd", ".")),
+        config,
+        lease_seconds=lease_seconds,
+        dependencies=_desktop_dependencies(),
     )
-    executable = Path(
-        str(
-            config.get(
-                "codex_cli_path",
-                "/Applications/ChatGPT.app/Contents/Resources/codex",
-            )
-        )
-    ).expanduser()
-    process_executable = str(
-        config.get(
-            "codex_desktop_process_path",
-            "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
-        )
-    )
-    timeout_seconds = int(
-        config.get("desktop_launch_timeout_seconds", 30)
-    )
-    processes = desktop_processes(process_executable)
-    launched = False
-    if not processes:
-        try:
-            processes = launch_desktop(
-                executable=executable,
-                cwd=cwd,
-                process_executable=process_executable,
-                timeout_seconds=timeout_seconds,
-            )
-            launched = True
-        except (OSError, subprocess.SubprocessError, AppServerError) as error:
-            alert_interval = int(
-                config.get(
-                    "desktop_failure_alert_interval_seconds",
-                    1800,
-                )
-            )
-            if alert_interval < 0:
-                raise ValueError(
-                    "desktop failure alert interval must not be negative"
-                )
-            last_alert_at = autopilot_dispatch.parse_time(
-                str(previous.get("last_alert_at", ""))
-            )
-            should_alert = (
-                last_alert_at is None
-                or (
-                    autopilot_dispatch.utc_now() - last_alert_at
-                ).total_seconds()
-                >= alert_interval
-            )
-            alert_sent = (
-                notify_desktop_failure(
-                    "Не удалось запустить Codex Desktop. "
-                    "Работа сохранена, автопилот повторит попытку."
-                )
-                if should_alert
-                else False
-            )
-            result = {
-                "status": "desktop_launch_failed",
-                "mode": "in_app_heartbeat",
-                "dispatched": False,
-                "desktop_launched": False,
-                "alert_sent": alert_sent,
-                "owner_thread_id": owner_thread_id,
-                "event_ids": event_ids,
-                "pending_count": pending_count,
-                "work_kind": work_kind,
-                "error": str(error),
-            }
-            if repair_gate.get("incident_id"):
-                result["repair_incident_id"] = repair_gate["incident_id"]
-            if alert_sent:
-                result["last_alert_at"] = autopilot_dispatch.isoformat()
-            elif previous.get("last_alert_at"):
-                result["last_alert_at"] = previous["last_alert_at"]
-            write_state(config_path, config, result)
-            return result
 
-    waiting_statuses = {
-        "desktop_launched_waiting_relay",
-        "desktop_ready_waiting_relay",
-    }
-    status = (
-        "desktop_launched_waiting_relay"
-        if launched
-        else "desktop_ready_waiting_relay"
+
+def _external_dependencies() -> app_server_external.Dependencies:
+    return app_server_external.Dependencies(
+        resolve_path=resolve_path,
+        runtime_signature=runtime_signature,
+        dispatch_state_path=dispatch_state_path,
+        read_json=autopilot_dispatch.read_json,
+        write_state=write_state,
+        client_factory=AppServerClient,
+        relay_handoff_confirmed=relay_handoff_confirmed,
+        wait_owner_resolution=wait_owner_resolution,
+        monotonic=time.monotonic,
+        app_server_error=AppServerError,
+        relay_capability_error=RelayCapabilityUnavailable,
+        relay_prompt=RELAY_PROMPT,
+        owner_prompt=OWNER_PROMPT,
     )
-    preserve_waiting_since = (
-        previous.get("status") in waiting_statuses
-        and previous.get("work_kind") == work_kind
-        and previous.get("waiting_since")
+
+
+def _idle_external_dispatch_result(
+    config_path: Path,
+    config: dict[str, Any],
+    gate: dict[str, Any],
+) -> dict[str, Any]:
+    return app_server_external.idle_result(
+        config_path,
+        config,
+        gate,
+        _external_dependencies(),
     )
-    result = {
-        "status": status,
-        "mode": "in_app_heartbeat",
-        "dispatched": False,
-        "desktop_launched": launched,
-        "desktop_pids": processes,
-        "owner_thread_id": owner_thread_id,
-        "event_ids": event_ids,
-        "pending_count": pending_count,
-        "waiting_since": (
-            previous["waiting_since"]
-            if preserve_waiting_since
-            else autopilot_dispatch.isoformat()
-        ),
-        "work_kind": work_kind,
-    }
-    if repair_gate.get("incident_id"):
-        result["repair_incident_id"] = repair_gate["incident_id"]
-    if launched:
-        result["managed_by_supervisor"] = True
-        result["managed_desktop_pid"] = processes[0]
-    elif (
-        previous.get("managed_by_supervisor") is True
-        and previous.get("managed_desktop_pid") in processes
-    ):
-        result["managed_by_supervisor"] = True
-        result["managed_desktop_pid"] = previous["managed_desktop_pid"]
-    write_state(config_path, config, result)
-    return result
+
+
+def _dispatch_external_relay(
+    config_path: Path,
+    config: dict[str, Any],
+    gate: dict[str, Any],
+    *,
+    lease_seconds: int,
+    timeout_seconds: int | None,
+) -> dict[str, Any]:
+    return app_server_external.dispatch(
+        config_path,
+        config,
+        gate,
+        lease_seconds=lease_seconds,
+        timeout_seconds=timeout_seconds,
+        dependencies=_external_dependencies(),
+    )
 
 
 def dispatch(
@@ -827,234 +672,14 @@ def dispatch(
         lease_seconds=lease_seconds,
     )
     if not gate.get("dispatch"):
-        result = {
-            "status": str(gate.get("status", "idle")),
-            "dispatched": False,
-            "event_ids": list(gate.get("event_ids", [])),
-            "pending_count": int(gate.get("pending_count", 0)),
-        }
-        write_state(config_path, config, result)
-        return result
-
-    owner_thread_id = str(
-        config.get("browser_owner_thread_id", "")
-    ).strip()
-    relay_thread_id = str(
-        config.get("app_server_relay_thread_id", "")
-    ).strip()
-    if not owner_thread_id:
-        raise ValueError("browser_owner_thread_id is required")
-    if not relay_thread_id:
-        raise ValueError("app_server_relay_thread_id is required")
-    root = config_path.parent.resolve()
-    cwd = resolve_path(
+        return _idle_external_dispatch_result(config_path, config, gate)
+    return _dispatch_external_relay(
         config_path,
-        str(config.get("browser_owner_cwd", ".")),
+        config,
+        gate,
+        lease_seconds=lease_seconds,
+        timeout_seconds=timeout_seconds,
     )
-    executable = Path(
-        str(
-            config.get(
-                "codex_cli_path",
-                "/Applications/ChatGPT.app/Contents/Resources/codex",
-            )
-        )
-    ).expanduser()
-    relay_runtime_signature = runtime_signature(executable)
-    previous_state_path = dispatch_state_path(config_path, config)
-    previous_state = (
-        autopilot_dispatch.read_json(previous_state_path)
-        if previous_state_path.exists()
-        else {}
-    )
-    if (
-        previous_state.get("status") == "blocked"
-        and previous_state.get("blocker_code")
-        == "cross_thread_tool_unavailable"
-        and previous_state.get("relay_runtime_signature")
-        == relay_runtime_signature
-    ):
-        result = {
-            "status": "relay_blocked",
-            "dispatched": False,
-            "event_ids": list(gate.get("event_ids", [])),
-            "pending_count": int(gate.get("pending_count", 0)),
-            "blocker_code": "cross_thread_tool_unavailable",
-            "relay_runtime_signature": relay_runtime_signature,
-        }
-        write_state(config_path, config, result)
-        return result
-    timeout = int(
-        timeout_seconds
-        if timeout_seconds is not None
-        else config.get("app_server_dispatch_timeout_seconds", 7200)
-    )
-    if timeout <= 0:
-        raise ValueError("app-server dispatch timeout must be positive")
-
-    client = AppServerClient(
-        executable=executable,
-        cwd=cwd,
-        timeout_seconds=timeout,
-    )
-    deadline = time.monotonic() + timeout
-    try:
-        client.send(
-            {
-                "method": "initialize",
-                "id": 0,
-                "params": {
-                    "clientInfo": {
-                        "name": "poyasnitelnaya-brigada-autopilot",
-                        "title": "Poyasnitelnaya Brigada Autopilot",
-                        "version": "1.0.0",
-                    },
-                    "capabilities": {
-                        "experimentalApi": True,
-                        "optOutNotificationMethods": [
-                            "item/agentMessage/delta",
-                            "item/reasoning/summaryTextDelta",
-                        ],
-                    },
-                },
-            }
-        )
-        client.wait_response(0, deadline=deadline)
-        client.send({"method": "initialized", "params": {}})
-        client.send(
-            {
-                "method": "thread/unarchive",
-                "id": 1,
-                "params": {"threadId": relay_thread_id},
-            }
-        )
-        unarchived = client.wait_response(1, deadline=deadline)
-        unarchived_thread = unarchived.get("thread")
-        if (
-            not isinstance(unarchived_thread, dict)
-            or unarchived_thread.get("id") != relay_thread_id
-        ):
-            raise AppServerError("unarchived the wrong relay thread")
-        client.send(
-            {
-                "method": "thread/resume",
-                "id": 2,
-                "params": {
-                    "threadId": relay_thread_id,
-                    "cwd": str(cwd),
-                    "model": "gpt-5.6-luna",
-                    "approvalPolicy": "never",
-                },
-            }
-        )
-        resumed = client.wait_response(2, deadline=deadline)
-        resumed_thread = resumed.get("thread")
-        if (
-            not isinstance(resumed_thread, dict)
-            or resumed_thread.get("id") != relay_thread_id
-        ):
-            raise AppServerError("resumed the wrong relay thread")
-        client.send(
-            {
-                "method": "turn/start",
-                "id": 3,
-                "params": {
-                    "threadId": relay_thread_id,
-                    "cwd": str(cwd),
-                    "model": "gpt-5.6-luna",
-                    "effort": "low",
-                    "approvalPolicy": "never",
-                    "input": [
-                        {
-                            "type": "text",
-                            "text": RELAY_PROMPT.format(
-                                owner_thread_id=owner_thread_id,
-                                owner_prompt=OWNER_PROMPT.format(
-                                    root=root,
-                                    lease_seconds=lease_seconds,
-                                ),
-                            ),
-                        }
-                    ],
-                },
-            }
-        )
-        started = client.wait_response(3, deadline=deadline)
-        turn = started.get("turn")
-        if not isinstance(turn, dict) or not turn.get("id"):
-            raise AppServerError("turn/start returned no turn id")
-        turn_id = str(turn["id"])
-        completed = client.wait_turn(
-            thread_id=relay_thread_id,
-            turn_id=turn_id,
-            deadline=deadline,
-        )
-        status = str(completed.get("status", "failed"))
-        client.send(
-            {
-                "method": "thread/archive",
-                "id": 4,
-                "params": {"threadId": relay_thread_id},
-            }
-        )
-        client.wait_response(4, deadline=deadline)
-        if status != "completed":
-            raise AppServerError(
-                f"relay turn finished with status {status}"
-            )
-        if not relay_handoff_confirmed(completed):
-            raise RelayCapabilityUnavailable(
-                "relay completed without a confirmed owner handoff"
-            )
-        client.close()
-        event_ids = list(gate.get("event_ids", []))
-        wait_owner_resolution(
-            config_path,
-            config,
-            event_ids=event_ids,
-            deadline=deadline,
-        )
-        result = {
-            "status": "completed",
-            "dispatched": True,
-            "relay_thread_id": relay_thread_id,
-            "owner_thread_id": owner_thread_id,
-            "turn_id": turn_id,
-            "event_ids": event_ids,
-            "pending_count": int(gate.get("pending_count", 0)),
-        }
-        write_state(config_path, config, result)
-        return result
-    except RelayCapabilityUnavailable as error:
-        write_state(
-            config_path,
-            config,
-            {
-                "status": "blocked",
-                "dispatched": True,
-                "event_ids": list(gate.get("event_ids", [])),
-                "pending_count": int(gate.get("pending_count", 0)),
-                "blocker_code": "cross_thread_tool_unavailable",
-                "relay_runtime_signature": relay_runtime_signature,
-                "error": str(error),
-            },
-        )
-        raise
-    except Exception as error:
-        write_state(
-            config_path,
-            config,
-            {
-                "status": "failed",
-                "dispatched": True,
-                "event_ids": list(gate.get("event_ids", [])),
-                "pending_count": int(gate.get("pending_count", 0)),
-                "error": str(error),
-            },
-        )
-        raise
-    finally:
-        client.close()
-
 
 def run_once(
     config_path: Path,

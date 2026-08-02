@@ -32,6 +32,113 @@ class Dependencies:
     refresh_wake_file: Callable[..., dict[str, Any]]
     write_health: Callable[..., dict[str, Any]]
 
+
+@dataclass(frozen=True)
+class ResolutionInput:
+    disposition: str
+    reason: str
+    reply_url: str | None
+    blocker_code: str | None
+    stance: str | None
+    stance_detail: str | None
+    confidence: str | None
+    media_meaning: str | None
+    evidence: tuple[str, ...]
+
+    @property
+    def evidence_json(self) -> str:
+        return json.dumps(list(self.evidence), ensure_ascii=False)
+
+    def expected_row(self) -> dict[str, Any]:
+        return {
+            "disposition": self.disposition,
+            "reason": self.reason,
+            "reply_url": self.reply_url,
+            "blocker_code": self.blocker_code,
+            "stance": self.stance,
+            "stance_detail": self.stance_detail,
+            "confidence": self.confidence,
+            "media_meaning": self.media_meaning,
+            "evidence_json": self.evidence_json,
+        }
+
+
+def _clean_optional(value: str | None) -> str | None:
+    return value.strip() if value else None
+
+
+def _normalize_resolution(
+    *,
+    disposition: str,
+    reason: str,
+    reply_url: str | None,
+    blocker_code: str | None,
+    stance: str | None,
+    stance_detail: str | None,
+    confidence: str | None,
+    media_meaning: str | None,
+    evidence: list[str] | None,
+) -> ResolutionInput:
+    if disposition not in {"published", "skip", "blocked"}:
+        raise ValueError("Disposition must be published, skip, or blocked")
+    clean_reason = reason.strip()
+    if not clean_reason:
+        raise ValueError("Resolution reason must not be empty")
+    clean_stance = _clean_optional(stance)
+    if clean_stance not in {
+        None,
+        "supportive",
+        "opposing",
+        "neutral",
+        "ambiguous",
+    }:
+        raise ValueError(
+            "Stance must be supportive, opposing, neutral, or ambiguous"
+        )
+    clean_confidence = _clean_optional(confidence)
+    if clean_confidence not in {None, "high", "medium", "low"}:
+        raise ValueError("Confidence must be high, medium, or low")
+    clean_reply_url = _clean_optional(reply_url)
+    if disposition == "published" and not clean_reply_url:
+        raise ValueError("Published resolution requires reply_url")
+    if disposition in {"skip", "blocked"} and clean_reply_url:
+        raise ValueError(
+            "Skip and blocked resolutions must not include reply_url"
+        )
+    return ResolutionInput(
+        disposition=disposition,
+        reason=clean_reason,
+        reply_url=clean_reply_url,
+        blocker_code=_clean_optional(blocker_code),
+        stance=clean_stance,
+        stance_detail=_clean_optional(stance_detail),
+        confidence=clean_confidence,
+        media_meaning=_clean_optional(media_meaning),
+        evidence=tuple(
+            sorted(
+                {
+                    str(item).strip()
+                    for item in (evidence or [])
+                    if str(item).strip()
+                }
+            )
+        ),
+    )
+
+
+def _require_event(
+    connection: sqlite3.Connection,
+    event_id: str,
+) -> sqlite3.Row:
+    event = connection.execute(
+        "SELECT * FROM events WHERE event_id = ?",
+        (event_id,),
+    ).fetchone()
+    if event is None:
+        raise KeyError(f"Unknown event {event_id}")
+    return event
+
+
 def _require_matching_published_alex_turn(
     connection: sqlite3.Connection,
     *,
@@ -104,10 +211,6 @@ def _replied_to_status_id(event: sqlite3.Row) -> str:
     if len(parent_ids) != 1:
         raise ValueError("payload_json must contain exactly one replied_to ID")
     return _validate_status_id(parent_ids[0], "parent_status_id")
-
-
-_is_exact_chatgpt_conversation_url = watcher_chatgpt.is_exact_conversation_url
-_chatgpt_custom_gpt_scope = watcher_chatgpt.custom_gpt_scope
 
 
 def _require_required_pro_model_unavailable_proof(
@@ -211,6 +314,132 @@ def _resolution_row_payload(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _require_event_history(
+    connection: sqlite3.Connection,
+    event_id: str,
+    *,
+    action: str,
+) -> None:
+    history_turn = connection.execute(
+        "SELECT 1 FROM conversation_turns WHERE status_id = ?",
+        (event_id,),
+    ).fetchone()
+    if history_turn is None:
+        if action == "resolving":
+            raise ValueError(
+                "Import the exact inspected event turn into conversation "
+                f"history before resolving {event_id}"
+            )
+        raise ValueError(
+            f"Import the exact inspected event turn before revising {event_id}"
+        )
+
+
+def _validate_resolution_proof(
+    config: Any,
+    connection: sqlite3.Connection,
+    *,
+    event: sqlite3.Row,
+    event_id: str,
+    resolution: ResolutionInput,
+    action: str,
+) -> None:
+    _enforce_mandatory_response_resolution(
+        config,
+        connection,
+        event_id=event_id,
+        disposition=resolution.disposition,
+        blocker_code=resolution.blocker_code,
+    )
+    _require_event_history(connection, event_id, action=action)
+    if resolution.disposition == "published":
+        _require_matching_published_alex_turn(
+            connection,
+            event=event,
+            event_id=event_id,
+            reply_url=resolution.reply_url,
+        )
+
+
+def _acknowledge_event(
+    connection: sqlite3.Connection,
+    event_id: str,
+) -> None:
+    connection.execute(
+        "UPDATE events SET delivery_state = 'acknowledged' WHERE event_id = ?",
+        (event_id,),
+    )
+
+
+def _refresh_resolution_runtime(
+    config: Any,
+    connection: sqlite3.Connection,
+    dependencies: Dependencies,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    wake = dependencies.refresh_wake_file(config, connection)
+    health = dependencies.write_health(config, connection, last_new_count=0)
+    return wake, health
+
+
+def _insert_event_resolution(
+    connection: sqlite3.Connection,
+    event_id: str,
+    resolution: ResolutionInput,
+    resolved_at: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO event_resolutions(
+            event_id, disposition, reason, reply_url, blocker_code, stance,
+            stance_detail, confidence, media_meaning, evidence_json,
+            resolved_at
+        ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            event_id,
+            resolution.disposition,
+            resolution.reason,
+            resolution.reply_url,
+            resolution.blocker_code,
+            resolution.stance,
+            resolution.stance_detail,
+            resolution.confidence,
+            resolution.media_meaning,
+            resolution.evidence_json,
+            resolved_at,
+        ),
+    )
+
+
+def _persist_initial_resolution(
+    connection: sqlite3.Connection,
+    event_id: str,
+    resolution: ResolutionInput,
+    existing: sqlite3.Row | None,
+) -> None:
+    with connection:
+        if existing is None:
+            _insert_event_resolution(
+                connection,
+                event_id,
+                resolution,
+                isoformat(),
+            )
+        elif (
+            existing["stance_detail"] is None
+            and resolution.stance_detail is not None
+        ):
+            connection.execute(
+                """
+                UPDATE event_resolutions
+                SET stance_detail = ?
+                WHERE event_id = ?
+                """,
+                (resolution.stance_detail, event_id),
+            )
+        _acknowledge_event(connection, event_id)
+
+
 def resolve_event(
     config: Any,
     connection: sqlite3.Connection,
@@ -227,139 +456,197 @@ def resolve_event(
     evidence: list[str] | None = None,
     dependencies: Dependencies,
 ) -> dict[str, Any]:
-    event = connection.execute(
-        "SELECT * FROM events WHERE event_id = ?",
-        (event_id,),
-    ).fetchone()
-    if event is None:
-        raise KeyError(f"Unknown event {event_id}")
-    if disposition not in {"published", "skip", "blocked"}:
-        raise ValueError("Disposition must be published, skip, or blocked")
-    clean_reason = reason.strip()
-    if not clean_reason:
-        raise ValueError("Resolution reason must not be empty")
-    clean_reply_url = reply_url.strip() if reply_url else None
-    clean_blocker_code = blocker_code.strip() if blocker_code else None
-    clean_stance = stance.strip() if stance else None
-    if clean_stance not in {None, "supportive", "opposing", "neutral", "ambiguous"}:
-        raise ValueError("Stance must be supportive, opposing, neutral, or ambiguous")
-    clean_stance_detail = stance_detail.strip() if stance_detail else None
-    clean_confidence = confidence.strip() if confidence else None
-    if clean_confidence not in {None, "high", "medium", "low"}:
-        raise ValueError("Confidence must be high, medium, or low")
-    clean_media_meaning = media_meaning.strip() if media_meaning else None
-    clean_evidence = sorted(
-        {
-            str(item).strip()
-            for item in (evidence or [])
-            if str(item).strip()
-        }
+    event = _require_event(connection, event_id)
+    resolution = _normalize_resolution(
+        disposition=disposition,
+        reason=reason,
+        reply_url=reply_url,
+        blocker_code=blocker_code,
+        stance=stance,
+        stance_detail=stance_detail,
+        confidence=confidence,
+        media_meaning=media_meaning,
+        evidence=evidence,
     )
-    evidence_json = json.dumps(clean_evidence, ensure_ascii=False)
-    if disposition == "published" and not clean_reply_url:
-        raise ValueError("Published resolution requires reply_url")
-    if disposition in {"skip", "blocked"} and clean_reply_url:
-        raise ValueError(
-            "Skip and blocked resolutions must not include reply_url"
-        )
-    _enforce_mandatory_response_resolution(
+    _validate_resolution_proof(
         config,
         connection,
+        event=event,
         event_id=event_id,
-        disposition=disposition,
-        blocker_code=clean_blocker_code,
+        resolution=resolution,
+        action="resolving",
     )
-    history_turn = connection.execute(
-        "SELECT 1 FROM conversation_turns WHERE status_id = ?",
-        (event_id,),
-    ).fetchone()
-    if history_turn is None:
-        raise ValueError(
-            "Import the exact inspected event turn into conversation history "
-            f"before resolving {event_id}"
-        )
-    if disposition == "published":
-        _require_matching_published_alex_turn(
-            connection,
-            event=event,
-            event_id=event_id,
-            reply_url=clean_reply_url,
-        )
     existing = connection.execute(
         "SELECT * FROM event_resolutions WHERE event_id = ?",
         (event_id,),
     ).fetchone()
-    expected = {
-        "disposition": disposition,
-        "reason": clean_reason,
-        "reply_url": clean_reply_url,
-        "blocker_code": clean_blocker_code,
-        "stance": clean_stance,
-        "stance_detail": clean_stance_detail,
-        "confidence": clean_confidence,
-        "media_meaning": clean_media_meaning,
-        "evidence_json": evidence_json,
-    }
     if existing is not None:
         _assert_existing_values(
             existing,
-            expected,
+            resolution.expected_row(),
             resource=f"event resolution {event_id}",
         )
-    with connection:
-        if existing is None:
-            connection.execute(
-                """
-                INSERT INTO event_resolutions(
-                    event_id, disposition, reason, reply_url, blocker_code, stance,
-                    stance_detail, confidence, media_meaning, evidence_json,
-                    resolved_at
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event_id,
-                    disposition,
-                    clean_reason,
-                    clean_reply_url,
-                    clean_blocker_code,
-                    clean_stance,
-                    clean_stance_detail,
-                    clean_confidence,
-                    clean_media_meaning,
-                    evidence_json,
-                    isoformat(),
-                ),
-            )
-        elif existing["stance_detail"] is None and clean_stance_detail is not None:
-            connection.execute(
-                """
-                UPDATE event_resolutions
-                SET stance_detail = ?
-                WHERE event_id = ?
-                """,
-                (clean_stance_detail, event_id),
-            )
-        connection.execute(
-            "UPDATE events SET delivery_state = 'acknowledged' "
-            "WHERE event_id = ?",
-            (event_id,),
-        )
-    wake = dependencies.refresh_wake_file(config, connection)
-    health = dependencies.write_health(config, connection, last_new_count=0)
+    _persist_initial_resolution(connection, event_id, resolution, existing)
+    wake, health = _refresh_resolution_runtime(
+        config,
+        connection,
+        dependencies,
+    )
     return {
         "event_id": event_id,
-        "disposition": disposition,
-        "reason": clean_reason,
-        "reply_url": clean_reply_url,
-        "blocker_code": clean_blocker_code,
-        "stance": clean_stance,
-        "stance_detail": clean_stance_detail,
-        "confidence": clean_confidence,
-        "media_meaning": clean_media_meaning,
-        "evidence": clean_evidence,
+        "disposition": resolution.disposition,
+        "reason": resolution.reason,
+        "reply_url": resolution.reply_url,
+        "blocker_code": resolution.blocker_code,
+        "stance": resolution.stance,
+        "stance_detail": resolution.stance_detail,
+        "confidence": resolution.confidence,
+        "media_meaning": resolution.media_meaning,
+        "evidence": list(resolution.evidence),
         "pending_count": wake["pending_count"],
         "health": health["status"],
     }
+
+
+def _resolution_matches(
+    existing: sqlite3.Row,
+    resolution: ResolutionInput,
+) -> bool:
+    return all(
+        existing[name] == value
+        for name, value in resolution.expected_row().items()
+    )
+
+
+def _validate_revision_transition(
+    config: Any,
+    existing: sqlite3.Row,
+    resolution: ResolutionInput,
+) -> None:
+    allowed_transitions = {
+        ("skip", "skip"),
+        ("skip", "published"),
+        ("skip", "blocked"),
+        ("blocked", "blocked"),
+        ("blocked", "published"),
+        ("blocked", "skip"),
+    }
+    transition = (existing["disposition"], resolution.disposition)
+    if transition == ("skip", "skip") and not config.mandatory_response_mode:
+        raise ValueError(
+            "Skip to skip revision requires mandatory response mode"
+        )
+    if transition not in allowed_transitions:
+        raise ValueError(
+            "Unsupported resolution revision transition "
+            f"{existing['disposition']} to {resolution.disposition}"
+        )
+
+
+def _revision_replacement(
+    resolution: ResolutionInput,
+    revised_at: str,
+) -> dict[str, Any]:
+    return {
+        "disposition": resolution.disposition,
+        "reason": resolution.reason,
+        "reply_url": resolution.reply_url,
+        "blocker_code": resolution.blocker_code,
+        "stance": resolution.stance,
+        "stance_detail": resolution.stance_detail,
+        "confidence": resolution.confidence,
+        "media_meaning": resolution.media_meaning,
+        "evidence": list(resolution.evidence),
+        "resolved_at": revised_at,
+    }
+
+
+def _insert_resolution_revision(
+    connection: sqlite3.Connection,
+    *,
+    event_id: str,
+    existing: sqlite3.Row,
+    replacement: dict[str, Any],
+    revision_reason: str,
+    revised_at: str,
+) -> None:
+    connection.execute(
+        """
+        INSERT INTO event_resolution_revisions(
+            event_id, previous_json, replacement_json,
+            revision_reason, revised_at
+        ) VALUES(?, ?, ?, ?, ?)
+        """,
+        (
+            event_id,
+            json.dumps(
+                _resolution_row_payload(existing),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            json.dumps(replacement, ensure_ascii=False, sort_keys=True),
+            revision_reason,
+            revised_at,
+        ),
+    )
+
+
+def _update_event_resolution(
+    connection: sqlite3.Connection,
+    event_id: str,
+    resolution: ResolutionInput,
+    revised_at: str,
+) -> None:
+    connection.execute(
+        """
+        UPDATE event_resolutions
+        SET disposition = ?, reason = ?, reply_url = ?, blocker_code = ?,
+            stance = ?, stance_detail = ?, confidence = ?, media_meaning = ?,
+            evidence_json = ?, resolved_at = ?
+        WHERE event_id = ?
+        """,
+        (
+            resolution.disposition,
+            resolution.reason,
+            resolution.reply_url,
+            resolution.blocker_code,
+            resolution.stance,
+            resolution.stance_detail,
+            resolution.confidence,
+            resolution.media_meaning,
+            resolution.evidence_json,
+            revised_at,
+            event_id,
+        ),
+    )
+
+
+def _persist_resolution_revision(
+    connection: sqlite3.Connection,
+    *,
+    event_id: str,
+    existing: sqlite3.Row,
+    resolution: ResolutionInput,
+    revision_reason: str,
+) -> None:
+    revised_at = isoformat()
+    replacement = _revision_replacement(resolution, revised_at)
+    with connection:
+        _insert_resolution_revision(
+            connection,
+            event_id=event_id,
+            existing=existing,
+            replacement=replacement,
+            revision_reason=revision_reason,
+            revised_at=revised_at,
+        )
+        _update_event_resolution(
+            connection,
+            event_id,
+            resolution,
+            revised_at,
+        )
+        _acknowledge_event(connection, event_id)
 
 
 def revise_event_resolution(
@@ -379,12 +666,7 @@ def revise_event_resolution(
     evidence: list[str] | None = None,
     dependencies: Dependencies,
 ) -> dict[str, Any]:
-    event = connection.execute(
-        "SELECT * FROM events WHERE event_id = ?",
-        (event_id,),
-    ).fetchone()
-    if event is None:
-        raise KeyError(f"Unknown event {event_id}")
+    event = _require_event(connection, event_id)
     existing = connection.execute(
         "SELECT * FROM event_resolutions WHERE event_id = ?",
         (event_id,),
@@ -396,175 +678,69 @@ def revise_event_resolution(
     clean_revision_reason = revision_reason.strip()
     if not clean_revision_reason:
         raise ValueError("Resolution revision reason must not be empty")
-    if disposition not in {"published", "skip", "blocked"}:
-        raise ValueError("Disposition must be published, skip, or blocked")
-    clean_reason = reason.strip()
-    if not clean_reason:
-        raise ValueError("Resolution reason must not be empty")
-    clean_reply_url = reply_url.strip() if reply_url else None
-    clean_blocker_code = blocker_code.strip() if blocker_code else None
-    clean_stance = stance.strip() if stance else None
-    if clean_stance not in {
-        None,
-        "supportive",
-        "opposing",
-        "neutral",
-        "ambiguous",
-    }:
-        raise ValueError(
-            "Stance must be supportive, opposing, neutral, or ambiguous"
-        )
-    clean_stance_detail = stance_detail.strip() if stance_detail else None
-    clean_confidence = confidence.strip() if confidence else None
-    if clean_confidence not in {None, "high", "medium", "low"}:
-        raise ValueError("Confidence must be high, medium, or low")
-    clean_media_meaning = media_meaning.strip() if media_meaning else None
-    clean_evidence = sorted(
-        {
-            str(item).strip()
-            for item in (evidence or [])
-            if str(item).strip()
-        }
+    resolution = _normalize_resolution(
+        disposition=disposition,
+        reason=reason,
+        reply_url=reply_url,
+        blocker_code=blocker_code,
+        stance=stance,
+        stance_detail=stance_detail,
+        confidence=confidence,
+        media_meaning=media_meaning,
+        evidence=evidence,
     )
-    evidence_json = json.dumps(clean_evidence, ensure_ascii=False)
-    if disposition == "published" and not clean_reply_url:
-        raise ValueError("Published resolution requires reply_url")
-    if disposition in {"skip", "blocked"} and clean_reply_url:
-        raise ValueError(
-            "Skip and blocked resolutions must not include reply_url"
-        )
     _enforce_mandatory_response_resolution(
         config,
         connection,
         event_id=event_id,
-        disposition=disposition,
-        blocker_code=clean_blocker_code,
+        disposition=resolution.disposition,
+        blocker_code=resolution.blocker_code,
     )
-    expected = {
-        "disposition": disposition,
-        "reason": clean_reason,
-        "reply_url": clean_reply_url,
-        "blocker_code": clean_blocker_code,
-        "stance": clean_stance,
-        "stance_detail": clean_stance_detail,
-        "confidence": clean_confidence,
-        "media_meaning": clean_media_meaning,
-        "evidence_json": evidence_json,
-    }
-    if all(existing[name] == value for name, value in expected.items()):
-        wake = dependencies.refresh_wake_file(config, connection)
-        health = dependencies.write_health(config, connection, last_new_count=0)
+    if _resolution_matches(existing, resolution):
+        wake, health = _refresh_resolution_runtime(
+            config,
+            connection,
+            dependencies,
+        )
         return {
             "event_id": event_id,
             "revised": False,
-            "disposition": disposition,
-            "reply_url": clean_reply_url,
+            "disposition": resolution.disposition,
+            "reply_url": resolution.reply_url,
             "pending_count": wake["pending_count"],
             "health": health["status"],
         }
-    allowed_transitions = {
-        ("skip", "skip"),
-        ("skip", "published"),
-        ("skip", "blocked"),
-        ("blocked", "blocked"),
-        ("blocked", "published"),
-        ("blocked", "skip"),
-    }
-    if (
-        existing["disposition"] == "skip"
-        and disposition == "skip"
-        and not config.mandatory_response_mode
-    ):
-        raise ValueError(
-            "Skip to skip revision requires mandatory response mode"
-        )
-    if (existing["disposition"], disposition) not in allowed_transitions:
-        raise ValueError(
-            "Unsupported resolution revision transition "
-            f"{existing['disposition']} to {disposition}"
-        )
-    history_turn = connection.execute(
-        "SELECT 1 FROM conversation_turns WHERE status_id = ?",
-        (event_id,),
-    ).fetchone()
-    if history_turn is None:
-        raise ValueError(
-            "Import the exact inspected event turn before revising "
-            f"{event_id}"
-        )
-    if disposition == "published":
+    _validate_revision_transition(config, existing, resolution)
+    _require_event_history(
+        connection,
+        event_id,
+        action="revising",
+    )
+    if resolution.disposition == "published":
         _require_matching_published_alex_turn(
             connection,
             event=event,
             event_id=event_id,
-            reply_url=clean_reply_url,
+            reply_url=resolution.reply_url,
         )
-    revised_at = isoformat()
-    replacement = {
-        **{name: value for name, value in expected.items() if name != "evidence_json"},
-        "evidence": clean_evidence,
-        "resolved_at": revised_at,
-    }
-    with connection:
-        connection.execute(
-            """
-            INSERT INTO event_resolution_revisions(
-                event_id, previous_json, replacement_json,
-                revision_reason, revised_at
-            ) VALUES(?, ?, ?, ?, ?)
-            """,
-            (
-                event_id,
-                json.dumps(
-                    _resolution_row_payload(existing),
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                json.dumps(
-                    replacement,
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                clean_revision_reason,
-                revised_at,
-            ),
-        )
-        connection.execute(
-            """
-            UPDATE event_resolutions
-            SET disposition = ?, reason = ?, reply_url = ?, blocker_code = ?,
-                stance = ?,
-                stance_detail = ?, confidence = ?, media_meaning = ?,
-                evidence_json = ?, resolved_at = ?
-            WHERE event_id = ?
-            """,
-            (
-                disposition,
-                clean_reason,
-                clean_reply_url,
-                clean_blocker_code,
-                clean_stance,
-                clean_stance_detail,
-                clean_confidence,
-                clean_media_meaning,
-                evidence_json,
-                revised_at,
-                event_id,
-            ),
-        )
-        connection.execute(
-            "UPDATE events SET delivery_state = 'acknowledged' "
-            "WHERE event_id = ?",
-            (event_id,),
-        )
-    wake = dependencies.refresh_wake_file(config, connection)
-    health = dependencies.write_health(config, connection, last_new_count=0)
+    _persist_resolution_revision(
+        connection,
+        event_id=event_id,
+        existing=existing,
+        resolution=resolution,
+        revision_reason=clean_revision_reason,
+    )
+    wake, health = _refresh_resolution_runtime(
+        config,
+        connection,
+        dependencies,
+    )
     return {
         "event_id": event_id,
         "revised": True,
-        "disposition": disposition,
-        "reply_url": clean_reply_url,
-        "blocker_code": clean_blocker_code,
+        "disposition": resolution.disposition,
+        "reply_url": resolution.reply_url,
+        "blocker_code": resolution.blocker_code,
         "revision_reason": clean_revision_reason,
         "pending_count": wake["pending_count"],
         "health": health["status"],

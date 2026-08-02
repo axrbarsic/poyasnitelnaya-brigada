@@ -13,7 +13,7 @@ import sqlite3
 import subprocess
 import time
 from contextlib import closing
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
@@ -23,17 +23,19 @@ try:
         keychain_bundle,
         personality_policy,
         system_doctor_contract,
+        system_doctor_runtime,
     )
 except ModuleNotFoundError:
     import keychain_bundle  # type: ignore[no-redef]
     import personality_policy  # type: ignore[no-redef]
     import system_doctor_contract  # type: ignore[no-redef]
+    import system_doctor_runtime  # type: ignore[no-redef]
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONTRACT = PROJECT_ROOT / "recovery" / "system-contract.json"
 DEFAULT_CONFIG = PROJECT_ROOT / "config.json"
-VALID_STATUSES = {"pass", "warn", "fail"}
+VALID_STATUSES = system_doctor_runtime.VALID_STATUSES
 REASONING_EFFORT_ORDER = (
     "none",
     "minimal",
@@ -44,35 +46,17 @@ REASONING_EFFORT_ORDER = (
     "max",
     "ultra",
 )
-ACTIVE_REPAIR_STATUSES = {
-    "repair_observing",
-    "escalation_pending",
-    "handoff_pending",
-    "claimed",
-    "work_in_progress",
-}
-ACTIVE_X_DELIVERY_STATUSES = {
-    "desktop_launched_waiting_relay",
-    "desktop_ready_waiting_relay",
-}
-ACTIVE_EVENT_DISPATCH_STATUSES = {
-    "dispatch_requested",
-    "dispatch_kicked",
-}
-CLAIM_COMPLETED_DISPATCH_REASON = "claim_completed_with_pending_queue"
-
-
-@dataclass(frozen=True)
-class Check:
-    identifier: str
-    status: str
-    summary: str
-    repair: str = ""
-    details: dict[str, Any] | None = None
-
-    def __post_init__(self) -> None:
-        if self.status not in VALID_STATUSES:
-            raise ValueError(f"invalid check status: {self.status}")
+ACTIVE_REPAIR_STATUSES = system_doctor_runtime.ACTIVE_REPAIR_STATUSES
+ACTIVE_X_DELIVERY_STATUSES = (
+    system_doctor_runtime.ACTIVE_X_DELIVERY_STATUSES
+)
+ACTIVE_EVENT_DISPATCH_STATUSES = (
+    system_doctor_runtime.ACTIVE_EVENT_DISPATCH_STATUSES
+)
+CLAIM_COMPLETED_DISPATCH_REASON = (
+    system_doctor_runtime.CLAIM_COMPLETED_DISPATCH_REASON
+)
+Check = system_doctor_runtime.Check
 
 
 def read_json(path: Path) -> Any:
@@ -132,69 +116,10 @@ def state_database(home: Path) -> Path | None:
     return candidates[0] if candidates else None
 
 
-def parse_timestamp(value: Any) -> datetime | None:
-    text = str(value or "").strip()
-    if not text:
-        return None
-    if text.endswith("Z"):
-        text = text[:-1] + "+00:00"
-    try:
-        parsed = datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
-    return parsed.astimezone(timezone.utc)
-
-
-def completion_dispatch_progress(
-    state: Any,
-    *,
-    current: datetime,
-    grace_seconds: int,
-    required_event_id: str | None,
-) -> dict[str, Any]:
-    """Classify one durable post-completion delivery request."""
-
-    delivery = state if isinstance(state, dict) else {}
-    status = str(delivery.get("status", ""))
-    reason = str(delivery.get("reason", ""))
-    raw_event_ids = delivery.get("event_ids")
-    event_ids = (
-        {
-            str(event_id)
-            for event_id in raw_event_ids
-            if str(event_id)
-        }
-        if isinstance(raw_event_ids, list)
-        else set()
-    )
-    requested_at = parse_timestamp(delivery.get("requested_at"))
-    age_seconds = (
-        (current - requested_at).total_seconds()
-        if requested_at is not None
-        else None
-    )
-    covers_required = (
-        required_event_id is None or required_event_id in event_ids
-    )
-    active = (
-        grace_seconds > 0
-        and status in ACTIVE_EVENT_DISPATCH_STATUSES
-        and reason == CLAIM_COMPLETED_DISPATCH_REASON
-        and bool(event_ids)
-        and covers_required
-        and age_seconds is not None
-        and 0 <= age_seconds <= grace_seconds
-    )
-    return {
-        "active": active,
-        "status": status,
-        "reason": reason,
-        "event_ids": sorted(event_ids),
-        "covers_required": covers_required,
-        "age_seconds": age_seconds,
-    }
+parse_timestamp = system_doctor_runtime.parse_timestamp
+completion_dispatch_progress = (
+    system_doctor_runtime.completion_dispatch_progress
+)
 
 
 def oldest_queue_event_id(events: list[Any]) -> str | None:
@@ -302,379 +227,8 @@ def database_integrity(
     raise AssertionError("database integrity retry loop did not return")
 
 
-def relay_progress_check(
-    *,
-    pending_count: int,
-    dispatch_state: dict[str, Any],
-    owner: Any,
-    event_dispatch_state: Any = None,
-    required_event_id: str | None = None,
-    max_wait_seconds: int,
-    now: datetime | None = None,
-) -> Check:
-    if max_wait_seconds <= 0:
-        raise ValueError("relay progress max wait must be positive")
-    current = now or datetime.now(timezone.utc)
-    dispatch_status = str(dispatch_state.get("status", "missing"))
-    details: dict[str, Any] = {
-        "dispatch_status": dispatch_status,
-        "max_wait_seconds": max_wait_seconds,
-        "pending_count": pending_count,
-    }
-    work_kind = str(dispatch_state.get("work_kind", ""))
-    if work_kind:
-        details["work_kind"] = work_kind
-    if pending_count <= 0:
-        return Check(
-            "runtime.relay_progress",
-            "pass",
-            "Relay не имеет ожидающей очереди.",
-            "Проверь wake queue и dispatcher state.",
-            details,
-        )
-    if isinstance(owner, dict):
-        details["owner_event_ids"] = owner.get("event_ids", [])
-        return Check(
-            "runtime.relay_progress",
-            "pass",
-            "Ожидающая очередь уже принадлежит Browser owner.",
-            "Проверь owner lease и session janitor.",
-            details,
-        )
-    if work_kind == "repair" and dispatch_status in ACTIVE_REPAIR_STATUSES:
-        return Check(
-            "runtime.relay_progress",
-            "pass",
-            "Relay выполняет активный repair handoff.",
-            "Возраст X очереди контролируется отдельным SLO.",
-            details,
-        )
-    if dispatch_status == "repair_waiting":
-        return Check(
-            "runtime.relay_progress",
-            "pass",
-            "Relay намеренно уступил очередь активному repair owner.",
-            "Проверь supervisor lease и runtime.queue_latency.",
-            details,
-        )
-    if dispatch_status == "deferred_resources":
-        return Check(
-            "runtime.relay_progress",
-            "pass",
-            "Relay намеренно отложен resource guard.",
-            "Проверь возраст очереди и освободи только безопасные ресурсы.",
-            details,
-        )
-    completion_delivery = completion_dispatch_progress(
-        event_dispatch_state,
-        current=current,
-        grace_seconds=max_wait_seconds,
-        required_event_id=required_event_id,
-    )
-    if completion_delivery["status"]:
-        details.update(
-            {
-                "event_dispatch_status": completion_delivery["status"],
-                "event_dispatch_reason": completion_delivery["reason"],
-                "event_dispatch_covers_oldest": completion_delivery[
-                    "covers_required"
-                ],
-                "event_dispatch_age_seconds": (
-                    round(completion_delivery["age_seconds"], 1)
-                    if completion_delivery["age_seconds"] is not None
-                    else None
-                ),
-            }
-        )
-    if completion_delivery["active"]:
-        return Check(
-            "runtime.relay_progress",
-            "pass",
-            "Следующий X-handoff уже запрошен после завершения claim.",
-            "Дождись self-owned heartbeat в пределах grace; затем снова "
-            "проверь очередь.",
-            details,
-        )
-    if dispatch_status not in ACTIVE_X_DELIVERY_STATUSES:
-        return Check(
-            "runtime.relay_progress",
-            "fail",
-            "Ожидающая очередь не получила owner claim.",
-            "Проверь dispatcher, self-owned heartbeat x-relay и reservation.",
-            details,
-        )
-    waiting_since = parse_timestamp(
-        dispatch_state.get("waiting_since")
-        or dispatch_state.get("checked_at")
-    )
-    if waiting_since is None:
-        details["waiting_since"] = dispatch_state.get("waiting_since")
-        return Check(
-            "runtime.relay_progress",
-            "fail",
-            "Dispatcher не записал начало ожидания owner heartbeat.",
-            "Перезапусти штатный dispatcher и проверь waiting_since.",
-            details,
-        )
-    age_seconds = (current - waiting_since).total_seconds()
-    details["waiting_since"] = waiting_since.isoformat().replace(
-        "+00:00",
-        "Z",
-    )
-    details["age_seconds"] = round(age_seconds, 1)
-    healthy = 0 <= age_seconds <= max_wait_seconds
-    return Check(
-        "runtime.relay_progress",
-        "pass" if healthy else "fail",
-        (
-            f"Heartbeat ожидает claim {round(age_seconds, 1)}s."
-            if healthy
-            else f"Heartbeat не создал claim за {round(age_seconds, 1)}s."
-        ),
-        (
-            "Дождись ближайшего минутного heartbeat."
-            if healthy
-            else "Проверь self-owned heartbeat x-relay и reservation."
-        ),
-        details,
-    )
-
-
-def queue_latency_check(
-    *,
-    events: list[Any],
-    owner: Any,
-    supervisor_state: Any = None,
-    dispatch_state: Any = None,
-    event_dispatch_state: Any = None,
-    delivery_grace_seconds: int = 0,
-    max_age_seconds: int,
-    now: datetime | None = None,
-) -> Check:
-    """Measure queue age with one bounded grace for a scheduled X delivery."""
-
-    if max_age_seconds <= 0:
-        raise ValueError("queue latency max age must be positive")
-    if delivery_grace_seconds < 0:
-        raise ValueError("X delivery grace must not be negative")
-    if not events:
-        return Check(
-            "runtime.queue_latency",
-            "pass",
-            "Ожидающая очередь пуста.",
-            "Проверь wake queue и poll health.",
-            {
-                "pending_count": 0,
-                "max_age_seconds": max_age_seconds,
-            },
-        )
-
-    observed: list[tuple[str, datetime]] = []
-    invalid_event_ids: list[str] = []
-    for event in events:
-        if not isinstance(event, dict):
-            invalid_event_ids.append("<invalid>")
-            continue
-        event_id = str(event.get("id") or event.get("event_id") or "")
-        first_seen = parse_timestamp(event.get("first_seen_at"))
-        if not event_id or first_seen is None:
-            invalid_event_ids.append(event_id or "<missing>")
-            continue
-        observed.append((event_id, first_seen))
-    if invalid_event_ids:
-        return Check(
-            "runtime.queue_latency",
-            "fail",
-            "Возраст части ожидающей очереди нельзя измерить.",
-            "Восстанови first_seen_at из live SQLite, не удаляя события.",
-            {
-                "invalid_event_ids": invalid_event_ids,
-                "pending_count": len(events),
-                "max_age_seconds": max_age_seconds,
-            },
-        )
-
-    oldest_event_id, oldest_seen = min(observed, key=lambda item: item[1])
-    current = now or datetime.now(timezone.utc)
-    age_seconds = (current - oldest_seen).total_seconds()
-    owner_event_ids = (
-        {
-            str(event_id)
-            for event_id in owner.get("event_ids", [])
-            if str(event_id)
-        }
-        if isinstance(owner, dict)
-        else set()
-    )
-    owned = oldest_event_id in owner_event_ids
-    owner_lease_expires = (
-        parse_timestamp(owner.get("lease_expires_at"))
-        if isinstance(owner, dict)
-        else None
-    )
-    active_owner = bool(owner_event_ids) and (
-        owner_lease_expires is None or owner_lease_expires >= current
-    )
-    supervisor_incident = (
-        supervisor_state.get("incident")
-        if isinstance(supervisor_state, dict)
-        else None
-    )
-    supervisor_owner = (
-        supervisor_incident.get("owner")
-        if isinstance(supervisor_incident, dict)
-        else None
-    )
-    supervisor_lease_expires = (
-        parse_timestamp(supervisor_owner.get("lease_expires_at"))
-        if isinstance(supervisor_owner, dict)
-        else None
-    )
-    active_repair = (
-        isinstance(supervisor_incident, dict)
-        and str(supervisor_incident.get("status", ""))
-        in ACTIVE_REPAIR_STATUSES
-        and isinstance(supervisor_owner, dict)
-        and bool(str(supervisor_owner.get("claim_token", "")))
-        and supervisor_lease_expires is not None
-        and supervisor_lease_expires >= current
-    )
-    delivery = dispatch_state if isinstance(dispatch_state, dict) else {}
-    delivery_status = str(delivery.get("status", ""))
-    delivery_work_kind = str(delivery.get("work_kind", ""))
-    raw_delivery_event_ids = delivery.get("event_ids")
-    delivery_event_ids = (
-        {
-            str(event_id)
-            for event_id in raw_delivery_event_ids
-            if str(event_id)
-        }
-        if isinstance(raw_delivery_event_ids, list)
-        else set()
-    )
-    delivery_waiting_since = parse_timestamp(delivery.get("waiting_since"))
-    delivery_age_seconds = (
-        (current - delivery_waiting_since).total_seconds()
-        if delivery_waiting_since is not None
-        else None
-    )
-    active_x_delivery = (
-        delivery_grace_seconds > 0
-        and delivery_status in ACTIVE_X_DELIVERY_STATUSES
-        and delivery_work_kind == "x"
-        and oldest_event_id in delivery_event_ids
-        and delivery_age_seconds is not None
-        and 0 <= delivery_age_seconds <= delivery_grace_seconds
-    )
-    completion_delivery = completion_dispatch_progress(
-        event_dispatch_state,
-        current=current,
-        grace_seconds=delivery_grace_seconds,
-        required_event_id=oldest_event_id,
-    )
-    active_x_delivery = (
-        active_x_delivery or completion_delivery["active"]
-    )
-    healthy = 0 <= age_seconds <= max_age_seconds
-    status = (
-        "pass"
-        if healthy
-        else "warn"
-        if active_owner or active_repair or active_x_delivery
-        else "fail"
-    )
-    details = {
-        "age_seconds": round(age_seconds, 1),
-        "max_age_seconds": max_age_seconds,
-        "oldest_event_id": oldest_event_id,
-        "oldest_first_seen_at": oldest_seen.isoformat().replace(
-            "+00:00",
-            "Z",
-        ),
-        "active_owner": active_owner,
-        "active_repair": active_repair,
-        "active_x_delivery": active_x_delivery,
-        "owned": owned,
-        "pending_count": len(events),
-    }
-    if delivery_status:
-        details["delivery_status"] = delivery_status
-        details["delivery_work_kind"] = delivery_work_kind
-        details["delivery_covers_oldest"] = (
-            oldest_event_id in delivery_event_ids
-        )
-        details["delivery_grace_seconds"] = delivery_grace_seconds
-        details["delivery_age_seconds"] = (
-            round(delivery_age_seconds, 1)
-            if delivery_age_seconds is not None
-            else None
-        )
-    if completion_delivery["status"]:
-        details.update(
-            {
-                "event_dispatch_status": completion_delivery["status"],
-                "event_dispatch_reason": completion_delivery["reason"],
-                "event_dispatch_covers_oldest": completion_delivery[
-                    "covers_required"
-                ],
-                "event_dispatch_age_seconds": (
-                    round(completion_delivery["age_seconds"], 1)
-                    if completion_delivery["age_seconds"] is not None
-                    else None
-                ),
-            }
-        )
-    if completion_delivery["active"]:
-        details["delivery_source"] = "event_dispatch"
-    elif active_x_delivery:
-        details["delivery_source"] = "app_server_dispatch"
-    if healthy:
-        summary = f"Старейшее событие ожидает {round(age_seconds, 1)}s."
-        repair = "Проверь relay progress при росте возраста."
-    elif owned:
-        summary = (
-            "Старейшее событие превысило SLO, но уже принадлежит "
-            "активному Browser owner."
-        )
-        repair = "Проверь renew, durable history и завершение текущего claim."
-    elif active_owner:
-        summary = (
-            "Старейшее ожидающее событие превысило SLO, пока активный "
-            "Browser owner обрабатывает предыдущую bounded batch."
-        )
-        repair = (
-            "Проверь продвижение текущего claim и следующий автоматический "
-            "handoff."
-        )
-    elif active_repair:
-        summary = (
-            "Старейшее ожидающее событие превысило SLO во время "
-            "активного repair handoff."
-        )
-        repair = (
-            "Заверши repair handoff, затем проверь следующий X claim."
-        )
-    elif active_x_delivery:
-        summary = (
-            "Старейшее ожидающее событие превысило SLO, но свежая "
-            "X-доставка уже ожидает owner claim."
-        )
-        repair = (
-            "Дождись owner claim в пределах relay grace; после grace "
-            "зависшая очередь снова станет FAIL."
-        )
-    else:
-        summary = "Старейшее событие превысило SLO без активного owner."
-        repair = (
-            "Проверь dispatcher, x-relay и owner claim, очередь не удаляй."
-        )
-    return Check(
-        "runtime.queue_latency",
-        status,
-        summary,
-        repair,
-        details,
-    )
+relay_progress_check = system_doctor_runtime.relay_progress_check
+queue_latency_check = system_doctor_runtime.queue_latency_check
 
 
 def reasoning_effort_meets_minimum(

@@ -201,18 +201,41 @@ DOM, console, network и performance diagnostics.
 ## Архитектурный рефакторинг после восстановления
 
 После стабильного живого цикла Alex отдельно разрешил фундаментальный
-рефакторинг. Он выполняется связанными checkpoint с сохранением внешнего CLI и
-существующих тестов:
+рефакторинг. Внешний CLI и versioned contract сохранены, а смешанные runtime
+монолиты разделены по владельцу состояния и типу побочного эффекта:
 
 1. `evidence.json` становится единственным semantic outcome события.
    Детерминированный event committer сам строит history и ledger, выводит route
    из SQLite и выполняет durable resolve. Это устраняет опасный dual write.
 2. Claim finalizer только агрегирует уже committed события и создает manifest.
-   Он больше не является местом ручного исправления per-event истории.
-3. Перегруженные history/handoff и doctor-домены выделяются из крупных runtime
-   файлов за совместимыми facade-функциями.
-4. Authenticated inspection и публикация остаются одной упорядоченной writer
+   До SQLite replay он проверяет конфликт существующего агрегата, а после replay
+   повторно читает per-event records и запрещает их подмену.
+3. `xmention_watcher.py` остался composition root. События, polling, история,
+   resolution, audit и memory теперь имеют отдельные модули и явные зависимости.
+4. `app_server_dispatch`, `autopilot_supervisor` и `system_doctor` остались
+   совместимыми facade. Desktop lifecycle, внешний диагностический transport,
+   incident store, recovery routes и runtime doctor projections вынесены в
+   отдельные модули.
+5. Claim, renew, completion, wake kick, outbound slot, session janitor,
+   resource guard и Keychain verification разделены на короткие переходы с
+   одним владельцем lock и одним durable write.
+6. Низкоуровневый сбор процессов и CoreAudio использует общие ctypes adapters.
+   Это убирает две расходящиеся реализации одного macOS process snapshot.
+7. Authenticated inspection и публикация остаются одной упорядоченной writer
    транзакцией. Read-only параллелизм не получает права на публикацию.
 
-Каждый checkpoint проходит адресные тесты, один полный suite, state-machine
-эмулятор и живой doctor. Одновременная замена всех runtime-модулей запрещена.
+Контрольный прогон после связного refactor checkpoint:
+
+| Проверка | Результат |
+| --- | --- |
+| Полный Python suite | 465 тестов, 0 ошибок |
+| Исчерпывающая конечная модель | 124 416 комбинаций, 77 760 достижимых, 0 нарушений |
+| Seeded traces | 10 000 трасс по 100 шагов, 1 000 000 шагов, 0 контрпримеров |
+| Canonical layout и установленные skills | complete, 0 расхождений |
+| Live system doctor | 36 PASS, 0 FAIL, 1 WARN для старого события внутри активного owner claim |
+| Browser и сеть в эмуляторе | не использовались |
+
+Крупные функции, которые остались длинными, проверены отдельно. Это
+декларативная SQLite schema, argparse DSL, SQL projection или сгруппированный
+doctor contract, а не смешанные мутации. Механически дробить их ради числа
+строк означало бы скрыть контракт и ухудшить проверяемость.

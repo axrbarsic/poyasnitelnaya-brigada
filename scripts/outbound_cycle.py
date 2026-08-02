@@ -166,6 +166,107 @@ def scheduled_slot(
     }
 
 
+def _defer_owner(
+    state: dict[str, Any],
+    *,
+    claim_token: str | None,
+    checked_at: datetime,
+    interval_minutes: int,
+    slot: dict[str, Any],
+    explanation: str,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    if claim_token is not None:
+        owner = require_owner(state, claim_token=claim_token)
+        if owner.get("status") not in {"claimed", "work_in_progress"}:
+            raise ValueError("defer-slot requires a live outbound owner")
+        return owner, None
+    candidate = state.get("owner")
+    if not isinstance(candidate, dict) or not owner_is_active(
+        candidate,
+        checked_at,
+    ):
+        raise ValueError(
+            "defer-slot without claim-token requires an active owner"
+        )
+    owner_claimed_at = parse_aware_time(
+        str(candidate.get("claimed_at", "")),
+        field="owner.claimed_at",
+    )
+    owner_slot = scheduled_slot(
+        interval_minutes=interval_minutes,
+        now=owner_claimed_at,
+    )
+    if owner_slot["adjustment_id"] != slot["adjustment_id"]:
+        return None, None
+    return None, {
+        "status": "slot_already_claimed",
+        "claim_token": None,
+        "reason": explanation,
+        "slot_id": slot["slot_id"],
+        "catchup_added": 0,
+        "catchup_remaining": state["catchup_remaining"],
+    }
+
+
+def _add_deferred_adjustment(
+    state: dict[str, Any],
+    slot: dict[str, Any],
+    *,
+    explanation: str,
+    checked_at: datetime,
+) -> int:
+    previous = next(
+        (
+            item
+            for item in state["adjustments"]
+            if item.get("adjustment_id") == slot["adjustment_id"]
+        ),
+        None,
+    )
+    if previous is not None:
+        return 0
+    state["adjustments"].append(
+        {
+            **slot,
+            "count": 1,
+            "reason": explanation,
+            "created_at": autopilot_dispatch.isoformat(checked_at),
+        }
+    )
+    state["catchup_remaining"] += 1
+    return 1
+
+
+def _finish_deferred_owner(
+    state: dict[str, Any],
+    owner: dict[str, Any] | None,
+    *,
+    claim_token: str | None,
+    checked_at: datetime,
+    catchup_added: int,
+    explanation: str,
+    slot_id: str,
+) -> None:
+    if owner is None:
+        return
+    state["runs"].append(
+        {
+            "claim_token": claim_token,
+            "claimed_at": owner.get("claimed_at"),
+            "started_at": owner.get("started_at"),
+            "finished_at": autopilot_dispatch.isoformat(checked_at),
+            "status": "deferred",
+            "target_limit": owner.get("target_limit"),
+            "publications": [],
+            "catchup_consumed": 0,
+            "catchup_added": catchup_added,
+            "reason": explanation,
+            "slot_id": slot_id,
+        }
+    )
+    state["owner"] = None
+
+
 def defer_slot(
     path: Path,
     *,
@@ -184,76 +285,31 @@ def defer_slot(
     )
     with autopilot_dispatch.locked_state(path):
         state = load_state(path)
-        owner: dict[str, Any] | None = None
-        if claim_token is not None:
-            owner = require_owner(state, claim_token=claim_token)
-            if owner.get("status") not in {"claimed", "work_in_progress"}:
-                raise ValueError("defer-slot requires a live outbound owner")
-        else:
-            candidate = state.get("owner")
-            if not isinstance(candidate, dict) or not owner_is_active(
-                candidate,
-                checked_at,
-            ):
-                raise ValueError(
-                    "defer-slot without claim-token requires an active owner"
-                )
-            owner_claimed_at = parse_aware_time(
-                str(candidate.get("claimed_at", "")),
-                field="owner.claimed_at",
-            )
-            owner_slot = scheduled_slot(
-                interval_minutes=interval_minutes,
-                now=owner_claimed_at,
-            )
-            if owner_slot["adjustment_id"] == slot["adjustment_id"]:
-                return {
-                    "status": "slot_already_claimed",
-                    "claim_token": None,
-                    "reason": explanation,
-                    "slot_id": slot["slot_id"],
-                    "catchup_added": 0,
-                    "catchup_remaining": state["catchup_remaining"],
-                }
-
-        previous = next(
-            (
-                item
-                for item in state["adjustments"]
-                if item.get("adjustment_id") == slot["adjustment_id"]
-            ),
-            None,
+        owner, early_result = _defer_owner(
+            state,
+            claim_token=claim_token,
+            checked_at=checked_at,
+            interval_minutes=interval_minutes,
+            slot=slot,
+            explanation=explanation,
         )
-        catchup_added = 0
-        if previous is None:
-            state["adjustments"].append(
-                {
-                    **slot,
-                    "count": 1,
-                    "reason": explanation,
-                    "created_at": autopilot_dispatch.isoformat(checked_at),
-                }
-            )
-            state["catchup_remaining"] += 1
-            catchup_added = 1
-
-        if owner is not None:
-            state["runs"].append(
-                {
-                    "claim_token": claim_token,
-                    "claimed_at": owner.get("claimed_at"),
-                    "started_at": owner.get("started_at"),
-                    "finished_at": autopilot_dispatch.isoformat(checked_at),
-                    "status": "deferred",
-                    "target_limit": owner.get("target_limit"),
-                    "publications": [],
-                    "catchup_consumed": 0,
-                    "catchup_added": catchup_added,
-                    "reason": explanation,
-                    "slot_id": slot["slot_id"],
-                }
-            )
-            state["owner"] = None
+        if early_result is not None:
+            return early_result
+        catchup_added = _add_deferred_adjustment(
+            state,
+            slot,
+            explanation=explanation,
+            checked_at=checked_at,
+        )
+        _finish_deferred_owner(
+            state,
+            owner,
+            claim_token=claim_token,
+            checked_at=checked_at,
+            catchup_added=catchup_added,
+            explanation=explanation,
+            slot_id=str(slot["slot_id"]),
+        )
         write_state(path, state)
     return {
         "status": "deferred" if catchup_added else "already_deferred",

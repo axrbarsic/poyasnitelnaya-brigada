@@ -26,6 +26,31 @@ an event through an alternate path. `browser_owner_evidence` is the only
 semantic evidence validator and per-event committer; aggregate finalization
 derives its records from those already committed event records.
 
+The control plane follows the same boundary rule. Public script names remain
+compatibility facades for LaunchAgent, tests, and recovery commands, while
+their implementation is divided by durable authority:
+
+| Public boundary | Internal modules | Responsibility |
+| --- | --- | --- |
+| `app_server_dispatch` | `app_server_desktop`, `app_server_external` | Desktop ownership and disabled external app-server diagnostics |
+| `autopilot_supervisor` | `autopilot_supervisor_incidents`, `autopilot_supervisor_routes` | Incident persistence and deterministic recovery routing |
+| `system_doctor` | `system_doctor_runtime`, `system_doctor_contract` | Runtime projections and versioned deployment checks |
+| `autopilot_bridge` | `autopilot_dispatch`, `event_dispatch` | Queue lease transitions and model-free wake delivery |
+| `browser_owner_evidence` | `browser_handoff_sync`, `build_outbound_history` | Per-event evidence commit and idempotent aggregate replay |
+
+The compatibility facade may bind dependencies, preserve legacy imports, and
+translate CLI arguments. It must not become a second state owner. Each mutable
+operation follows one order: parse and validate complete input, acquire the
+domain lock, confirm the expected owner or version, perform one durable write,
+then expose a derived result. In particular, session finalization checks an
+existing aggregate for conflicts before handoff replay can mutate SQLite.
+
+`session_janitor`, `resource_guard`, `keychain_bundle`, and `outbound_cycle`
+remain single public modules because they each own one bounded capability.
+Their orchestration is split internally into typed snapshots, pure decision
+helpers, and narrow side-effect functions. Native process enumeration and
+CoreAudio access use shared adapters instead of duplicate ctypes setup.
+
 ## Control-plane authority
 
 The runtime has one router, `x-relay`, and three disjoint state owners. No
@@ -288,6 +313,9 @@ contradiction claim, or factual conclusion.
   by Alex.
 - A short handoff reservation closes the race between adjacent heartbeat
   ticks before the Browser owner can acquire its global claim.
+- A model-free wake request is written before `launchctl kickstart`, then the
+  same state file is completed with return code and elapsed time. A failed kick
+  leaves the durable queue untouched and the periodic fallback remains active.
 - Dispatcher state preserves the start of an unowned relay wait. The doctor
   escalates only after that wait exceeds the versioned recovery limit, while
   resource deferral and an active owner remain valid non-stalled states.
@@ -351,3 +379,13 @@ does not run either. A ready queue starts the existing Sol Max owner directly,
 without a second model turn for transport. If Alex intentionally keeps Desktop
 open, the self-owned heartbeat performs its small scheduled gate while the
 terminal dispatcher remains model-free.
+
+## Verification model
+
+The full Python suite protects public compatibility surfaces and domain
+invariants. The offline digital twin then explores both the finite state space
+and long seeded traces without X, Browser, model calls, or secrets. The current
+checkpoint checks 124,416 combinations, of which 77,760 are reachable, and one
+million generated steps. Zero counterexamples is evidence only for the modeled
+invariants, so it is followed by a read-only live doctor and an address canary
+for every deployment-affecting change.

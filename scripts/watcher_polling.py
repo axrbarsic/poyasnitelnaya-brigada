@@ -27,6 +27,22 @@ class Dependencies:
     write_health: Callable[..., dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class TailPageBatch:
+    data: list[dict[str, Any]]
+    newest_ids: list[str | None]
+    page_count: int
+    query_index: int
+    pagination_token: str | None
+
+
+@dataclass(frozen=True)
+class MentionPageBatch:
+    data: list[dict[str, Any]]
+    newest_ids: list[str | None]
+    page_count: int
+
+
 def active_conversation_ids(
     config: Any,
     connection: sqlite3.Connection,
@@ -161,96 +177,138 @@ def store_conversation_tail_scan_state(
     )
 
 
-def poll_conversation_tails(
+def _tail_due_result(
     config: Any,
     connection: sqlite3.Connection,
     *,
-    token: str,
-    fetch: Callable[[str, str, int], dict[str, Any]] = watcher_http.request_json,
-    now: datetime | None = None,
-    dependencies: Dependencies,
-) -> dict[str, Any]:
-    current = now or watcher_time.utc_now()
-    scan_state = load_conversation_tail_scan_state(connection)
-    last_success = watcher_time.parse_time(
-        watcher_events.get_meta(connection, "conversation_tail_last_success_at")
-    )
+    current: datetime,
+    last_success: datetime | None,
+) -> dict[str, Any] | None:
     last_attempt = watcher_time.parse_time(
         watcher_events.get_meta(
             connection,
             watcher_constants.CONVERSATION_TAIL_LAST_ATTEMPT_KEY,
         )
     ) or last_success
-    if last_attempt is not None:
-        age = (current - last_attempt).total_seconds()
-        if age < config.conversation_tail_poll_interval_seconds:
-            return {
-                "source": watcher_constants.CONVERSATION_TAIL_SOURCE,
-                "status": "not_due",
-                "new_count": 0,
-                "new_event_ids": [],
-            }
+    if last_attempt is None:
+        return None
+    age = (current - last_attempt).total_seconds()
+    if age >= config.conversation_tail_poll_interval_seconds:
+        return None
+    return {
+        "source": watcher_constants.CONVERSATION_TAIL_SOURCE,
+        "status": "not_due",
+        "new_count": 0,
+        "new_event_ids": [],
+    }
 
-    budget = conversation_tail_budget_status(config, connection, now=current)
-    if not budget["allowed"]:
+
+def _tail_budget_result(
+    connection: sqlite3.Connection,
+    budget: dict[str, Any],
+    *,
+    current: datetime,
+) -> dict[str, Any] | None:
+    if budget["allowed"]:
+        return None
+    with connection:
+        watcher_events.set_meta(
+            connection,
+            watcher_constants.CONVERSATION_TAIL_LAST_ATTEMPT_KEY,
+            watcher_time.isoformat(current),
+        )
+    return {
+        "source": watcher_constants.CONVERSATION_TAIL_SOURCE,
+        "status": "budget_exhausted",
+        "budget": budget,
+        "new_count": 0,
+        "new_event_ids": [],
+    }
+
+
+def _new_tail_scan_state(
+    config: Any,
+    connection: sqlite3.Connection,
+    *,
+    current: datetime,
+    last_success: datetime | None,
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    conversation_ids = active_conversation_ids(config, connection, now=current)
+    if not conversation_ids:
         with connection:
+            watcher_events.set_meta(
+                connection,
+                "conversation_tail_last_success_at",
+                watcher_time.isoformat(current),
+            )
             watcher_events.set_meta(
                 connection,
                 watcher_constants.CONVERSATION_TAIL_LAST_ATTEMPT_KEY,
                 watcher_time.isoformat(current),
             )
-        return {
+        return None, {
             "source": watcher_constants.CONVERSATION_TAIL_SOURCE,
-            "status": "budget_exhausted",
-            "budget": budget,
+            "status": "no_active_conversations",
+            "tracked_conversation_count": 0,
             "new_count": 0,
             "new_event_ids": [],
         }
-
-    if scan_state is None:
-        conversation_ids = active_conversation_ids(config, connection, now=current)
-        if not conversation_ids:
-            with connection:
-                watcher_events.set_meta(
-                    connection,
-                    "conversation_tail_last_success_at",
-                    watcher_time.isoformat(current),
-                )
-                watcher_events.set_meta(
-                    connection,
-                    watcher_constants.CONVERSATION_TAIL_LAST_ATTEMPT_KEY,
-                    watcher_time.isoformat(current),
-                )
-            return {
-                "source": watcher_constants.CONVERSATION_TAIL_SOURCE,
-                "status": "no_active_conversations",
-                "tracked_conversation_count": 0,
-                "new_count": 0,
-                "new_event_ids": [],
-            }
-        if last_success is None:
-            start_time = current - timedelta(
-                hours=config.conversation_tail_initial_lookback_hours
-            )
-        else:
-            start_time = last_success - timedelta(
-                seconds=config.conversation_tail_overlap_seconds
-            )
-        watch_cutoff = current - timedelta(hours=config.conversation_tail_watch_hours)
-        start_time = max(start_time, watch_cutoff)
-        queries = conversation_tail_query_chunks(
-            conversation_ids,
-            account_handle=config.keychain_account,
+    if last_success is None:
+        start_time = current - timedelta(
+            hours=config.conversation_tail_initial_lookback_hours
         )
-        scan_state = {
+    else:
+        start_time = last_success - timedelta(
+            seconds=config.conversation_tail_overlap_seconds
+        )
+    watch_cutoff = current - timedelta(hours=config.conversation_tail_watch_hours)
+    start_time = max(start_time, watch_cutoff)
+    return (
+        {
             "scan_started_at": watcher_time.isoformat(current),
             "start_time": watcher_time.isoformat(start_time),
-            "queries": queries,
+            "queries": conversation_tail_query_chunks(
+                conversation_ids,
+                account_handle=config.keychain_account,
+            ),
             "query_index": 0,
             "pagination_token": None,
             "tracked_conversation_count": len(conversation_ids),
-        }
+        },
+        None,
+    )
 
+
+def _tail_page_params(
+    scan_state: dict[str, Any],
+    *,
+    query: str,
+    remaining_budget: int,
+    pagination_token: str | None,
+) -> dict[str, str]:
+    params = {
+        "query": query,
+        "start_time": str(scan_state["start_time"]),
+        "max_results": str(min(100, remaining_budget)),
+        "sort_order": "recency",
+        "tweet.fields": (
+            "author_id,created_at,conversation_id,in_reply_to_user_id,"
+            "referenced_tweets,attachments"
+        ),
+    }
+    if pagination_token:
+        params["pagination_token"] = pagination_token
+    return params
+
+
+def _fetch_tail_pages(
+    config: Any,
+    scan_state: dict[str, Any],
+    budget: dict[str, Any],
+    *,
+    token: str,
+    fetch: Callable[[str, str, int], dict[str, Any]],
+) -> TailPageBatch:
     queries = list(scan_state["queries"])
     query_index = int(scan_state["query_index"])
     pagination_token = scan_state.get("pagination_token")
@@ -258,31 +316,24 @@ def poll_conversation_tails(
         int(budget["remaining"]),
         config.conversation_tail_max_post_reads_per_poll,
     )
-
     all_data: list[dict[str, Any]] = []
     newest_ids: list[str | None] = []
     page_count = 0
     while query_index < len(queries):
-        remaining_run_budget = run_budget - len(all_data)
-        if remaining_run_budget < 10:
+        remaining = run_budget - len(all_data)
+        if remaining < 10:
             break
         page_count += 1
         if page_count > config.max_pages_per_poll:
             raise RuntimeError(
                 "X conversation tail pagination exceeded configured page limit"
             )
-        params: dict[str, str] = {
-            "query": queries[query_index],
-            "start_time": str(scan_state["start_time"]),
-            "max_results": str(min(100, remaining_run_budget)),
-            "sort_order": "recency",
-            "tweet.fields": (
-                "author_id,created_at,conversation_id,in_reply_to_user_id,"
-                "referenced_tweets,attachments"
-            ),
-        }
-        if pagination_token:
-            params["pagination_token"] = str(pagination_token)
+        params = _tail_page_params(
+            scan_state,
+            query=queries[query_index],
+            remaining_budget=remaining,
+            pagination_token=pagination_token,
+        )
         url = (
             f"{config.api_base}/tweets/search/recent?"
             f"{urllib.parse.urlencode(params)}"
@@ -300,37 +351,58 @@ def poll_conversation_tails(
         page_data = page.get("data", []) or []
         if not isinstance(page_data, list):
             raise RuntimeError("X conversation tail data is not an array")
-        if len(page_data) > remaining_run_budget:
+        if len(page_data) > remaining:
             raise RuntimeError("X conversation tail exceeded the local read budget")
         all_data.extend(page_data)
         meta = page.get("meta", {}) or {}
         newest_ids.append(meta.get("newest_id"))
-        if meta.get("next_token"):
-            next_pagination_token = str(meta["next_token"])
-            if pagination_token == next_pagination_token:
+        next_token = meta.get("next_token")
+        if next_token:
+            next_token = str(next_token)
+            if pagination_token == next_token:
                 raise RuntimeError(
                     "X conversation tail returned a repeated pagination token"
                 )
-            pagination_token = next_pagination_token
+            pagination_token = next_token
         else:
             query_index += 1
             pagination_token = None
+    return TailPageBatch(
+        data=all_data,
+        newest_ids=newest_ids,
+        page_count=page_count,
+        query_index=query_index,
+        pagination_token=pagination_token,
+    )
 
-    merged = {
-        "data": all_data,
-        "meta": {"newest_id": watcher_events.numeric_max(newest_ids)},
-    }
-    complete = query_index >= len(queries)
-    scan_state["query_index"] = query_index
-    scan_state["pagination_token"] = pagination_token
+
+def _commit_tail_scan(
+    config: Any,
+    connection: sqlite3.Connection,
+    scan_state: dict[str, Any],
+    budget: dict[str, Any],
+    batch: TailPageBatch,
+    *,
+    current: datetime,
+    dependencies: Dependencies,
+) -> dict[str, Any]:
+    queries = list(scan_state["queries"])
+    complete = batch.query_index >= len(queries)
+    scan_state["query_index"] = batch.query_index
+    scan_state["pagination_token"] = batch.pagination_token
     result = dependencies.ingest_response(
         config,
         connection,
-        merged,
+        {
+            "data": batch.data,
+            "meta": {
+                "newest_id": watcher_events.numeric_max(batch.newest_ids)
+            },
+        },
         source=watcher_constants.CONVERSATION_TAIL_SOURCE,
         started_at=watcher_time.isoformat(current),
-        returned_count=len(all_data),
-        request_count=page_count,
+        returned_count=len(batch.data),
+        request_count=batch.page_count,
         poll_status="success" if complete else "partial_budget_exhausted",
         advance_conversation_tail_cursor=complete,
         conversation_tail_cursor_at=str(scan_state["scan_started_at"]),
@@ -345,19 +417,166 @@ def poll_conversation_tails(
             connection,
             None if complete else scan_state,
         )
-    budget_after = {
-        **budget,
-        "used": int(budget["used"]) + len(all_data),
-        "remaining": max(0, int(budget["remaining"]) - len(all_data)),
-    }
     return {
         **result,
         "status": "success" if complete else "partial_budget_exhausted",
         "tracked_conversation_count": int(scan_state["tracked_conversation_count"]),
         "query_count": len(queries),
         "start_time": str(scan_state["start_time"]),
-        "budget": budget_after,
+        "budget": {
+            **budget,
+            "used": int(budget["used"]) + len(batch.data),
+            "remaining": max(0, int(budget["remaining"]) - len(batch.data)),
+        },
         "scan_complete": complete,
+    }
+
+
+def poll_conversation_tails(
+    config: Any,
+    connection: sqlite3.Connection,
+    *,
+    token: str,
+    fetch: Callable[[str, str, int], dict[str, Any]] = watcher_http.request_json,
+    now: datetime | None = None,
+    dependencies: Dependencies,
+) -> dict[str, Any]:
+    current = now or watcher_time.utc_now()
+    last_success = watcher_time.parse_time(
+        watcher_events.get_meta(connection, "conversation_tail_last_success_at")
+    )
+    early = _tail_due_result(
+        config,
+        connection,
+        current=current,
+        last_success=last_success,
+    )
+    if early is not None:
+        return early
+    budget = conversation_tail_budget_status(config, connection, now=current)
+    early = _tail_budget_result(connection, budget, current=current)
+    if early is not None:
+        return early
+
+    scan_state = load_conversation_tail_scan_state(connection)
+    if scan_state is None:
+        scan_state, early = _new_tail_scan_state(
+            config,
+            connection,
+            current=current,
+            last_success=last_success,
+        )
+        if early is not None:
+            return early
+    if scan_state is None:
+        raise AssertionError("conversation tail scan state is missing")
+    batch = _fetch_tail_pages(
+        config,
+        scan_state,
+        budget,
+        token=token,
+        fetch=fetch,
+    )
+    return _commit_tail_scan(
+        config,
+        connection,
+        scan_state,
+        budget,
+        batch,
+        current=current,
+        dependencies=dependencies,
+    )
+
+def _validate_live_user_id(config: Any) -> None:
+    if (
+        not config.user_id
+        or config.user_id == "REPLACE_WITH_X_USER_ID"
+        or not config.user_id.isdigit()
+    ):
+        raise RuntimeError("config user_id is not configured as a numeric X user ID")
+
+
+def _fetch_mention_pages(
+    config: Any,
+    connection: sqlite3.Connection,
+    *,
+    token: str,
+    fetch: Callable[[str, str, int], dict[str, Any]],
+) -> MentionPageBatch:
+    since_id = watcher_events.get_meta(connection, "since_id")
+    all_data: list[dict[str, Any]] = []
+    newest_ids: list[str | None] = [since_id]
+    pagination_token: str | None = None
+    seen_pagination_tokens: set[str] = set()
+    page_count = 0
+    while True:
+        page_count += 1
+        if page_count > config.max_pages_per_poll:
+            raise RuntimeError("X API pagination exceeded configured page limit")
+        params = {
+            "max_results": "100",
+            "tweet.fields": (
+                "author_id,created_at,conversation_id,in_reply_to_user_id,"
+                "referenced_tweets,attachments"
+            ),
+        }
+        if since_id:
+            params["since_id"] = since_id
+        if pagination_token:
+            params["pagination_token"] = pagination_token
+        url = (
+            f"{config.api_base}/users/{urllib.parse.quote(config.user_id)}/mentions?"
+            f"{urllib.parse.urlencode(params)}"
+        )
+        page = fetch(url, token, config.request_timeout_seconds)
+        if not isinstance(page, dict):
+            raise RuntimeError("X API returned a non-object JSON response")
+        if page.get("errors"):
+            raise RuntimeError(
+                "X API returned errors: "
+                + json.dumps(page["errors"], ensure_ascii=False)[:1000]
+            )
+        all_data.extend(page.get("data", []) or [])
+        meta = page.get("meta", {}) or {}
+        newest_ids.append(meta.get("newest_id"))
+        pagination_token = meta.get("next_token")
+        if not pagination_token:
+            break
+        if pagination_token in seen_pagination_tokens:
+            raise RuntimeError("X API returned a repeated pagination token")
+        seen_pagination_tokens.add(pagination_token)
+    return MentionPageBatch(
+        data=all_data,
+        newest_ids=newest_ids,
+        page_count=page_count,
+    )
+
+
+def _combine_poll_results(
+    mention_result: dict[str, Any],
+    tail_result: dict[str, Any],
+) -> dict[str, Any]:
+    new_ids = sorted(
+        set(mention_result["new_event_ids"]) | set(tail_result["new_event_ids"]),
+        key=int,
+    )
+    self_authored_ids = sorted(
+        set(mention_result["self_authored_event_ids"])
+        | set(tail_result.get("self_authored_event_ids", [])),
+        key=int,
+    )
+    return {
+        **mention_result,
+        "observed_count": mention_result["observed_count"]
+        + int(tail_result.get("observed_count", 0)),
+        "new_count": len(new_ids),
+        "new_event_ids": new_ids,
+        "self_authored_event_ids": self_authored_ids,
+        "pending_count": int(
+            tail_result.get("pending_count", mention_result["pending_count"])
+        ),
+        "health": str(tail_result.get("health", mention_result["health"])),
+        "conversation_tail": tail_result,
     }
 
 
@@ -371,73 +590,30 @@ def poll_live(
     started_at = watcher_time.isoformat()
     failure_source = "x_api"
     try:
-        if (
-            not config.user_id
-            or config.user_id == "REPLACE_WITH_X_USER_ID"
-            or not config.user_id.isdigit()
-        ):
-            raise RuntimeError("config user_id is not configured as a numeric X user ID")
+        _validate_live_user_id(config)
         token = dependencies.bearer_token(config)
-        since_id = watcher_events.get_meta(connection, "since_id")
-        all_data: list[dict[str, Any]] = []
-        newest_ids: list[str | None] = [since_id]
-        pagination_token: str | None = None
-        seen_pagination_tokens: set[str] = set()
-        page_count = 0
-
-        while True:
-            page_count += 1
-            if page_count > config.max_pages_per_poll:
-                raise RuntimeError("X API pagination exceeded configured page limit")
-            params: dict[str, str] = {
-                "max_results": "100",
-                "tweet.fields": (
-                    "author_id,created_at,conversation_id,in_reply_to_user_id,"
-                    "referenced_tweets,attachments"
-                ),
-            }
-            if since_id:
-                params["since_id"] = since_id
-            if pagination_token:
-                params["pagination_token"] = pagination_token
-            url = (
-                f"{config.api_base}/users/{urllib.parse.quote(config.user_id)}/mentions?"
-                f"{urllib.parse.urlencode(params)}"
-            )
-            page = fetch(url, token, config.request_timeout_seconds)
-            if not isinstance(page, dict):
-                raise RuntimeError("X API returned a non-object JSON response")
-            if page.get("errors"):
-                raise RuntimeError(
-                    "X API returned errors: "
-                    + json.dumps(page["errors"], ensure_ascii=False)[:1000]
-                )
-            all_data.extend(page.get("data", []) or [])
-            meta = page.get("meta", {}) or {}
-            newest_ids.append(meta.get("newest_id"))
-            pagination_token = meta.get("next_token")
-            if not pagination_token:
-                break
-            if pagination_token in seen_pagination_tokens:
-                raise RuntimeError("X API returned a repeated pagination token")
-            seen_pagination_tokens.add(pagination_token)
-
-        merged = {
-            "data": all_data,
-            "meta": {"newest_id": watcher_events.numeric_max(newest_ids)},
-        }
+        batch = _fetch_mention_pages(
+            config,
+            connection,
+            token=token,
+            fetch=fetch,
+        )
         mention_result = dependencies.ingest_response(
             config,
             connection,
-            merged,
+            {
+                "data": batch.data,
+                "meta": {
+                    "newest_id": watcher_events.numeric_max(batch.newest_ids)
+                },
+            },
             source="x_api",
             started_at=started_at,
-            returned_count=len(all_data),
-            request_count=page_count,
+            returned_count=len(batch.data),
+            request_count=batch.page_count,
         )
         if not config.conversation_tail_enabled:
             return mention_result
-
         failure_source = "x_api_conversation_tail"
         tail_result = poll_conversation_tails(
             config,
@@ -446,29 +622,7 @@ def poll_live(
             fetch=fetch,
             dependencies=dependencies,
         )
-        combined_new_ids = sorted(
-            set(mention_result["new_event_ids"])
-            | set(tail_result["new_event_ids"]),
-            key=int,
-        )
-        combined_self_authored_ids = sorted(
-            set(mention_result["self_authored_event_ids"])
-            | set(tail_result.get("self_authored_event_ids", [])),
-            key=int,
-        )
-        return {
-            **mention_result,
-            "observed_count": mention_result["observed_count"]
-            + int(tail_result.get("observed_count", 0)),
-            "new_count": len(combined_new_ids),
-            "new_event_ids": combined_new_ids,
-            "self_authored_event_ids": combined_self_authored_ids,
-            "pending_count": int(
-                tail_result.get("pending_count", mention_result["pending_count"])
-            ),
-            "health": str(tail_result.get("health", mention_result["health"])),
-            "conversation_tail": tail_result,
-        }
+        return _combine_poll_results(mention_result, tail_result)
     except Exception as error:
         dependencies.record_failure(
             config,
@@ -478,7 +632,6 @@ def poll_live(
             started_at=started_at,
         )
         raise
-
 
 def acknowledge_events(
     config: Any,

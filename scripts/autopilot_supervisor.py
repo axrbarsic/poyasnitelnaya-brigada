@@ -4,20 +4,19 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
-import os
-import subprocess
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Iterable
+from typing import Any, Callable
 
 try:
     from scripts import (
         automation_target_health,
         autopilot_bridge,
         autopilot_dispatch,
+        autopilot_supervisor_incidents,
+        autopilot_supervisor_routes,
         autopilot_state_model,
         outbound_cycle,
         system_doctor,
@@ -26,6 +25,8 @@ except ModuleNotFoundError:
     import automation_target_health  # type: ignore[no-redef]
     import autopilot_bridge  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
+    import autopilot_supervisor_incidents  # type: ignore[no-redef]
+    import autopilot_supervisor_routes  # type: ignore[no-redef]
     import autopilot_state_model  # type: ignore[no-redef]
     import outbound_cycle  # type: ignore[no-redef]
     import system_doctor  # type: ignore[no-redef]
@@ -125,76 +126,39 @@ def save_state(path: Path, state: dict[str, Any]) -> None:
     autopilot_dispatch.atomic_write_json(path, state)
 
 
-def check_payload(check: system_doctor.Check) -> dict[str, Any]:
-    return {
-        "identifier": check.identifier,
-        "status": check.status,
-        "summary": check.summary,
-        "repair": check.repair,
-        "details": check.details,
-    }
-
-
-def incident_can_auto_resolve(incident: dict[str, Any]) -> bool:
-    """Return whether a healthy recheck may close this incident safely."""
-
-    status = str(incident.get("status", ""))
-    if incident.get("canary"):
-        return False
-    if status == "failed":
-        return True
-    return status in {
-        "repair_observing",
-        "escalation_pending",
-        "handoff_pending",
-        EXTERNAL_ACTION_STATUS,
-    } and not incident.get("owner")
+check_payload = autopilot_supervisor_incidents.check_payload
+incident_can_auto_resolve = (
+    autopilot_supervisor_incidents.incident_can_auto_resolve
+)
+failure_fingerprint = autopilot_supervisor_incidents.failure_fingerprint
+poll_failure_is_repairable = (
+    autopilot_supervisor_incidents.poll_failure_is_repairable
+)
+poll_failure_is_billing_blocked = (
+    autopilot_supervisor_incidents.poll_failure_is_billing_blocked
+)
+archived_automation_target_is_repairable = (
+    autopilot_supervisor_incidents.archived_automation_target_is_repairable
+)
+unarchive_automation_targets = (
+    autopilot_supervisor_incidents.unarchive_automation_targets
+)
+kickstart_poll = autopilot_supervisor_incidents.kickstart_poll
+suspend_billing_blocked_poll = (
+    autopilot_supervisor_incidents.suspend_billing_blocked_poll
+)
+_repair_cooldown = autopilot_supervisor_incidents.repair_cooldown
+_escalation_retry = autopilot_supervisor_incidents.escalation_retry
 
 
 def collect_checks(
     config_path: Path,
     contract_path: Path,
 ) -> list[system_doctor.Check]:
-    root = config_path.expanduser().resolve().parent
-    contract = system_doctor.read_json(contract_path.expanduser().resolve())
-    checks = system_doctor.check_contract(
-        root,
-        Path.home().resolve(),
-        contract,
-        config_path.expanduser().resolve(),
+    return autopilot_supervisor_incidents.collect_checks(
+        config_path,
+        contract_path,
     )
-    archived_targets = (
-        automation_target_health.archived_active_heartbeat_targets(
-            Path.home().resolve()
-        )
-    )
-    checks.append(
-        system_doctor.Check(
-            "automation.active_heartbeat_targets",
-            "fail" if archived_targets else "pass",
-            (
-                "Активная heartbeat automation указывает в архив."
-                if archived_targets
-                else "Все активные heartbeat automation имеют живые цели."
-            ),
-            "Сними архивный флаг с целевой задачи или приостанови "
-            "automation через официальный automation_update.",
-            {"targets": archived_targets} if archived_targets else None,
-        )
-    )
-    return checks
-
-
-def failure_fingerprint(checks: Iterable[system_doctor.Check]) -> str:
-    identifiers = sorted(
-        check.identifier for check in checks if check.status == "fail"
-    )
-    encoded = json.dumps(
-        identifiers,
-        ensure_ascii=False,
-        separators=(",", ":"),
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def new_incident(
@@ -203,211 +167,12 @@ def new_incident(
     now: datetime,
     canary: bool = False,
 ) -> dict[str, Any]:
-    return {
-        "id": str(uuid.uuid4()),
-        "fingerprint": failure_fingerprint(failures),
-        "status": "escalation_pending",
-        "canary": canary,
-        "detected_at": isoformat(now),
-        "last_seen_at": isoformat(now),
-        "checks": [check_payload(check) for check in failures],
-        "repair_attempts": [],
-        "handoff": None,
-        "owner": None,
-        "wake_count": 0,
-        "last_wake_at": None,
-        "resolution": None,
-    }
-
-
-def poll_failure_is_repairable(
-    failures: list[system_doctor.Check],
-) -> bool:
-    if poll_failure_is_billing_blocked(failures):
-        return False
-    if [check.identifier for check in failures] != ["runtime.poll_health"]:
-        return False
-    details = failures[0].details or {}
-    age = details.get("age_seconds")
-    max_age = details.get("max_age_seconds")
-    stale_by_age = (
-        isinstance(age, (int, float))
-        and isinstance(max_age, (int, float))
-        and age > max_age
+    return autopilot_supervisor_incidents.new_incident(
+        failures,
+        now=now,
+        isoformat=isoformat,
+        canary=canary,
     )
-    return (
-        str(details.get("health_status", "")) in REPAIRABLE_POLL_STATUSES
-        or stale_by_age
-    )
-
-
-def poll_failure_is_billing_blocked(
-    failures: list[system_doctor.Check],
-) -> bool:
-    allowed = {
-        "runtime.poll_health",
-        f"launchagent.{POLL_LABEL}.loaded",
-    }
-    if not failures or any(
-        check.identifier not in allowed for check in failures
-    ):
-        return False
-    poll = next(
-        (
-            check
-            for check in failures
-            if check.identifier == "runtime.poll_health"
-        ),
-        None,
-    )
-    if poll is None:
-        return False
-    details = poll.details or {}
-    return (
-        str(details.get("health_status", "")) == "billing_blocked"
-        or str(details.get("last_error_message", "")).startswith(
-            "X API HTTP 402"
-        )
-    )
-
-
-def archived_automation_target_is_repairable(
-    failures: list[system_doctor.Check],
-) -> bool:
-    if [
-        check.identifier for check in failures
-    ] != ["automation.active_heartbeat_targets"]:
-        return False
-    details = failures[0].details or {}
-    targets = details.get("targets")
-    return bool(
-        isinstance(targets, list)
-        and targets
-        and all(
-            isinstance(target, dict)
-            and str(target.get("thread_id", "")).strip()
-            for target in targets
-        )
-    )
-
-
-def unarchive_automation_targets(
-    config: dict[str, Any],
-    failure: system_doctor.Check,
-) -> dict[str, Any]:
-    details = failure.details or {}
-    raw_targets = details.get("targets")
-    targets = raw_targets if isinstance(raw_targets, list) else []
-    executable = Path(
-        str(
-            config.get(
-                "codex_cli_path",
-                "/Applications/ChatGPT.app/Contents/Resources/codex",
-            )
-        )
-    ).expanduser()
-    results: list[dict[str, Any]] = []
-    seen: set[str] = set()
-    for target in targets:
-        if not isinstance(target, dict):
-            continue
-        thread_id = str(target.get("thread_id", "")).strip()
-        if not thread_id or thread_id in seen:
-            continue
-        seen.add(thread_id)
-        completed = subprocess.run(
-            [str(executable), "unarchive", thread_id],
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=20,
-        )
-        results.append(
-            {
-                "thread_id": thread_id,
-                "returncode": completed.returncode,
-                "stdout": completed.stdout.strip()[-500:],
-                "stderr": completed.stderr.strip()[-500:],
-            }
-        )
-    return {
-        "action": "unarchive_active_heartbeat_targets",
-        "success": bool(results)
-        and all(result["returncode"] == 0 for result in results),
-        "results": results,
-    }
-
-
-def kickstart_poll() -> dict[str, Any]:
-    target = f"gui/{os.getuid()}/{POLL_LABEL}"
-    completed = subprocess.run(
-        ["/bin/launchctl", "kickstart", "-k", target],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    return {
-        "action": "kickstart_poll_launchagent",
-        "target": target,
-        "success": completed.returncode == 0,
-        "returncode": completed.returncode,
-        "stderr": completed.stderr.strip()[-500:],
-    }
-
-
-def suspend_billing_blocked_poll() -> dict[str, Any]:
-    target = f"gui/{os.getuid()}/{POLL_LABEL}"
-    probe = subprocess.run(
-        ["/bin/launchctl", "print", target],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=10,
-    )
-    if probe.returncode != 0:
-        return {
-            "action": "suspend_billing_blocked_poll",
-            "target": target,
-            "success": True,
-            "returncode": probe.returncode,
-            "already_unloaded": True,
-        }
-    completed = subprocess.run(
-        ["/bin/launchctl", "bootout", target],
-        check=False,
-        capture_output=True,
-        text=True,
-        timeout=20,
-    )
-    return {
-        "action": "suspend_billing_blocked_poll",
-        "target": target,
-        "success": completed.returncode == 0,
-        "returncode": completed.returncode,
-        "already_unloaded": False,
-        "stderr": completed.stderr.strip()[-500:],
-    }
-
-
-def _repair_cooldown(config: dict[str, Any]) -> int:
-    value = int(
-        config.get("autopilot_supervisor_repair_cooldown_seconds", 90)
-    )
-    if value < 1:
-        raise ValueError("supervisor repair cooldown must be positive")
-    return value
-
-
-def _escalation_retry(config: dict[str, Any]) -> int:
-    value = int(
-        config.get("autopilot_supervisor_escalation_retry_seconds", 1800)
-    )
-    if value < 60:
-        raise ValueError(
-            "supervisor escalation retry must be at least 60 seconds"
-        )
-    return value
 
 
 def recover_expired_coordination(
@@ -415,62 +180,28 @@ def recover_expired_coordination(
     *,
     now: datetime,
 ) -> bool:
-    status = str(incident.get("status", ""))
-    if status == "handoff_pending":
-        handoff = incident.get("handoff")
-        expires_at = (
-            parse_time(handoff.get("expires_at"))
-            if isinstance(handoff, dict)
-            else None
-        )
-        if expires_at is None or expires_at <= now:
-            incident["last_expired_handoff"] = {
-                "reserved_at": (
-                    handoff.get("reserved_at")
-                    if isinstance(handoff, dict)
-                    else None
-                ),
-                "expires_at": (
-                    handoff.get("expires_at")
-                    if isinstance(handoff, dict)
-                    else None
-                ),
-                "recovered_at": isoformat(now),
-            }
-            incident["status"] = "escalation_pending"
-            incident["handoff"] = None
-            return True
-    if status in {"claimed", "work_in_progress"}:
-        owner = incident.get("owner")
-        expires_at = (
-            parse_time(owner.get("lease_expires_at"))
-            if isinstance(owner, dict)
-            else None
-        )
-        if expires_at is None or expires_at <= now:
-            incident["last_expired_owner"] = {
-                "claimed_at": (
-                    owner.get("claimed_at")
-                    if isinstance(owner, dict)
-                    else None
-                ),
-                "started_at": (
-                    owner.get("started_at")
-                    if isinstance(owner, dict)
-                    else None
-                ),
-                "lease_expires_at": (
-                    owner.get("lease_expires_at")
-                    if isinstance(owner, dict)
-                    else None
-                ),
-                "recovered_at": isoformat(now),
-            }
-            incident["status"] = "escalation_pending"
-            incident["handoff"] = None
-            incident["owner"] = None
-            return True
-    return False
+    return autopilot_supervisor_incidents.recover_expired_coordination(
+        incident,
+        now=now,
+        parse_time=parse_time,
+        isoformat=isoformat,
+    )
+
+
+def _incident_dependencies(
+) -> autopilot_supervisor_incidents.Dependencies:
+    return autopilot_supervisor_incidents.Dependencies(
+        read_config=read_config,
+        state_path=state_path,
+        load_state=load_state,
+        save_state=save_state,
+        locked_state=autopilot_dispatch.locked_state,
+        isoformat=isoformat,
+        utc_now=utc_now,
+        parse_time=parse_time,
+        collect_checks=collect_checks,
+        unarchive_targets=unarchive_automation_targets,
+    )
 
 
 def run_once(
@@ -484,197 +215,15 @@ def run_once(
         [], dict[str, Any]
     ] = suspend_billing_blocked_poll,
 ) -> dict[str, Any]:
-    current = now or utc_now()
-    config_path = config_path.expanduser().resolve()
-    config = read_config(config_path)
-    path = state_path(config_path)
-    observed = (
-        checks
-        if checks is not None
-        else collect_checks(config_path, contract_path)
+    return autopilot_supervisor_incidents.run_once(
+        config_path,
+        contract_path,
+        now=now,
+        checks=checks,
+        repair_runner=repair_runner,
+        billing_block_runner=billing_block_runner,
+        dependencies=_incident_dependencies(),
     )
-    failures = [check for check in observed if check.status == "fail"]
-    warnings = [check for check in observed if check.status == "warn"]
-
-    with autopilot_dispatch.locked_state(path):
-        state = load_state(path)
-        state["last_checked_at"] = isoformat(current)
-        incident = state.get("incident")
-        if isinstance(incident, dict):
-            recover_expired_coordination(incident, now=current)
-        if not failures:
-            state["last_healthy_at"] = isoformat(current)
-            if isinstance(incident, dict) and incident_can_auto_resolve(
-                incident
-            ):
-                incident["status"] = "resolved"
-                incident["resolution"] = {
-                    "kind": "automatic_recovery",
-                    "completed_at": isoformat(current),
-                    "report": "Повторная диагностика не обнаружила FAIL.",
-                }
-                state["last_incident"] = incident
-                state["incident"] = None
-            save_state(path, state)
-            return {
-                "status": "healthy",
-                "healthy": True,
-                "model_wake_required": False,
-                "failures": [],
-                "warnings": [check.identifier for check in warnings],
-            }
-
-        fingerprint = failure_fingerprint(failures)
-        incident_is_open = (
-            isinstance(incident, dict)
-            and incident.get("status") in OPEN_STATUSES
-        )
-        if not incident_is_open:
-            if isinstance(incident, dict):
-                state["last_incident"] = incident
-            incident = new_incident(failures, now=current)
-            state["incident"] = incident
-        else:
-            incident["last_seen_at"] = isoformat(current)
-            incident["checks"] = [
-                check_payload(check) for check in failures
-            ]
-            current_fingerprint = incident.get(
-                "active_fingerprint",
-                incident.get("fingerprint"),
-            )
-            if current_fingerprint != fingerprint:
-                incident["active_fingerprint"] = fingerprint
-                incident.setdefault("failure_history", []).append(
-                    {
-                        "fingerprint": fingerprint,
-                        "observed_at": isoformat(current),
-                        "failure_ids": [
-                            check.identifier for check in failures
-                        ],
-                    }
-                )
-
-        attempts = incident.setdefault("repair_attempts", [])
-        billing_blocked = poll_failure_is_billing_blocked(failures)
-        coordination_locked = incident.get("status") in {
-            "handoff_pending",
-            "claimed",
-            "work_in_progress",
-        }
-        if billing_blocked and not coordination_locked:
-            prior_suspension = next(
-                (
-                    attempt
-                    for attempt in attempts
-                    if attempt.get("action")
-                    == "suspend_billing_blocked_poll"
-                ),
-                None,
-            )
-            if prior_suspension is None:
-                suspension = {
-                    **billing_block_runner(),
-                    "attempted_at": isoformat(current),
-                }
-                attempts.append(suspension)
-            else:
-                suspension = prior_suspension
-            if suspension.get("success") is True:
-                previous_owner = incident.pop("owner", None)
-                if isinstance(previous_owner, dict):
-                    incident["last_owner"] = previous_owner
-                incident["status"] = EXTERNAL_ACTION_STATUS
-                incident["external_action"] = {
-                    "kind": "x_api_credits_depleted",
-                    "required_action": (
-                        "Purchase X API credits, then bootstrap and verify "
-                        "the poll LaunchAgent."
-                    ),
-                    "recorded_at": isoformat(current),
-                }
-            else:
-                incident["status"] = "escalation_pending"
-            save_state(path, state)
-            return {
-                "status": str(incident["status"]),
-                "healthy": False,
-                "model_wake_required": (
-                    incident["status"] == "escalation_pending"
-                ),
-                "incident_id": incident["id"],
-                "failures": [check.identifier for check in failures],
-                "warnings": [check.identifier for check in warnings],
-                "repair_attempts": len(attempts),
-                "external_action_required": (
-                    incident["status"] == EXTERNAL_ACTION_STATUS
-                ),
-            }
-
-        coordination_active = incident.get("status") in {
-            "handoff_pending",
-            "claimed",
-            "work_in_progress",
-            "failed",
-        }
-        poll_repairable = poll_failure_is_repairable(failures)
-        automation_repairable = archived_automation_target_is_repairable(
-            failures
-        )
-        if (
-            (poll_repairable or automation_repairable)
-            and not coordination_active
-        ):
-            cooldown = _repair_cooldown(config)
-            last_attempt_at = (
-                parse_time(attempts[-1].get("attempted_at"))
-                if attempts
-                else None
-            )
-            if not attempts:
-                result = (
-                    repair_runner()
-                    if poll_repairable
-                    else unarchive_automation_targets(config, failures[0])
-                )
-                attempt = {
-                    **result,
-                    "attempted_at": isoformat(current),
-                }
-                attempts.append(attempt)
-                incident["status"] = (
-                    "repair_observing"
-                    if result.get("success") is True
-                    else "escalation_pending"
-                )
-            elif (
-                incident.get("status") == "repair_observing"
-                and last_attempt_at is not None
-                and (current - last_attempt_at).total_seconds() >= cooldown
-            ):
-                incident["status"] = "escalation_pending"
-        elif (
-            not poll_repairable
-            and not automation_repairable
-            and incident.get("status") not in {
-            "handoff_pending",
-            "claimed",
-            "work_in_progress",
-            "failed",
-            }
-        ):
-            incident["status"] = "escalation_pending"
-
-        save_state(path, state)
-        return {
-            "status": str(incident["status"]),
-            "healthy": False,
-            "model_wake_required": incident["status"] == "escalation_pending",
-            "incident_id": incident["id"],
-            "failures": [check.identifier for check in failures],
-            "warnings": [check.identifier for check in warnings],
-            "repair_attempts": len(attempts),
-        }
 
 
 def gate(
@@ -882,6 +431,26 @@ def x_queue_is_exactly_idle(result: dict[str, Any]) -> bool:
     )
 
 
+def _route_dependencies() -> autopilot_supervisor_routes.Dependencies:
+    return autopilot_supervisor_routes.Dependencies(
+        read_config=read_config,
+        read_contract=system_doctor.read_json,
+        repair_gate=gate,
+        reserve_repair_handoff=reserve_handoff,
+        release_repair_handoff=release_handoff,
+        active_x_owner_snapshot=active_x_owner_snapshot,
+        outbound_state_path=outbound_state_path,
+        outbound_interval_minutes=outbound_interval_minutes,
+        bridge_reserve_handoff=autopilot_bridge.reserve_handoff,
+        bridge_release_handoff=(
+            autopilot_bridge.release_handoff_reservation
+        ),
+        outbound_active_owner=outbound_cycle.active_owner_snapshot,
+        outbound_claim_due=outbound_cycle.claim_due,
+        outbound_pause_slot=outbound_cycle.pause_slot,
+    )
+
+
 def relay_reserve_handoff(
     config_path: Path,
     contract_path: Path,
@@ -889,160 +458,13 @@ def relay_reserve_handoff(
     lease_seconds: int,
     now: datetime | None = None,
 ) -> dict[str, Any]:
-    """Return one repair, inbound X, or idle-only outbound decision."""
-
-    config = read_config(config_path)
-    contract = system_doctor.read_json(contract_path.expanduser().resolve())
-    owner = contract["threads"]["browser_owner"]
-    owner_thread_id = str(owner["id"])
-    if str(config.get("browser_owner_thread_id", "")) != owner_thread_id:
-        raise ValueError(
-            "browser owner differs between config and system contract"
-        )
-    owner_route = {
-        "owner_thread_id": owner_thread_id,
-        "owner_model": str(owner["model"]),
-        "owner_thinking": str(owner["minimum_reasoning_effort"]),
-    }
-
-    repair_state = gate(config_path, now=now)
-    if repair_state.get("repair_pending"):
-        x_owner = active_x_owner_snapshot(
-            config_path,
-            lease_seconds=lease_seconds,
-            now=now,
-        )
-        if x_owner["owner_busy"]:
-            return {
-                **repair_state,
-                **owner_route,
-                **x_owner,
-                "status": "repair_waiting_for_x_owner",
-                "dispatch": False,
-                "route": "repair",
-            }
-        repair = reserve_handoff(
-            config_path,
-            lease_seconds=lease_seconds,
-            now=now,
-        )
-        if repair.get("dispatch"):
-            x_owner = active_x_owner_snapshot(
-                config_path,
-                lease_seconds=lease_seconds,
-                now=now,
-            )
-            if x_owner["owner_busy"]:
-                release_handoff(
-                    config_path,
-                    reservation_token=str(repair["reservation_token"]),
-                    reason="x_owner_became_active",
-                )
-                return {
-                    **repair_state,
-                    **owner_route,
-                    **x_owner,
-                    "status": "repair_waiting_for_x_owner",
-                    "dispatch": False,
-                    "route": "repair",
-                }
-        return {**repair, **owner_route, "route": "repair"}
-    outbound_path = outbound_state_path(config_path)
-    x_result = autopilot_bridge.reserve_handoff(
+    return autopilot_supervisor_routes.relay_reserve_handoff(
         config_path,
-        lease_seconds=lease_seconds,
-    )
-    if x_result.get("dispatch"):
-        outbound_owner = outbound_cycle.active_owner_snapshot(
-            outbound_path,
-            now=now,
-        )
-        if outbound_owner.get("owner_busy"):
-            reservation_token = str(
-                x_result.get("reservation_token", "")
-            )
-            autopilot_bridge.release_handoff_reservation(
-                config_path,
-                reservation_token=reservation_token,
-                reason="outbound_owner_must_pause_for_inbound",
-            )
-            return {
-                **x_result,
-                **owner_route,
-                "status": "x_waiting_for_outbound_pause",
-                "dispatch": False,
-                "repair_pending": False,
-                "route": "x",
-                "outbound_owner": outbound_owner,
-            }
-        return {
-            **x_result,
-            **owner_route,
-            "repair_pending": False,
-            "route": "x",
-        }
-    if not x_queue_is_exactly_idle(x_result):
-        return {
-            **x_result,
-            **owner_route,
-            "repair_pending": False,
-            "route": "x",
-        }
-
-    x_owner = active_x_owner_snapshot(
-        config_path,
+        contract_path,
         lease_seconds=lease_seconds,
         now=now,
+        dependencies=_route_dependencies(),
     )
-    if x_owner.get("owner_busy"):
-        return {
-            **x_result,
-            **owner_route,
-            **x_owner,
-            "status": "outbound_waiting_for_x_owner",
-            "dispatch": False,
-            "repair_pending": False,
-            "route": "outbound",
-        }
-
-    outbound = outbound_cycle.claim_due(
-        outbound_path,
-        lease_seconds=lease_seconds,
-        interval_minutes=outbound_interval_minutes(config_path),
-        now=now,
-    )
-    if not outbound.get("dispatch"):
-        return {
-            **outbound,
-            **owner_route,
-            "repair_pending": False,
-            "route": "outbound",
-        }
-
-    race_check = autopilot_bridge.reserve_handoff(
-        config_path,
-        lease_seconds=lease_seconds,
-    )
-    if not x_queue_is_exactly_idle(race_check):
-        outbound_cycle.pause_slot(
-            outbound_path,
-            claim_token=str(outbound["claim_token"]),
-            reason="inbound_arrived_during_outbound_reservation",
-            now=now,
-        )
-        return {
-            **race_check,
-            **owner_route,
-            "repair_pending": False,
-            "route": "x",
-            "outbound_preempted": True,
-        }
-    return {
-        **outbound,
-        **owner_route,
-        "repair_pending": False,
-        "route": "outbound",
-    }
 
 
 def release_handoff(

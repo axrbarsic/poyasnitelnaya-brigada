@@ -52,57 +52,45 @@ def _event_ids(result: dict[str, Any]) -> list[str]:
     return _normalize_event_ids(result.get("new_event_ids", []))
 
 
-def trigger_event_ids(
-    config_path: Path,
+def _inactive_result(
+    status: str,
     event_ids: list[str],
     *,
     reason: str,
-    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
 ) -> dict[str, Any]:
-    """Record and kick one bounded model-free delivery request."""
+    return {
+        "status": status,
+        "triggered": False,
+        "event_ids": event_ids,
+        "reason": reason,
+    }
 
-    normalized_ids = _normalize_event_ids(event_ids)
-    if not normalized_ids:
-        return {
-            "status": "not_needed",
-            "triggered": False,
-            "event_ids": normalized_ids,
-            "reason": reason,
-        }
 
-    resolved_config = config_path.expanduser().resolve()
-    config = autopilot_dispatch.read_json(resolved_config)
-    enabled = bool(config.get("event_dispatch_on_new_events", False))
-    if not enabled:
-        return {
-            "status": "disabled",
-            "triggered": False,
-            "event_ids": normalized_ids,
-            "reason": reason,
-        }
-
-    label = str(
-        config.get("event_dispatch_launchagent_label", DEFAULT_LABEL)
-    ).strip()
-    if not LABEL_PATTERN.fullmatch(label):
-        raise ValueError("event dispatch LaunchAgent label is invalid")
-
-    requested_at = autopilot_dispatch.isoformat()
-    state_path = _state_path(resolved_config, config)
-    request_payload: dict[str, Any] = {
+def _request_payload(
+    event_ids: list[str],
+    *,
+    reason: str,
+    label: str,
+) -> dict[str, Any]:
+    return {
         "version": 1,
         "status": "dispatch_requested",
         "triggered": False,
         "reason": reason,
-        "event_ids": normalized_ids,
+        "event_ids": event_ids,
         "launchagent_label": label,
-        "requested_at": requested_at,
+        "requested_at": autopilot_dispatch.isoformat(),
         "completed_at": None,
         "elapsed_ms": 0.0,
         "returncode": None,
     }
-    autopilot_dispatch.atomic_write_json(state_path, request_payload)
 
+
+def _kick_launchagent(
+    label: str,
+    *,
+    runner: Callable[..., subprocess.CompletedProcess[str]],
+) -> dict[str, Any]:
     started = time.monotonic()
     command = [
         "/bin/launchctl",
@@ -113,9 +101,8 @@ def trigger_event_ids(
     triggered = False
     error: str | None = None
     returncode: int | None = None
-    run = runner or DEFAULT_RUNNER
     try:
-        completed = run(
+        completed = runner(
             command,
             check=False,
             capture_output=True,
@@ -134,17 +121,59 @@ def trigger_event_ids(
             )[-500:]
     except (OSError, subprocess.SubprocessError) as caught:
         error = f"{type(caught).__name__}: {caught}"[-500:]
-
-    payload = {
-        **request_payload,
+    return {
         "status": status,
         "triggered": triggered,
         "completed_at": autopilot_dispatch.isoformat(),
         "elapsed_ms": round((time.monotonic() - started) * 1000, 1),
         "returncode": returncode,
+        "error": error,
     }
-    if error:
-        payload["error"] = error
+
+
+def trigger_event_ids(
+    config_path: Path,
+    event_ids: list[str],
+    *,
+    reason: str,
+    runner: Callable[..., subprocess.CompletedProcess[str]] | None = None,
+) -> dict[str, Any]:
+    """Record and kick one bounded model-free delivery request."""
+
+    normalized_ids = _normalize_event_ids(event_ids)
+    if not normalized_ids:
+        return _inactive_result("not_needed", normalized_ids, reason=reason)
+
+    resolved_config = config_path.expanduser().resolve()
+    config = autopilot_dispatch.read_json(resolved_config)
+    enabled = bool(config.get("event_dispatch_on_new_events", False))
+    if not enabled:
+        return _inactive_result("disabled", normalized_ids, reason=reason)
+
+    label = str(
+        config.get("event_dispatch_launchagent_label", DEFAULT_LABEL)
+    ).strip()
+    if not LABEL_PATTERN.fullmatch(label):
+        raise ValueError("event dispatch LaunchAgent label is invalid")
+
+    state_path = _state_path(resolved_config, config)
+    request_payload = _request_payload(
+        normalized_ids,
+        reason=reason,
+        label=label,
+    )
+    autopilot_dispatch.atomic_write_json(state_path, request_payload)
+    outcome = _kick_launchagent(label, runner=runner or DEFAULT_RUNNER)
+    payload = {
+        **request_payload,
+        "status": outcome["status"],
+        "triggered": outcome["triggered"],
+        "completed_at": outcome["completed_at"],
+        "elapsed_ms": outcome["elapsed_ms"],
+        "returncode": outcome["returncode"],
+    }
+    if outcome["error"]:
+        payload["error"] = outcome["error"]
     autopilot_dispatch.atomic_write_json(state_path, payload)
     return payload
 

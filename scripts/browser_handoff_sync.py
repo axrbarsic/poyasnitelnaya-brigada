@@ -267,14 +267,10 @@ def _validated_urls(
     return reply_url, existing_alex_reply_url
 
 
-def _prepare_candidate(
-    config: Any,
-    connection: sqlite3.Connection,
-    *,
-    event_id: str,
+def _candidate_revision_context(
     record: dict[str, Any],
     dependencies: Dependencies,
-) -> tuple[dict[str, Any] | None, bool]:
+) -> tuple[str, bool, str | None]:
     watcher_disposition = str(record.get("watcher_disposition") or "")
     is_revision = record.get("supersedes_existing_resolution") is True
     revision_reason = (
@@ -282,6 +278,17 @@ def _prepare_candidate(
         if is_revision
         else None
     )
+    return watcher_disposition, is_revision, revision_reason
+
+
+def _candidate_event(
+    config: Any,
+    connection: sqlite3.Connection,
+    *,
+    event_id: str,
+    record: dict[str, Any],
+    dependencies: Dependencies,
+) -> sqlite3.Row:
     if record.get("history_status") != "exact_user_turn_appended":
         raise ValueError(
             f"Browser handoff {event_id} lacks exact history confirmation"
@@ -308,14 +315,21 @@ def _prepare_candidate(
         raise ValueError(
             f"Browser handoff {event_id} has mismatched conversation_id"
         )
-    if connection.execute(
+    history_turn = connection.execute(
         "SELECT 1 FROM conversation_turns WHERE status_id = ?",
         (event_id,),
-    ).fetchone() is None:
+    ).fetchone()
+    if history_turn is None:
         raise ValueError(
             f"Browser handoff {event_id} has no imported exact history turn"
         )
+    return event
 
+
+def _candidate_evidence(
+    event_id: str,
+    record: dict[str, Any],
+) -> list[str]:
     evidence = record.get("evidence", [])
     if isinstance(evidence, str):
         evidence = [evidence] if evidence.strip() else []
@@ -323,6 +337,17 @@ def _prepare_candidate(
         raise ValueError(
             f"Browser handoff {event_id} evidence must be text or an array"
         )
+    return sorted(
+        {str(value).strip() for value in evidence if str(value).strip()}
+    )
+
+
+def _candidate_disposition(
+    event_id: str,
+    watcher_disposition: str,
+    record: dict[str, Any],
+    dependencies: Dependencies,
+) -> str:
     disposition = dependencies.required_text(record, "disposition")
     expected_markers = {
         "published": "verified_publication_pending_root_resolve",
@@ -330,13 +355,49 @@ def _prepare_candidate(
         "blocked": "durable_blocked_pending_root_resolve",
     }
     if disposition not in expected_markers:
-        raise ValueError(
-            f"Browser handoff {event_id} has invalid disposition"
-        )
+        raise ValueError(f"Browser handoff {event_id} has invalid disposition")
     if watcher_disposition != expected_markers[disposition]:
         raise ValueError(
             f"Browser handoff {event_id} has an invalid {disposition} marker"
         )
+    return disposition
+
+
+def _candidate_classification(
+    event_id: str,
+    record: dict[str, Any],
+    dependencies: Dependencies,
+) -> tuple[str | None, str | None]:
+    stance = dependencies.optional_text(record, "stance")
+    if stance not in {None, "supportive", "opposing", "neutral", "ambiguous"}:
+        raise ValueError(
+            f"Browser handoff {event_id} has invalid broad stance"
+        )
+    confidence = dependencies.optional_text(record, "confidence")
+    if confidence not in {None, "high", "medium", "low"}:
+        raise ValueError(f"Browser handoff {event_id} has invalid confidence")
+    return stance, confidence
+
+
+def _candidate_item(
+    config: Any,
+    connection: sqlite3.Connection,
+    *,
+    event_id: str,
+    event: sqlite3.Row,
+    record: dict[str, Any],
+    watcher_disposition: str,
+    is_revision: bool,
+    revision_reason: str | None,
+    evidence: list[str],
+    dependencies: Dependencies,
+) -> dict[str, Any]:
+    disposition = _candidate_disposition(
+        event_id,
+        watcher_disposition,
+        record,
+        dependencies,
+    )
     reply_url, _ = _validated_urls(
         config,
         connection,
@@ -354,17 +415,12 @@ def _prepare_candidate(
         disposition=disposition,
         blocker_code=blocker_code,
     )
-    stance = dependencies.optional_text(record, "stance")
-    if stance not in {None, "supportive", "opposing", "neutral", "ambiguous"}:
-        raise ValueError(
-            f"Browser handoff {event_id} has invalid broad stance"
-        )
-    confidence = dependencies.optional_text(record, "confidence")
-    if confidence not in {None, "high", "medium", "low"}:
-        raise ValueError(
-            f"Browser handoff {event_id} has invalid confidence"
-        )
-    item = {
+    stance, confidence = _candidate_classification(
+        event_id,
+        record,
+        dependencies,
+    )
+    return {
         "event_id": event_id,
         "disposition": disposition,
         "reason": dependencies.required_text(record, "reason"),
@@ -374,34 +430,73 @@ def _prepare_candidate(
         "stance_detail": dependencies.optional_text(record, "stance_detail"),
         "confidence": confidence,
         "media_meaning": dependencies.optional_text(record, "media_meaning"),
-        "evidence": sorted(
-            {str(value).strip() for value in evidence if str(value).strip()}
-        ),
+        "evidence": evidence,
         "is_revision": is_revision,
         "revision_reason": revision_reason,
     }
+
+
+def _revision_already_applied(
+    connection: sqlite3.Connection,
+    event_id: str,
+    item: dict[str, Any],
+) -> bool:
     existing = connection.execute(
         "SELECT * FROM event_resolutions WHERE event_id = ?",
         (event_id,),
     ).fetchone()
-    if is_revision:
-        if existing is None:
-            raise ValueError(
-                f"Browser handoff {event_id} has no resolution to revise"
-            )
-        expected = {
-            "disposition": item["disposition"],
-            "reason": item["reason"],
-            "reply_url": item["reply_url"],
-            "blocker_code": item["blocker_code"],
-            "stance": item["stance"],
-            "stance_detail": item["stance_detail"],
-            "confidence": item["confidence"],
-            "media_meaning": item["media_meaning"],
-            "evidence_json": json.dumps(item["evidence"], ensure_ascii=False),
-        }
-        if all(existing[name] == value for name, value in expected.items()):
-            return None, True
+    if not item["is_revision"]:
+        return False
+    if existing is None:
+        raise ValueError(
+            f"Browser handoff {event_id} has no resolution to revise"
+        )
+    expected = {
+        "disposition": item["disposition"],
+        "reason": item["reason"],
+        "reply_url": item["reply_url"],
+        "blocker_code": item["blocker_code"],
+        "stance": item["stance"],
+        "stance_detail": item["stance_detail"],
+        "confidence": item["confidence"],
+        "media_meaning": item["media_meaning"],
+        "evidence_json": json.dumps(item["evidence"], ensure_ascii=False),
+    }
+    return all(existing[name] == value for name, value in expected.items())
+
+
+def _prepare_candidate(
+    config: Any,
+    connection: sqlite3.Connection,
+    *,
+    event_id: str,
+    record: dict[str, Any],
+    dependencies: Dependencies,
+) -> tuple[dict[str, Any] | None, bool]:
+    watcher_disposition, is_revision, revision_reason = (
+        _candidate_revision_context(record, dependencies)
+    )
+    event = _candidate_event(
+        config,
+        connection,
+        event_id=event_id,
+        record=record,
+        dependencies=dependencies,
+    )
+    item = _candidate_item(
+        config,
+        connection,
+        event_id=event_id,
+        event=event,
+        record=record,
+        watcher_disposition=watcher_disposition,
+        is_revision=is_revision,
+        revision_reason=revision_reason,
+        evidence=_candidate_evidence(event_id, record),
+        dependencies=dependencies,
+    )
+    if _revision_already_applied(connection, event_id, item):
+        return None, True
     return item, False
 
 

@@ -8,7 +8,7 @@ import json
 import re
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Iterable
 
 from scripts import watcher_constants, watcher_io, watcher_time
 
@@ -23,6 +23,14 @@ isoformat = watcher_time.isoformat
 class Dependencies:
     write_health: Callable[..., dict[str, Any]]
     notify_macos: Callable[..., None]
+
+
+@dataclass(frozen=True)
+class IngestedEvents:
+    new_ids: list[str]
+    observed_ids: list[str]
+    seen_ids: list[str]
+    self_authored_ids: list[str]
 
 def is_eligible_reply(
     connection: sqlite3.Connection,
@@ -216,6 +224,207 @@ def refresh_wake_file(config: Any, connection: sqlite3.Connection) -> dict[str, 
     return payload
 
 
+def _included_entities(
+    response: dict[str, Any],
+) -> tuple[dict[str, str], dict[str, dict[str, Any]]]:
+    includes = response.get("includes", {})
+    users = {
+        str(user.get("id")): str(user.get("username"))
+        for user in includes.get("users", [])
+        if user.get("id") and user.get("username")
+    }
+    media = {
+        str(item.get("media_key")): item
+        for item in includes.get("media", [])
+        if item.get("media_key")
+    }
+    return users, media
+
+
+def _stored_event_payload(
+    event: dict[str, Any],
+    media: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    stored = dict(event)
+    media_keys = (event.get("attachments") or {}).get("media_keys") or []
+    included_media = [
+        media[str(media_key)]
+        for media_key in media_keys
+        if str(media_key) in media
+    ]
+    if included_media:
+        stored["included_media"] = included_media
+    return stored
+
+
+def _event_delivery_state(
+    config: Any,
+    connection: sqlite3.Connection,
+    *,
+    source: str,
+    author_id: str | None,
+    is_reply: bool,
+    in_reply_to_user_id: str | None,
+    conversation_id: str | None,
+) -> str:
+    eligible_reply = is_eligible_reply(
+        connection,
+        config,
+        author_id=author_id,
+        is_reply=is_reply,
+        in_reply_to_user_id=in_reply_to_user_id,
+        conversation_id=conversation_id,
+    )
+    if (
+        author_id != config.user_id
+        and config.mandatory_response_mode
+        and source == "x_api"
+        and is_reply
+    ):
+        eligible_reply = True
+    if author_id == config.user_id:
+        return "self_authored"
+    if config.queue_direct_replies_only and not eligible_reply:
+        return "ignored"
+    return "queued"
+
+
+def _insert_response_events(
+    config: Any,
+    connection: sqlite3.Connection,
+    response: dict[str, Any],
+    *,
+    source: str,
+    observed_at: str,
+) -> IngestedEvents:
+    users, media = _included_entities(response)
+    new_ids: list[str] = []
+    observed_ids: list[str] = []
+    seen_ids: list[str] = []
+    self_authored_ids: list[str] = []
+    for event in response.get("data", []) or []:
+        event_id = str(event.get("id", "")).strip()
+        if not event_id:
+            continue
+        seen_ids.append(event_id)
+        referenced = event.get("referenced_tweets") or []
+        is_reply = any(item.get("type") == "replied_to" for item in referenced)
+        author_id = str(event.get("author_id", "")).strip() or None
+        in_reply_to_user_id = (
+            str(event.get("in_reply_to_user_id", "")).strip() or None
+        )
+        conversation_id = str(event.get("conversation_id", "")).strip() or None
+        delivery_state = _event_delivery_state(
+            config,
+            connection,
+            source=source,
+            author_id=author_id,
+            is_reply=is_reply,
+            in_reply_to_user_id=in_reply_to_user_id,
+            conversation_id=conversation_id,
+        )
+        cursor = connection.execute(
+            """
+            INSERT OR IGNORE INTO events(
+                event_id, author_id, username, created_at, conversation_id,
+                in_reply_to_user_id, is_reply, payload_json, first_seen_at,
+                delivery_state
+            ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                event_id,
+                author_id,
+                users.get(author_id or ""),
+                event.get("created_at"),
+                conversation_id,
+                in_reply_to_user_id,
+                1 if is_reply else 0,
+                json.dumps(
+                    _stored_event_payload(event, media),
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                observed_at,
+                delivery_state,
+            ),
+        )
+        if cursor.rowcount != 1:
+            continue
+        observed_ids.append(event_id)
+        if delivery_state == "queued":
+            new_ids.append(event_id)
+        elif delivery_state == "self_authored":
+            self_authored_ids.append(event_id)
+    return IngestedEvents(
+        new_ids=new_ids,
+        observed_ids=observed_ids,
+        seen_ids=seen_ids,
+        self_authored_ids=self_authored_ids,
+    )
+
+
+def _update_poll_metadata(
+    config: Any,
+    connection: sqlite3.Connection,
+    response: dict[str, Any],
+    ingested: IngestedEvents,
+    *,
+    source: str,
+    started_at: str,
+    observed_at: str,
+    returned_count: int,
+    request_count: int,
+    poll_status: str,
+    live_bootstrap: bool,
+    advance_conversation_tail_cursor: bool,
+    conversation_tail_cursor_at: str | None,
+) -> None:
+    if source != CONVERSATION_TAIL_SOURCE:
+        newest_id = numeric_max(
+            [
+                get_meta(connection, "since_id"),
+                response.get("meta", {}).get("newest_id"),
+                *ingested.seen_ids,
+            ]
+        )
+        if newest_id:
+            set_meta(connection, "since_id", newest_id)
+    if source == CONVERSATION_TAIL_SOURCE and advance_conversation_tail_cursor:
+        set_meta(
+            connection,
+            "conversation_tail_last_success_at",
+            conversation_tail_cursor_at or observed_at,
+        )
+    if get_meta(connection, "first_success_at") is None:
+        set_meta(connection, "first_success_at", observed_at)
+    if live_bootstrap and get_meta(connection, "initial_audit_started_at") is None:
+        set_meta(connection, "initial_audit_started_at", observed_at)
+        delete_meta(connection, "initial_audit_completed_at")
+    set_meta(connection, "last_success_at", observed_at)
+    set_meta(connection, "consecutive_failures", "0")
+    delete_meta(connection, "last_error_class")
+    delete_meta(connection, "last_error_message")
+    if ingested.new_ids:
+        set_meta(connection, "last_new_event_at", observed_at)
+    connection.execute(
+        """
+        INSERT INTO poll_runs(
+            started_at, completed_at, source, status, new_count,
+            returned_count, request_count
+        ) VALUES(?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            started_at,
+            observed_at,
+            source,
+            poll_status,
+            len(ingested.new_ids),
+            returned_count,
+            request_count,
+        ),
+    )
+
+
 def ingest_response(
     config: Any,
     connection: sqlite3.Connection,
@@ -239,19 +448,6 @@ def ingest_response(
     )
     if measured_returned_count < 0 or request_count < 0:
         raise ValueError("Poll resource counters must not be negative")
-    users = {
-        str(user.get("id")): str(user.get("username"))
-        for user in response.get("includes", {}).get("users", [])
-        if user.get("id") and user.get("username")
-    }
-    media = {
-        str(item.get("media_key")): item
-        for item in response.get("includes", {}).get("media", [])
-        if item.get("media_key")
-    }
-    new_ids: list[str] = []
-    observed_ids: list[str] = []
-    seen_ids: list[str] = []
     live_bootstrap = (
         source == "x_api"
         and get_meta(connection, "first_success_at") is None
@@ -264,164 +460,57 @@ def ingest_response(
             connection,
             config.user_id,
         )
-        observed_self_authored_ids: list[str] = []
-        for event in response.get("data", []) or []:
-            event_id = str(event.get("id", "")).strip()
-            if not event_id:
-                continue
-            stored_event = dict(event)
-            media_keys = (
-                (event.get("attachments") or {}).get("media_keys") or []
-            )
-            included_media = [
-                media[str(media_key)]
-                for media_key in media_keys
-                if str(media_key) in media
-            ]
-            if included_media:
-                stored_event["included_media"] = included_media
-            seen_ids.append(event_id)
-            referenced = event.get("referenced_tweets") or []
-            is_reply = any(item.get("type") == "replied_to" for item in referenced)
-            author_id = str(event.get("author_id", "")).strip() or None
-            in_reply_to_user_id = (
-                str(event.get("in_reply_to_user_id", "")).strip() or None
-            )
-            conversation_id = (
-                str(event.get("conversation_id", "")).strip() or None
-            )
-            eligible_reply = is_eligible_reply(
-                connection,
-                config,
-                author_id=author_id,
-                is_reply=is_reply,
-                in_reply_to_user_id=in_reply_to_user_id,
-                conversation_id=conversation_id,
-            )
-            if (
-                author_id != config.user_id
-                and config.mandatory_response_mode
-                and source == "x_api"
-                and is_reply
-            ):
-                # The endpoint itself is the authenticated user's mentions
-                # timeline. In mandatory mode, a reply to another participant
-                # can still be an eligible continuation when X carries
-                # @axrbarsic through the thread participant list. Queue it for
-                # live Browser inspection instead of trusting an incomplete
-                # local history backfill to prove the conversation route.
-                eligible_reply = True
-            if author_id == config.user_id:
-                delivery_state = "self_authored"
-            elif config.queue_direct_replies_only and not eligible_reply:
-                delivery_state = "ignored"
-            else:
-                delivery_state = "queued"
-            cursor = connection.execute(
-                """
-                INSERT OR IGNORE INTO events(
-                    event_id, author_id, username, created_at, conversation_id,
-                    in_reply_to_user_id, is_reply, payload_json, first_seen_at,
-                    delivery_state
-                ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    event_id,
-                    author_id,
-                    users.get(author_id or ""),
-                    event.get("created_at"),
-                    conversation_id,
-                    in_reply_to_user_id,
-                    1 if is_reply else 0,
-                    json.dumps(stored_event, ensure_ascii=False, sort_keys=True),
-                    observed_at,
-                    delivery_state,
-                ),
-            )
-            if cursor.rowcount == 1:
-                observed_ids.append(event_id)
-                if delivery_state == "queued":
-                    new_ids.append(event_id)
-                elif delivery_state == "self_authored":
-                    observed_self_authored_ids.append(event_id)
-
-        if source != CONVERSATION_TAIL_SOURCE:
-            previous_cursor = get_meta(connection, "since_id")
-            newest_id = numeric_max(
-                [
-                    previous_cursor,
-                    response.get("meta", {}).get("newest_id"),
-                    *seen_ids,
-                ]
-            )
-            if newest_id:
-                set_meta(connection, "since_id", newest_id)
-        if (
-            source == CONVERSATION_TAIL_SOURCE
-            and advance_conversation_tail_cursor
-        ):
-            set_meta(
-                connection,
-                "conversation_tail_last_success_at",
-                conversation_tail_cursor_at or observed_at,
-            )
-        if get_meta(connection, "first_success_at") is None:
-            set_meta(connection, "first_success_at", observed_at)
-        if live_bootstrap and get_meta(connection, "initial_audit_started_at") is None:
-            set_meta(connection, "initial_audit_started_at", observed_at)
-            delete_meta(connection, "initial_audit_completed_at")
-        set_meta(connection, "last_success_at", observed_at)
-        set_meta(connection, "consecutive_failures", "0")
-        delete_meta(connection, "last_error_class")
-        delete_meta(connection, "last_error_message")
-        if new_ids:
-            set_meta(connection, "last_new_event_at", observed_at)
-        connection.execute(
-            """
-            INSERT INTO poll_runs(
-                started_at, completed_at, source, status, new_count,
-                returned_count, request_count
-            ) VALUES(?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                started,
-                observed_at,
-                source,
-                poll_status,
-                len(new_ids),
-                measured_returned_count,
-                request_count,
-            ),
+        ingested = _insert_response_events(
+            config,
+            connection,
+            response,
+            source=source,
+            observed_at=observed_at,
+        )
+        _update_poll_metadata(
+            config,
+            connection,
+            response,
+            ingested,
+            source=source,
+            started_at=started,
+            observed_at=observed_at,
+            returned_count=measured_returned_count,
+            request_count=request_count,
+            poll_status=poll_status,
+            live_bootstrap=live_bootstrap,
+            advance_conversation_tail_cursor=advance_conversation_tail_cursor,
+            conversation_tail_cursor_at=conversation_tail_cursor_at,
         )
 
-    health = dependencies.write_health(config, connection, last_new_count=len(new_ids))
+    health = dependencies.write_health(
+        config,
+        connection,
+        last_new_count=len(ingested.new_ids),
+    )
     wake = refresh_wake_file(config, connection)
-    if new_ids:
+    if ingested.new_ids:
         dependencies.notify_macos(
             config,
             "Новые ответы в X",
-            f"В очереди {wake['pending_count']}, новых {len(new_ids)}.",
+            f"В очереди {wake['pending_count']}, новых {len(ingested.new_ids)}.",
         )
     return {
         "source": source,
         "bootstrap": live_bootstrap,
-        "observed_count": len(observed_ids),
-        "new_count": len(new_ids),
+        "observed_count": len(ingested.observed_ids),
+        "new_count": len(ingested.new_ids),
         "returned_count": measured_returned_count,
         "request_count": request_count,
-        "new_event_ids": sorted(new_ids, key=int),
+        "new_event_ids": sorted(ingested.new_ids, key=int),
         "self_authored_event_ids": sorted(
-            set(
-                reclassified_self_authored_ids
-                + observed_self_authored_ids
-            ),
+            set(reclassified_self_authored_ids + ingested.self_authored_ids),
             key=int,
         ),
         "since_id": get_meta(connection, "since_id"),
         "pending_count": wake["pending_count"],
         "health": health["status"],
     }
-
 
 def baseline_existing_queue(
     config: Any,

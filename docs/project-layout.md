@@ -15,7 +15,7 @@ x-mention-watcher/
   docs/                    English and Russian documentation
   macos/                   source LaunchAgent templates
   scripts/                 dispatcher, bridge, and service utilities
-  skill-backup/            restorable source for all three skills
+  skill-backup/            restorable source for all four skills
   tests/                   complete test suite
   var/                     mutable local state, excluded from Git
   *.py                     watcher, importer, and snapshot tools
@@ -27,6 +27,10 @@ The watcher entrypoint is only the composition root. Durable domains live in
 the `scripts/watcher_*.py` modules, and every tracked runtime module is listed
 in `recovery/system-contract.json`. This keeps deployment drift detectable
 without duplicating source trees.
+
+Public control-plane scripts are compatibility facades as well. Their Desktop
+lifecycle, incident store, recovery route, and doctor runtime modules live in
+the same `scripts/` tree and are listed in the system contract.
 
 `browser_owner_cwd` is `.`. The Browser owner therefore runs in the same
 canonical directory and does not require a second project under

@@ -112,6 +112,162 @@ def _codesign_value(payload: bytes, key: str) -> str | None:
     return None
 
 
+def _verify_signature(app: Path, errors: list[str]) -> None:
+    signature = _run(
+        ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)]
+    )
+    if signature.returncode != 0:
+        errors.append("bundle signature verification failed")
+    details = _run(["/usr/bin/codesign", "-d", "--verbose=4", str(app)])
+    team_id = _codesign_value(
+        details.stdout + b"\n" + details.stderr,
+        "TeamIdentifier",
+    )
+    if details.returncode != 0 or team_id != EXPECTED_TEAM_ID:
+        errors.append("unexpected code-signing team")
+
+
+def _bundle_identifier(app: Path, errors: list[str]) -> str | None:
+    info_path = app / "Contents" / "Info.plist"
+    try:
+        info = plistlib.loads(info_path.read_bytes())
+        if not isinstance(info, dict):
+            raise ValueError("Info.plist root is not a dictionary")
+        bundle_id = str(info.get("CFBundleIdentifier", "")).strip()
+    except (OSError, plistlib.InvalidFileException, ValueError):
+        errors.append("bundle Info.plist is unreadable")
+        bundle_id = None
+    if bundle_id != EXPECTED_BUNDLE_ID:
+        errors.append("unexpected bundle identifier")
+    return bundle_id
+
+
+def _verify_signed_entitlements(
+    app: Path,
+    errors: list[str],
+) -> str | None:
+    entitlements, entitlement_error = _plist_from_command(
+        [
+            "/usr/bin/codesign",
+            "-d",
+            "--entitlements",
+            ":-",
+            str(app),
+        ]
+    )
+    if entitlements is None:
+        errors.append(
+            "code-signing entitlements are unreadable"
+            + (f": {entitlement_error}" if entitlement_error else "")
+        )
+        return None
+    application_id = str(
+        entitlements.get("com.apple.application-identifier", "")
+    ).strip()
+    if application_id != EXPECTED_APPLICATION_ID:
+        errors.append("unexpected application identifier entitlement")
+    groups = entitlements.get("keychain-access-groups")
+    if not isinstance(groups, list) or EXPECTED_APPLICATION_ID not in groups:
+        errors.append("expected keychain access group is missing")
+    return application_id
+
+
+def _profile_expiration(
+    profile: dict[str, Any],
+    *,
+    minimum_valid_days: int,
+    errors: list[str],
+) -> str | None:
+    expiration = profile.get("ExpirationDate")
+    if not isinstance(expiration, datetime):
+        errors.append("provisioning profile expiration is missing")
+        return None
+    if expiration.tzinfo is None:
+        expiration = expiration.replace(tzinfo=timezone.utc)
+    expiration_utc = expiration.astimezone(timezone.utc)
+    if (
+        expiration_utc - datetime.now(timezone.utc)
+    ).total_seconds() < minimum_valid_days * 86400:
+        errors.append("provisioning profile expires too soon")
+    return expiration_utc.isoformat()
+
+
+def _verify_profile_identity(
+    profile: dict[str, Any],
+    errors: list[str],
+) -> None:
+    platforms = profile.get("Platform")
+    if not isinstance(platforms, list) or not {"OSX", "macOS"}.intersection(
+        str(value) for value in platforms
+    ):
+        errors.append("provisioning profile is not for macOS")
+    team_identifiers = profile.get("TeamIdentifier")
+    if (
+        not isinstance(team_identifiers, list)
+        or EXPECTED_TEAM_ID not in team_identifiers
+    ):
+        errors.append("provisioning profile has an unexpected team")
+    application_prefixes = profile.get("ApplicationIdentifierPrefix")
+    if (
+        not isinstance(application_prefixes, list)
+        or EXPECTED_TEAM_ID not in application_prefixes
+    ):
+        errors.append("provisioning profile has an unexpected app prefix")
+
+
+def _verify_profile_entitlements(
+    profile: dict[str, Any],
+    errors: list[str],
+) -> None:
+    entitlements = profile.get("Entitlements", {})
+    if not isinstance(entitlements, dict):
+        errors.append("profile entitlements are missing")
+        return
+    profile_app_id = entitlements.get(
+        "com.apple.application-identifier"
+    ) or entitlements.get("application-identifier")
+    if not isinstance(profile_app_id, str) or not _profile_allows(
+        EXPECTED_APPLICATION_ID,
+        [profile_app_id],
+    ):
+        errors.append("profile does not authorize the application ID")
+    if not _profile_allows(
+        EXPECTED_APPLICATION_ID,
+        entitlements.get("keychain-access-groups"),
+    ):
+        errors.append("profile does not authorize the keychain group")
+
+
+def _verify_profile(
+    app: Path,
+    *,
+    minimum_valid_days: int,
+    errors: list[str],
+) -> tuple[str | None, str | None]:
+    profile_path = app / "Contents" / "embedded.provisionprofile"
+    if not profile_path.is_file():
+        errors.append("embedded provisioning profile is missing")
+        return None, None
+    profile, profile_error = _plist_from_command(
+        ["/usr/bin/security", "cms", "-D", "-i", str(profile_path)]
+    )
+    if profile is None:
+        errors.append(
+            "embedded provisioning profile is unreadable"
+            + (f": {profile_error}" if profile_error else "")
+        )
+        return None, None
+    profile_name = str(profile.get("Name", "")).strip() or None
+    profile_expires_at = _profile_expiration(
+        profile,
+        minimum_valid_days=minimum_valid_days,
+        errors=errors,
+    )
+    _verify_profile_identity(profile, errors)
+    _verify_profile_entitlements(profile, errors)
+    return profile_name, profile_expires_at
+
+
 def verify_bundle(
     executable: Path,
     *,
@@ -130,145 +286,14 @@ def verify_bundle(
     elif not executable.is_file():
         errors.append("helper executable is missing")
     else:
-        signature = _run(
-            ["/usr/bin/codesign", "--verify", "--deep", "--strict", str(app)]
+        _verify_signature(app, errors)
+        bundle_id = _bundle_identifier(app, errors)
+        application_id = _verify_signed_entitlements(app, errors)
+        profile_name, profile_expires_at = _verify_profile(
+            app,
+            minimum_valid_days=minimum_valid_days,
+            errors=errors,
         )
-        if signature.returncode != 0:
-            errors.append("bundle signature verification failed")
-        signature_details = _run(
-            ["/usr/bin/codesign", "-d", "--verbose=4", str(app)]
-        )
-        signing_team_id = _codesign_value(
-            signature_details.stdout + b"\n" + signature_details.stderr,
-            "TeamIdentifier",
-        )
-        if (
-            signature_details.returncode != 0
-            or signing_team_id != EXPECTED_TEAM_ID
-        ):
-            errors.append("unexpected code-signing team")
-
-        info_path = app / "Contents" / "Info.plist"
-        try:
-            info = plistlib.loads(info_path.read_bytes())
-            if not isinstance(info, dict):
-                raise ValueError("Info.plist root is not a dictionary")
-            bundle_id = str(info.get("CFBundleIdentifier", "")).strip()
-        except (OSError, plistlib.InvalidFileException, ValueError):
-            errors.append("bundle Info.plist is unreadable")
-        if bundle_id != EXPECTED_BUNDLE_ID:
-            errors.append("unexpected bundle identifier")
-
-        entitlements, entitlement_error = _plist_from_command(
-            [
-                "/usr/bin/codesign",
-                "-d",
-                "--entitlements",
-                ":-",
-                str(app),
-            ]
-        )
-        if entitlements is None:
-            errors.append(
-                "code-signing entitlements are unreadable"
-                + (f": {entitlement_error}" if entitlement_error else "")
-            )
-        else:
-            application_id = str(
-                entitlements.get("com.apple.application-identifier", "")
-            ).strip()
-            if application_id != EXPECTED_APPLICATION_ID:
-                errors.append("unexpected application identifier entitlement")
-            groups = entitlements.get("keychain-access-groups")
-            if (
-                not isinstance(groups, list)
-                or EXPECTED_APPLICATION_ID not in groups
-            ):
-                errors.append("expected keychain access group is missing")
-
-        profile_path = app / "Contents" / "embedded.provisionprofile"
-        if not profile_path.is_file():
-            errors.append("embedded provisioning profile is missing")
-        else:
-            profile, profile_error = _plist_from_command(
-                ["/usr/bin/security", "cms", "-D", "-i", str(profile_path)]
-            )
-            if profile is None:
-                errors.append(
-                    "embedded provisioning profile is unreadable"
-                    + (f": {profile_error}" if profile_error else "")
-                )
-            else:
-                profile_name = str(profile.get("Name", "")).strip() or None
-                expiration = profile.get("ExpirationDate")
-                if isinstance(expiration, datetime):
-                    if expiration.tzinfo is None:
-                        expiration = expiration.replace(tzinfo=timezone.utc)
-                    profile_expires_at = expiration.astimezone(
-                        timezone.utc
-                    ).isoformat()
-                    remaining_seconds = (
-                        expiration.astimezone(timezone.utc)
-                        - datetime.now(timezone.utc)
-                    ).total_seconds()
-                    if remaining_seconds < minimum_valid_days * 86400:
-                        errors.append("provisioning profile expires too soon")
-                else:
-                    errors.append("provisioning profile expiration is missing")
-
-                platforms = profile.get("Platform")
-                if not isinstance(platforms, list) or not {
-                    "OSX",
-                    "macOS",
-                }.intersection(str(value) for value in platforms):
-                    errors.append("provisioning profile is not for macOS")
-
-                team_identifiers = profile.get("TeamIdentifier")
-                if (
-                    not isinstance(team_identifiers, list)
-                    or EXPECTED_TEAM_ID not in team_identifiers
-                ):
-                    errors.append(
-                        "provisioning profile has an unexpected team"
-                    )
-                application_prefixes = profile.get(
-                    "ApplicationIdentifierPrefix"
-                )
-                if (
-                    not isinstance(application_prefixes, list)
-                    or EXPECTED_TEAM_ID not in application_prefixes
-                ):
-                    errors.append(
-                        "provisioning profile has an unexpected app prefix"
-                    )
-
-                profile_entitlements = profile.get("Entitlements", {})
-                if not isinstance(profile_entitlements, dict):
-                    errors.append("profile entitlements are missing")
-                else:
-                    profile_app_id = (
-                        profile_entitlements.get(
-                            "com.apple.application-identifier"
-                        )
-                        or profile_entitlements.get("application-identifier")
-                    )
-                    if not isinstance(
-                        profile_app_id,
-                        str,
-                    ) or not _profile_allows(
-                        EXPECTED_APPLICATION_ID,
-                        [profile_app_id],
-                    ):
-                        errors.append(
-                            "profile does not authorize the application ID"
-                        )
-                    if not _profile_allows(
-                        EXPECTED_APPLICATION_ID,
-                        profile_entitlements.get("keychain-access-groups"),
-                    ):
-                        errors.append(
-                            "profile does not authorize the keychain group"
-                        )
 
     return BundleVerification(
         ok=not errors,
