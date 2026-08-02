@@ -318,6 +318,75 @@ class SystemDoctorTests(unittest.TestCase):
         self.assertEqual(check.identifier, "runtime.relay_progress")
         self.assertEqual(check.details["age_seconds"], 181.0)
 
+    def test_production_relay_grace_covers_heartbeat_startup(self) -> None:
+        contract_path = (
+            Path(__file__).resolve().parents[1]
+            / "recovery"
+            / "system-contract.json"
+        )
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        max_wait_seconds = contract["runtime"]["max_relay_wait_seconds"]
+        now = datetime(2026, 8, 2, 9, 34, tzinfo=timezone.utc)
+        requested_at = now - timedelta(seconds=240)
+        dispatch_state = {
+            "status": "desktop_ready_waiting_relay",
+            "waiting_since": requested_at.isoformat(),
+            "work_kind": "x",
+        }
+        event_dispatch_state = {
+            "status": "dispatch_kicked",
+            "reason": "claim_completed_with_pending_queue",
+            "requested_at": requested_at.isoformat(),
+            "event_ids": ["oldest"],
+        }
+
+        relay = system_doctor.relay_progress_check(
+            pending_count=1,
+            dispatch_state=dispatch_state,
+            event_dispatch_state=event_dispatch_state,
+            required_event_id="oldest",
+            owner=None,
+            max_wait_seconds=max_wait_seconds,
+            now=now,
+        )
+        latency = system_doctor.queue_latency_check(
+            events=[
+                {
+                    "id": "oldest",
+                    "first_seen_at": (
+                        now - timedelta(seconds=600)
+                    ).isoformat(),
+                }
+            ],
+            owner=None,
+            dispatch_state=dispatch_state,
+            event_dispatch_state=event_dispatch_state,
+            delivery_grace_seconds=max_wait_seconds,
+            max_age_seconds=300,
+            now=now,
+        )
+
+        self.assertEqual(max_wait_seconds, 300)
+        self.assertEqual(relay.status, "pass")
+        self.assertEqual(latency.status, "warn")
+        self.assertTrue(latency.details["active_x_delivery"])
+
+        expired_at = requested_at + timedelta(
+            seconds=max_wait_seconds + 1
+        )
+        expired_relay = system_doctor.relay_progress_check(
+            pending_count=1,
+            dispatch_state=dispatch_state,
+            event_dispatch_state=event_dispatch_state,
+            required_event_id="oldest",
+            owner=None,
+            max_wait_seconds=max_wait_seconds,
+            now=expired_at,
+        )
+
+        self.assertEqual(expired_relay.status, "fail")
+        self.assertEqual(expired_relay.details["age_seconds"], 301.0)
+
     def test_relay_progress_accepts_active_owner(self) -> None:
         check = system_doctor.relay_progress_check(
             pending_count=2,

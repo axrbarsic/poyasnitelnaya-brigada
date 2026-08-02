@@ -218,6 +218,12 @@ While Desktop is ready and no owner exists, dispatcher state preserves one
 `max_relay_wait_seconds` contract. Resource deferral and an active owner do not
 count as a stalled relay.
 
+The production relay wait is 300 seconds. This covers one missed or delayed
+heartbeat tick plus the mandatory skill preflight before the claim becomes
+durable. The event dispatcher still records the original `waiting_since`, so a
+real stall becomes FAIL immediately after that bounded grace. Queue age remains
+visible as WARN throughout the handoff and does not reset on repeated kicks.
+
 ## Memory and quality contracts
 
 - Idle: zero model tokens, zero Browser tabs, zero new tasks.

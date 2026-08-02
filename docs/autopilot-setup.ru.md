@@ -238,6 +238,13 @@ scheduled run создает отдельную задачу и может ос�
 контракт `max_relay_wait_seconds`. Resource deferral и активный owner не
 считаются остановкой relay.
 
+Production-граница ожидания relay равна 300 секундам. Она покрывает один
+пропущенный или задержанный heartbeat tick и обязательный skill preflight до
+durable claim. Event dispatcher сохраняет исходный `waiting_since`, поэтому
+настоящая остановка становится FAIL сразу после этой ограниченной границы.
+Возраст очереди всё это время остаётся видимым как WARN и не сбрасывается
+повторными kick.
+
 Отдельная проверка `runtime.queue_latency` измеряет `first_seen_at` самого
 старого события независимо от свежести poll и dispatcher. Превышение
 `max_queue_age_seconds` без owner является FAIL. Если именно старейшее событие
