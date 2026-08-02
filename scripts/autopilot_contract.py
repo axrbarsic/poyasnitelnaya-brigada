@@ -68,6 +68,18 @@ Sol. Для каждого local-max target применяй локальный 
 прямой просьбе Alex применить именно v1. Не открывай ChatGPT или
 custom GPT и не отправляй туда screenshot, ссылку, текст либо follow-up.
 
+Двойная проверка дубля означает точную live-ветку плюс локальный in-run и
+durable ledger. Если target явно показывает ноль ответов и ledger не содержит
+direct child Alex, не переходи в X search и обратно. Если ответы есть, проверь
+видимых direct children. X search допустим только при реальной неоднозначности,
+когда live-ветка не доказывает наличие или отсутствие child reply.
+
+Для фактчека сначала выдели только материальные проверяемые тезисы и выполни
+один объединённый web search batch максимум из четырёх target-local запросов.
+Дополнительный search допустим только при конкретном незакрытом пробеле.
+Повторно используй первичный источник из exact durable chain после проверки
+его текущей доступности и применимости.
+
 Claim lease является возобновляемым предохранителем. Если с момента claim или
 последнего renew прошло 15 минут, до следующего Browser-действия выполни
 `python3 scripts/autopilot_bridge.py --config config.json --lease-seconds 1800
@@ -169,6 +181,12 @@ ChatGPT открывай только для
 Следующий X API poll выполняет LaunchAgent. Не
 создавай автоматики, задачи или Browser helpers. В финале укажи event ID,
 disposition и verified reply URL.
+
+После публикации получи canonical reply URL из точного нового Alex article.
+Если UI сворачивает длинный текст, не нажимай `Показать ещё` только ради
+повторного чтения: полный exact text проверяет обязательный официальный
+`verify_x_note_tweet.py`. UI остаётся доказательством автора, parent, URL,
+начала и конца, а официальный API report доказывает полный payload.
 
 Evidence каждого claimed event сохраняй в отдельном каталоге
 `var/evidence/browser-owner/<CLAIM_TOKEN>/<EVENT_ID>/`. Единственный вручную
@@ -299,6 +317,9 @@ def build_prompt(
             if min(len(events), max_parallel_read_tabs) == 1
             else "distinct_tab_ids_required\n"
         )
+        + "DUPLICATE_SEARCH_POLICY=live_target_plus_ledger_first\n"
+        + "FACTCHECK_POLICY=one_bounded_search_batch_first\n"
+        + "POST_PUBLICATION_TEXT_POLICY=ui_identity_then_official_api\n"
         + f"PERSONALITY_POLICY_JSON:\n{personality_payload}\n"
         + f"EVENTS_JSON:\n{payload}\n"
     )

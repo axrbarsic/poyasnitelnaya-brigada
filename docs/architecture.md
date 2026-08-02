@@ -379,6 +379,22 @@ without a second model turn for transport. If Alex intentionally keeps Desktop
 open, the self-owned heartbeat performs its small scheduled gate while the
 terminal dispatcher remains model-free.
 
+## External reliability basis
+
+The queue design follows the same core rules documented by mature message
+systems:
+
+- [Google Pub/Sub exactly-once delivery](https://cloud.google.com/pubsub/docs/exactly-once-delivery)
+  requires durable progress until acknowledgment and duplicate prevention when
+  an acknowledgment fails.
+- [Amazon SQS visibility timeout](https://docs.aws.amazon.com/AWSSimpleQueueService/latest/SQSDeveloperGuide/sqs-visibility-timeout.html)
+  keeps an in-flight message hidden during processing, renews long work and
+  returns unfinished work for retry after lease expiry.
+
+This project applies those ideas locally: immutable X event IDs, one
+production event per lease, renewable ownership, idempotent durable commit and
+acknowledgment only after verified publication.
+
 ## Verification model
 
 The full Python suite protects public compatibility surfaces and domain

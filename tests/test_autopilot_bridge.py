@@ -322,6 +322,18 @@ class AutopilotBridgeTests(unittest.TestCase):
             "PARALLEL_TAB_PREFLIGHT=single_tab_expected",
             claimed["prompt"],
         )
+        self.assertIn(
+            "DUPLICATE_SEARCH_POLICY=live_target_plus_ledger_first",
+            claimed["prompt"],
+        )
+        self.assertIn(
+            "FACTCHECK_POLICY=one_bounded_search_batch_first",
+            claimed["prompt"],
+        )
+        self.assertIn(
+            "POST_PUBLICATION_TEXT_POLICY=ui_identity_then_official_api",
+            claimed["prompt"],
+        )
         self.assertNotIn(
             "На iMac 8 GB открывай только одну вкладку X",
             claimed["prompt"],

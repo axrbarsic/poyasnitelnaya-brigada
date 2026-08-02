@@ -205,6 +205,11 @@ Use two independent checks immediately before every publication:
 1. Inspect the target thread for an existing reply from `@axrbarsic`.
 2. Check the in-run ledger for the target post ID or reply ID.
 
+If the exact live target shows zero replies and the ledger has no direct Alex
+child, those checks are sufficient. Do not navigate to X search and back. If
+the target has replies, inspect its visible direct children. Use account search
+only when live child visibility remains genuinely ambiguous.
+
 The X display name is not provenance. An account named «Пояснительная
 бригада» may still contain a self-authored Sol reply. Determine `short` or
 `local-max` only from the durable ledger, exact conversation turns, source
@@ -229,6 +234,12 @@ If any check is uncertain, do not publish until resolved. Never count a skipped 
 ## Fact checking and response quality
 
 Perform a live internet check before drafting every factual X reply, even when the claim seems familiar. Verify unstable or contested claims against current evidence. Prefer primary and authoritative sources, including official documents, courts, international organizations, election monitors, and original statistics.
+
+Group the material factual propositions into one search call with no more than
+four target-local queries. Make another search call only for a named unresolved
+gap. A primary source already stored in the exact durable chain may be reused
+after confirming that it is still available, current where relevant, and
+supports the present sentence.
 
 For a `local-max` reply, use the verified research directly while applying
 `poyasnitelnaya-brigada-v2`. The skill and final publication brain are the same
@@ -441,9 +452,13 @@ Treat each reply or multi-part reply thread as one transaction:
    composer changed or duplicated, replace only that task-owned tab, refill
    from the exact file, and repeat the full checks. After one unverified fresh
    tab attempt, leave the event unresolved with durable evidence.
-9. For a multi-part payload, open the verified reply URL, publish the next
+9. Obtain the canonical URL from the exact new Alex article. If X visually
+   truncates a long Note Tweet, do not click `Show more` only to reconstruct
+   the full body. Record UI author, parent, URL, prefix and suffix, then require
+   the official exact-text API verifier before durable commit.
+10. For a multi-part payload, open the verified reply URL, publish the next
    exact part as its child, and repeat until the complete chain is verified.
-10. Record every part index, exact text hash, status ID, parent status ID, and
+11. Record every part index, exact text hash, status ID, parent status ID, and
     reply URL in the ledger.
 
 Run the queue gate and duplicate check immediately before the first part.
