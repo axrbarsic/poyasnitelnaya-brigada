@@ -78,6 +78,9 @@ Create ignored `config.json` from the example and set:
 {
   "browser_owner_cwd": ".",
   "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
+  "codex_project_id": "CODEX_PROJECT_ID",
+  "autopilot_owner_rotation_after_runs": 20,
+  "autopilot_owner_rotation_state_file": "var/browser-owner-rotation.json",
   "desktop_relay_mode": "in_app_heartbeat",
   "desktop_auto_quit_after_work": true,
   "desktop_auto_quit_grace_seconds": 180,
@@ -117,12 +120,17 @@ resources, and has a separate read budget. Exhausting the tail budget does not
 stop owned mentions. Inspect counters with
 `python3 xmention_watcher.py --config config.json status`.
 
-`browser_owner_thread_id` identifies one Sol Max owner. `x-relay` is a
+`browser_owner_thread_id` identifies the current Sol Max owner. `x-relay` is a
 heartbeat attached to that same task, not a standalone automation or a relay
-thread. `reserve-handoff` prevents an adjacent run for 180 seconds, then the
-same task executes the matching claim. There is no cross-thread send, owner
-thread read, or process-local `hostId` dependency. Atomic reservation plus the
-global owner claim prevent concurrent Browser owners. The restorable heartbeat prompt is tracked in
+thread. After the configured number of completed runs, one durable transaction
+creates a clean replacement, retargets the existing heartbeat through the
+official Codex app API, switches the runtime role pointer, verifies the new
+task, and archives the old task. A rotation token embedded in the initialization
+prompt lets an interrupted run rediscover the same replacement instead of
+creating a duplicate. `reserve-handoff` prevents an adjacent run for 180
+seconds, then the same task executes the matching claim. There is no
+cross-thread send or process-local `hostId` dependency. Atomic reservation plus
+the global owner claim prevent concurrent Browser owners. The restorable heartbeat prompt is tracked in
 [`macos/x-relay.prompt.txt`](../macos/x-relay.prompt.txt).
 
 A reply posted manually by Alex is an `alex` turn. If somebody answers it, the

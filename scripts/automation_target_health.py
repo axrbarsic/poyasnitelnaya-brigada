@@ -3,27 +3,16 @@
 
 from __future__ import annotations
 
-import ast
-import re
+import tomllib
 from pathlib import Path
 from typing import Any
 
 
 def parse_automation(path: Path) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or line.startswith("["):
-            continue
-        match = re.match(r"^([A-Za-z0-9_.-]+)\s*=\s*(.+)$", line)
-        if match is None:
-            continue
-        key, raw_value = match.groups()
-        try:
-            result[key] = ast.literal_eval(raw_value)
-        except (SyntaxError, ValueError):
-            result[key] = raw_value
-    return result
+    payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"automation TOML must be a table: {path}")
+    return payload
 
 
 def archived_active_heartbeat_targets(home: Path) -> list[dict[str, str]]:

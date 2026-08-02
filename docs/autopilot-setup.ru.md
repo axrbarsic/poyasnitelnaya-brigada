@@ -83,6 +83,9 @@ trust_level = "trusted"
 {
   "browser_owner_cwd": ".",
   "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
+  "codex_project_id": "CODEX_PROJECT_ID",
+  "autopilot_owner_rotation_after_runs": 20,
+  "autopilot_owner_rotation_state_file": "var/browser-owner-rotation.json",
   "desktop_relay_mode": "in_app_heartbeat",
   "desktop_auto_quit_after_work": true,
   "desktop_auto_quit_grace_seconds": 180,
@@ -122,9 +125,14 @@ trust_level = "trusted"
 Исчерпание лимита хвостов не останавливает собственные упоминания. Текущие
 счетчики доступны в `python3 xmention_watcher.py --config config.json status`.
 
-`browser_owner_thread_id` принадлежит одному выделенному service worker на Sol
-Max. `x-relay` является heartbeat этой же сессии, а не standalone automation и
-не отдельным relay thread. `reserve-handoff` не claim события, но атомарно
+`browser_owner_thread_id` принадлежит одной текущей Browser-owner задаче на Sol
+Max. `x-relay` является heartbeat этой же задачи, а не standalone automation и
+не отдельным relay thread. После заданного числа завершённых запусков задача
+транзакционно заменяется одной чистой задачей, heartbeat официально
+переназначается, новая задача проверяется по read-only состоянию Codex, старая
+задача архивируется. Токен ротации в инициализационном prompt позволяет после
+сбоя найти ту же замену вместо создания дубля. Статический ID задачи не
+хранится в Git-контракте. `reserve-handoff` не claim события, но атомарно
 блокирует соседний запуск на 180 секунд. Та же сессия сразу выполняет
 соответствующий claim. Межсессионной отправки, чтения owner thread и зависимости
 от process-local `hostId` нет. Atomic reservation и глобальный owner claim не
@@ -196,21 +204,25 @@ scheduled run создает отдельную задачу и может ос�
 6. Self-owned heartbeat выполняет один `relay-reserve-handoff`. Python сам
    резервирует repair incident либо, при его отсутствии, X queue и возвращает
    единственный `dispatch` вместе с точным `route`.
-7. Та же Sol Max сессия выполняет соответствующий claim. Если старт claim не
+7. Если owner достиг порога запусков, route `rotation` создаёт одну чистую
+   local Sol Max задачу, официально переносит существующий `x-relay`, атомарно
+   меняет runtime-указатель и архивирует старую задачу. Прерванная ротация
+   продолжается с сохранённого этапа и не создаёт ещё одну задачу.
+8. Та же Sol Max задача выполняет соответствующий claim. Если старт claim не
    состоялся, она делает `release-handoff` с точным reservation token. Очередь
    остаётся pending.
-8. Соседний heartbeat получает `handoff_reserved`, а глобальный owner claim не
+9. Соседний heartbeat получает `handoff_reserved`, а глобальный owner claim не
    допускает двух Browser-owner.
-9. Repair owner выполняет doctor claim и started, чинит минимально и закрывает
+10. Repair owner выполняет doctor claim и started, чинит минимально и закрывает
    incident только после нулевого FAIL и отчета. X owner выполняет X claim и
    started.
-10. X owner загружает `x-twitter-operator`, открывает минимум вкладок, выполняет
+11. X owner загружает `x-twitter-operator`, открывает минимум вкладок, выполняет
    double dedupe и publication transaction.
-11. После exact history и durable resolution owner выполняет `completed`.
+12. После exact history и durable resolution owner выполняет `completed`.
     Если dispatcher уже снял lease, `completed` автоматически завершает
     reconciliation только после проверки нулевой pending queue и durable
     SQLite resolution для каждого claimed event.
-12. Если Desktop был запущен supervisor, пустая очередь и owner=null запускают
+13. Если Desktop был запущен supervisor, пустая очередь и owner=null запускают
     grace timer, после которого завершается только сохраненный managed PID.
 
 Пока Desktop готов, а owner отсутствует, dispatcher сохраняет один

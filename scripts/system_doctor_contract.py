@@ -15,6 +15,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
+try:
+    from scripts import system_doctor_rotation
+except ModuleNotFoundError:
+    import system_doctor_rotation  # type: ignore[no-redef]
+
 
 @dataclass(frozen=True)
 class Dependencies:
@@ -44,6 +49,23 @@ class QueueContext:
     database: Path
     events: list[dict[str, Any]]
     pending: int
+
+
+def _thread_id_from_contract(
+    expected: dict[str, Any],
+    config: dict[str, Any],
+) -> str:
+    direct = str(expected.get("id", "")).strip()
+    if direct:
+        return direct
+    source = str(expected.get("id_source", "")).strip()
+    prefix = "config."
+    if not source.startswith(prefix):
+        raise ValueError("thread contract requires id or config id_source")
+    value = str(config.get(source[len(prefix) :], "")).strip()
+    if not value:
+        raise ValueError(f"thread id source is empty: {source}")
+    return value
 
 
 def _project_checks(
@@ -120,21 +142,33 @@ def _config_checks(
             )
         ], None
     config = deps.read_json(config_path)
-    owner_contract = contract["threads"]["browser_owner"]
-    config_owner = str(config.get("browser_owner_thread_id", ""))
+    config_owner = str(config.get("browser_owner_thread_id", "")).strip()
+    project_id = str(config.get("codex_project_id", "")).strip()
     checks = [
         deps.make_check(
             "config.owner_thread",
-            "pass" if config_owner == owner_contract["id"] else "fail",
+            "pass" if config_owner else "fail",
             (
-                "config.json указывает на канонический Browser owner."
-                if config_owner == owner_contract["id"]
-                else "config.json указывает на другой Browser owner."
+                "config.json содержит текущий Browser owner."
+                if config_owner
+                else "config.json не содержит Browser owner."
             ),
-            "Верни browser_owner_thread_id из recovery/system-contract.json.",
-            {"actual": config_owner, "expected": owner_contract["id"]},
+            "Восстанови browser_owner_thread_id из живой automation x-relay.",
+            {"actual": config_owner},
         )
     ]
+    checks.append(
+        deps.make_check(
+            "config.codex_project",
+            "pass" if project_id else "fail",
+            (
+                "Codex project для ротации owner настроен."
+                if project_id
+                else "Codex project для ротации owner не настроен."
+            ),
+            "Запиши projectId канонического x-mention-watcher в config.json.",
+        )
+    )
     mode = str(config.get("desktop_relay_mode", ""))
     checks.append(
         deps.make_check(
@@ -180,6 +214,7 @@ def _thread_checks(
     root: Path,
     home: Path,
     contract: dict[str, Any],
+    config: dict[str, Any],
     deps: Dependencies,
 ) -> list[Any]:
     database = deps.state_database(home)
@@ -195,7 +230,20 @@ def _thread_checks(
     checks: list[Any] = []
     for role, expected in contract.get("threads", {}).items():
         try:
-            row = deps.thread_row(database, str(expected["id"]))
+            thread_id = _thread_id_from_contract(expected, config)
+        except ValueError as error:
+            checks.append(
+                deps.make_check(
+                    f"thread.{role}",
+                    "fail",
+                    f"Не удалось определить сессию {role}.",
+                    "Восстанови runtime-указатель роли в config.json.",
+                    {"error": str(error)},
+                )
+            )
+            continue
+        try:
+            row = deps.thread_row(database, thread_id)
         except sqlite3.Error as error:
             checks.append(
                 deps.make_check(
@@ -219,7 +267,7 @@ def _thread_checks(
             )
             continue
         mismatches: dict[str, Any] = {}
-        for field in ("model", "cwd"):
+        for field in ("title", "model", "cwd"):
             expected_value = expected.get(field)
             if expected_value is not None and row.get(field) != expected_value:
                 mismatches[field] = {
@@ -285,6 +333,7 @@ def _automation_checks(
     root: Path,
     home: Path,
     contract: dict[str, Any],
+    config: dict[str, Any],
     deps: Dependencies,
 ) -> list[Any]:
     checks: list[Any] = []
@@ -305,8 +354,25 @@ def _automation_checks(
         mismatches = {
             key: {"actual": actual.get(key), "expected": value}
             for key, value in expected.items()
-            if key != "prompt_source" and actual.get(key) != value
+            if key not in {"prompt_source", "target_thread_role"}
+            and actual.get(key) != value
         }
+        target_role = str(expected.get("target_thread_role", "")).strip()
+        if target_role:
+            role_contract = contract.get("threads", {}).get(target_role)
+            try:
+                expected_target = _thread_id_from_contract(
+                    role_contract if isinstance(role_contract, dict) else {},
+                    config,
+                )
+            except ValueError:
+                expected_target = ""
+            if actual.get("target_thread_id") != expected_target:
+                mismatches["target_thread_id"] = {
+                    "actual": actual.get("target_thread_id"),
+                    "expected": expected_target,
+                    "role": target_role,
+                }
         prompt_source = str(expected.get("prompt_source", "")).strip()
         if prompt_source:
             try:
@@ -939,8 +1005,8 @@ def check_contract(
     checks.extend(config_checks)
     if config is None:
         return checks
-    checks.extend(_thread_checks(root, home, contract, dependencies))
-    checks.extend(_automation_checks(root, home, contract, dependencies))
+    checks.extend(_thread_checks(root, home, contract, config, dependencies))
+    checks.extend(_automation_checks(root, home, contract, config, dependencies))
     checks.extend(_launchagent_checks(home, contract, dependencies))
     runtime = contract.get("runtime", {})
     runtime_checks, queue = _runtime_database_queue_checks(
@@ -956,6 +1022,16 @@ def check_contract(
             runtime,
             queue,
             dependencies,
+        )
+    )
+    checks.extend(
+        system_doctor_rotation.check_rotation(
+            root,
+            runtime,
+            make_check=dependencies.make_check,
+            read_json=dependencies.read_json,
+            resolve_path=dependencies.resolve_project_path,
+            parse_timestamp=dependencies.parse_timestamp,
         )
     )
     checks.extend(

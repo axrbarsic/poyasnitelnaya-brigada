@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "system_id": "poyasnitelnaya-brigada-autopilot",
   "canonical_root": "/Users/alexlane/Developer/x-mention-watcher",
   "git_origin": "https://github.com/axrbarsic/poyasnitelnaya-brigada.git",
@@ -24,8 +24,11 @@
     "scripts/autopilot_supervisor.py",
     "scripts/autopilot_supervisor_incidents.py",
     "scripts/autopilot_supervisor_routes.py",
+    "scripts/browser_owner_rotation.py",
+    "scripts/codex_thread_state.py",
     "scripts/system_doctor.py",
     "scripts/system_doctor_contract.py",
+    "scripts/system_doctor_rotation.py",
     "scripts/system_doctor_runtime.py",
     "scripts/watcher_database.py",
     "scripts/watcher_events.py",
@@ -75,33 +78,32 @@
     "skill-backup/377/SKILL.md",
     "skill-backup/377/agents/openai.yaml",
     "macos/x-relay.prompt.txt",
+    "macos/x-browser-owner-init.prompt.txt",
     "macos/x-outbound-owner.prompt.txt",
     "macos/x-15.prompt.txt"
   ],
   "threads": {
     "browser_owner": {
-      "id": "019fbb76-1692-7cd3-a474-1f12d7971d6e",
+      "id_source": "config.browser_owner_thread_id",
+      "title": "X: Browser owner",
       "model": "gpt-5.6-sol",
       "minimum_reasoning_effort": "max",
       "cwd": "/Users/alexlane/Developer/x-mention-watcher",
       "must_be_unarchived": true,
-      "pin_recommended": false
-    },
-    "heartbeat_relay": {
-      "id": "019fbb76-1692-7cd3-a474-1f12d7971d6e",
-      "model": "gpt-5.6-sol",
-      "reasoning_effort": "max",
-      "cwd": "/Users/alexlane/Developer/x-mention-watcher",
-      "must_be_unarchived": true
+      "pin_recommended": false,
+      "project_id_source": "config.codex_project_id",
+      "initial_prompt_source": "macos/x-browser-owner-init.prompt.txt"
     }
   },
   "automations": {
     "active_relay": {
       "id": "x-relay",
       "kind": "heartbeat",
+      "name": "X: единый owner heartbeat",
       "status": "ACTIVE",
       "rrule": "FREQ=MINUTELY;INTERVAL=1",
-      "target_thread_id": "019fbb76-1692-7cd3-a474-1f12d7971d6e",
+      "notification_policy": "failed_runs_only",
+      "target_thread_role": "browser_owner",
       "prompt_source": "macos/x-relay.prompt.txt"
     },
     "outbound_local_skill": {
@@ -147,6 +149,8 @@
     "event_dispatch_state_file": "var/event-dispatch.json",
     "event_dispatch_launchagent_label": "com.axrbarsic.xmention.dispatch",
     "autopilot_state_file": "var/autopilot-dispatch.json",
+    "owner_rotation_state_file": "var/browser-owner-rotation.json",
+    "max_owner_rotation_age_seconds": 900,
     "max_poll_age_seconds": 180,
     "max_dispatch_age_seconds": 180,
     "max_relay_wait_seconds": 180,

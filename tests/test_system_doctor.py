@@ -94,6 +94,7 @@ class SystemDoctorTests(unittest.TestCase):
                     id TEXT PRIMARY KEY,
                     archived INTEGER,
                     is_pinned INTEGER,
+                    title TEXT,
                     model TEXT,
                     reasoning_effort TEXT,
                     cwd TEXT
@@ -101,10 +102,10 @@ class SystemDoctorTests(unittest.TestCase):
                 """
             )
             connection.executemany(
-                "INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?)",
                 [
-                    ("owner", 0, 1, "sol", "high", str(self.root)),
-                    ("relay", 0, 0, "luna", "low", str(self.root)),
+                    ("owner", 0, 1, "Owner", "sol", "high", str(self.root)),
+                    ("relay", 0, 0, "Relay", "luna", "low", str(self.root)),
                 ],
             )
             connection.commit()
@@ -117,6 +118,7 @@ class SystemDoctorTests(unittest.TestCase):
                     [
                         f'id = "{identifier}"',
                         f'status = "{status}"',
+                        'target_thread_id = "owner"',
                     ]
                 )
                 + "\n",
@@ -132,6 +134,7 @@ class SystemDoctorTests(unittest.TestCase):
             json.dumps(
                 {
                     "browser_owner_thread_id": "owner",
+                    "codex_project_id": "project",
                     "desktop_relay_mode": "in_app_heartbeat",
                     "event_dispatch_on_new_events": True,
                     "event_dispatch_launchagent_label": "agent",
@@ -198,6 +201,18 @@ class SystemDoctorTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
+
+    def test_contract_schema_versions_one_and_two_are_supported(self) -> None:
+        self.assertEqual(
+            system_doctor.contract_schema_version({"schema_version": 1}),
+            1,
+        )
+        self.assertEqual(
+            system_doctor.contract_schema_version({"schema_version": 2}),
+            2,
+        )
+        with self.assertRaisesRegex(ValueError, "unsupported"):
+            system_doctor.contract_schema_version({"schema_version": 3})
 
     def test_database_integrity_retries_transient_lock(self) -> None:
         database = self.root / "var" / "watcher.sqlite3"
@@ -1382,6 +1397,116 @@ class SystemDoctorTests(unittest.TestCase):
             owner.details["reasoning_effort"],
             {"actual": "medium", "minimum": "high"},
         )
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_dynamic_owner_role_and_automation_target_follow_config(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        owner = self.contract["threads"]["browser_owner"]
+        owner.pop("id")
+        owner["id_source"] = "config.browser_owner_thread_id"
+        self.contract["automations"]["active"][
+            "target_thread_role"
+        ] = "browser_owner"
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        thread_check = next(
+            check for check in checks if check.identifier == "thread.browser_owner"
+        )
+        automation_check = next(
+            check for check in checks if check.identifier == "automation.active"
+        )
+        self.assertEqual(thread_check.status, "pass")
+        self.assertEqual(automation_check.status, "pass")
+
+        path = self.home / ".codex" / "automations" / "relay-a" / "automation.toml"
+        path.write_text(
+            path.read_text(encoding="utf-8").replace(
+                'target_thread_id = "owner"',
+                'target_thread_id = "other"',
+            ),
+            encoding="utf-8",
+        )
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+        automation_check = next(
+            check for check in checks if check.identifier == "automation.active"
+        )
+        self.assertEqual(automation_check.status, "fail")
+        self.assertEqual(
+            automation_check.details["target_thread_id"]["expected"],
+            "owner",
+        )
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_open_owner_rotation_warns_then_fails_when_stale(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        state_path = self.root / "var" / "rotation.json"
+        self.contract["runtime"]["owner_rotation_state_file"] = (
+            "var/rotation.json"
+        )
+        self.contract["runtime"]["max_owner_rotation_age_seconds"] = 900
+
+        def write_state(updated_at: datetime) -> None:
+            state_path.write_text(
+                json.dumps(
+                    {
+                        "generation": 0,
+                        "transaction": {
+                            "phase": "thread_created",
+                            "old_thread_id": "owner",
+                            "new_thread_id": "replacement",
+                            "updated_at": updated_at.isoformat(),
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+        write_state(datetime.now(timezone.utc))
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+        rotation = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.owner_rotation"
+        )
+        self.assertEqual(rotation.status, "warn")
+
+        write_state(datetime.now(timezone.utc) - timedelta(minutes=20))
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+        rotation = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.owner_rotation"
+        )
+        self.assertEqual(rotation.status, "fail")
 
     @mock.patch(
         "scripts.system_doctor.git_origin",

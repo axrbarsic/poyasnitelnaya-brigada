@@ -34,6 +34,7 @@ their implementation is divided by durable authority:
 | --- | --- | --- |
 | `app_server_dispatch` | `app_server_desktop`, `app_server_external` | Desktop ownership and disabled external app-server diagnostics |
 | `autopilot_supervisor` | `autopilot_supervisor_incidents`, `autopilot_supervisor_routes` | Incident persistence and deterministic recovery routing |
+| `browser_owner_rotation` | `autopilot_supervisor_routes`, official Codex app tools | Recoverable replacement of the one Browser owner without task accumulation |
 | `system_doctor` | `system_doctor_runtime`, `system_doctor_contract` | Runtime projections and versioned deployment checks |
 | `autopilot_bridge` | `autopilot_dispatch`, `event_dispatch` | Queue lease transitions and model-free wake delivery |
 | `browser_owner_evidence` | `browser_handoff_sync`, `build_outbound_history` | Per-event evidence commit and idempotent aggregate replay |
@@ -53,7 +54,7 @@ CoreAudio access use shared adapters instead of duplicate ctypes setup.
 
 ## Control-plane authority
 
-The runtime has one router, `x-relay`, and three disjoint state owners. No
+The runtime has one router, `x-relay`, and four disjoint state owners. No
 operator task, doctor run, or retired automation may duplicate their authority.
 
 | State | Sole owner | Meaning |
@@ -61,7 +62,8 @@ operator task, doctor run, or retired automation may duplicate their authority.
 | Inbound queue and global X lease | `autopilot_bridge` | Which exact X events are pending or owned |
 | Repair incident and repair lease | `autopilot_supervisor` | Whether a system defect needs doctor work |
 | Ten-minute outbound slot | `outbound_cycle` | Whether one idle-only outbound attempt is due |
-| Final route | `x-relay` through `relay-reserve-handoff` | Exactly one of inbound X, repair, outbound, or idle |
+| Browser-owner lifecycle | `browser_owner_rotation` | Which one task is current and which durable rotation phase must resume |
+| Final route | `x-relay` through `relay-reserve-handoff` | Exactly one of rotation, inbound X, repair, outbound, or idle |
 
 The retired `x-15` automation is permanently `PAUSED`. Its status is a
 deployment invariant, not a runtime switch. The ten-minute cadence lives only
@@ -78,10 +80,12 @@ doctor because publication may no longer be durable or safe.
 This gives one fixed priority rule:
 
 1. Continue an already active authenticated writer transaction.
-2. Recover pending inbound X delivery.
+2. Finish a partially committed owner rotation.
 3. Repair a defect that blocks safe durable work.
-4. Run one due outbound attempt only when inbound is exactly idle.
-5. Otherwise do nothing.
+4. Replace an owner that reached its bounded run threshold.
+5. Recover pending inbound X delivery.
+6. Run one due outbound attempt only when inbound is exactly idle.
+7. Otherwise do nothing.
 
 The doctor observes these owners and verifies their leases. It does not become
 a second scheduler. The root Codex task may change versioned source and deploy
@@ -188,6 +192,22 @@ an X reply.
     after generation, and immediately before publication. Any single inbound
     event releases the outbound claim through `pause-slot`. Skipped windows do
     not accumulate catch-up debt and are never replayed later.
+24. The Browser owner is a bounded worker, not a permanent conversation. After
+    `autopilot_owner_rotation_after_runs` completed runs, the next heartbeat
+    reserves a durable rotation transaction. One clean local Sol Max task is
+    created, the existing `x-relay` heartbeat is retargeted through the official
+    Codex automation API, `browser_owner_thread_id` is switched atomically, and
+    the old task is archived. The transaction records `prepared`,
+    `thread_created`, and `committed`, so a crash continues the same replacement
+    instead of creating duplicates. Before the new thread ID is recorded, a
+    unique transaction marker in its initialization prompt allows deterministic
+    discovery through the Codex task list. Before commit, the replacement's
+    title, model, reasoning effort, working directory, and archive state are
+    checked against the read-only Codex thread registry. Before the old task is
+    archived, the full doctor must report zero failures. Static task IDs do not
+    belong in the Git contract; doctor resolves the live role through config,
+    verifies that the heartbeat targets the same task, and reports a stale open
+    rotation as a failure.
 
 Each event resolution can preserve stance, confidence, media meaning, and
 multiple evidence notes. This prevents a media-only reply from disappearing

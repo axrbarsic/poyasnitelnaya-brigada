@@ -4,14 +4,13 @@
 from __future__ import annotations
 
 import argparse
-import ast
 import hashlib
 import json
 import os
-import re
 import sqlite3
 import subprocess
 import time
+import tomllib
 from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -20,12 +19,14 @@ from typing import Any, Iterable
 
 try:
     from scripts import (
+        codex_thread_state,
         keychain_bundle,
         personality_policy,
         system_doctor_contract,
         system_doctor_runtime,
     )
 except ModuleNotFoundError:
+    import codex_thread_state  # type: ignore[no-redef]
     import keychain_bundle  # type: ignore[no-redef]
     import personality_policy  # type: ignore[no-redef]
     import system_doctor_contract  # type: ignore[no-redef]
@@ -50,6 +51,14 @@ ACTIVE_REPAIR_STATUSES = system_doctor_runtime.ACTIVE_REPAIR_STATUSES
 ACTIVE_X_DELIVERY_STATUSES = (
     system_doctor_runtime.ACTIVE_X_DELIVERY_STATUSES
 )
+SUPPORTED_CONTRACT_SCHEMA_VERSIONS = {1, 2}
+
+
+def contract_schema_version(contract: dict[str, Any]) -> int:
+    version = contract.get("schema_version")
+    if version not in SUPPORTED_CONTRACT_SCHEMA_VERSIONS:
+        raise ValueError("unsupported recovery contract schema")
+    return int(version)
 ACTIVE_EVENT_DISPATCH_STATUSES = (
     system_doctor_runtime.ACTIVE_EVENT_DISPATCH_STATUSES
 )
@@ -76,20 +85,10 @@ def resolve_home_path(home: Path, value: str) -> Path:
 
 
 def parse_simple_toml(path: Path) -> dict[str, Any]:
-    result: dict[str, Any] = {}
-    for raw_line in path.read_text(encoding="utf-8").splitlines():
-        line = raw_line.strip()
-        if not line or line.startswith("#") or line.startswith("["):
-            continue
-        match = re.match(r"^([A-Za-z0-9_.-]+)\s*=\s*(.+)$", line)
-        if match is None:
-            continue
-        key, raw_value = match.groups()
-        try:
-            result[key] = ast.literal_eval(raw_value)
-        except (SyntaxError, ValueError):
-            result[key] = raw_value
-    return result
+    payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError(f"TOML root must be a table: {path}")
+    return payload
 
 
 def tree_digest(path: Path) -> str:
@@ -108,12 +107,7 @@ def tree_digest(path: Path) -> str:
 
 
 def state_database(home: Path) -> Path | None:
-    candidates = sorted(
-        (home / ".codex").glob("state_*.sqlite"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    return candidates[0] if candidates else None
+    return codex_thread_state.state_database(home / ".codex")
 
 
 parse_timestamp = system_doctor_runtime.parse_timestamp
@@ -244,18 +238,11 @@ def reasoning_effort_meets_minimum(
 
 
 def thread_row(database: Path, thread_id: str) -> dict[str, Any] | None:
-    uri = f"{database.resolve().as_uri()}?mode=ro"
-    with closing(sqlite3.connect(uri, uri=True)) as connection:
-        connection.row_factory = sqlite3.Row
-        row = connection.execute(
-            """
-            SELECT id, archived, is_pinned, model, reasoning_effort, cwd
-            FROM threads
-            WHERE id = ?
-            """,
-            (thread_id,),
-        ).fetchone()
-    return dict(row) if row is not None else None
+    codex_home = database.parent
+    actual_database = codex_thread_state.state_database(codex_home)
+    if actual_database is None or actual_database.resolve() != database.resolve():
+        raise ValueError("Codex state database changed during doctor run")
+    return codex_thread_state.thread_row(codex_home, thread_id)
 
 
 def git_origin(root: Path) -> str:
@@ -376,11 +363,10 @@ def main() -> int:
     contract_path = arguments.contract.expanduser().resolve()
     config_path = arguments.config.expanduser().resolve()
     contract = read_json(contract_path)
-    if contract.get("schema_version") != 1:
-        raise ValueError("unsupported recovery contract schema")
+    contract_version = contract_schema_version(contract)
     checks = check_contract(root, home, contract, config_path)
     payload = {
-        "schema_version": 1,
+        "schema_version": contract_version,
         "system_id": contract["system_id"],
         "checks": [asdict(item) for item in checks],
         "summary": {

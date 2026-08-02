@@ -67,6 +67,14 @@
   outbound claim with `pause-slot`, never create catch-up debt, and retry only
   after the inbound queue is fully resolved. Never compensate later for a slot
   skipped while inbound work existed.
+- Keep exactly one unarchived Browser-owner task. After the configured number
+  of completed owner runs, `x-relay` must enter the transactional `rotation`
+  route before taking another claim. Create one clean local Sol Max replacement,
+  retarget the existing heartbeat with official Codex app tools, atomically
+  switch `browser_owner_thread_id`, archive the old owner, and then close the
+  rotation transaction. Never create a second replacement while a transaction
+  already records `new_thread_id`. A partial rotation must resume from its
+  durable phase instead of starting over.
 - Treat helper results as evidence. Sol performs the final live-context
   decision and publication transaction.
 

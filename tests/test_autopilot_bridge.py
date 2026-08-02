@@ -453,15 +453,23 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertIn("route=repair", prompt)
         self.assertIn("route=x", prompt)
         self.assertIn("route=outbound", prompt)
+        self.assertIn("route=rotation", prompt)
         self.assertIn("started с точным claim-token", prompt)
         self.assertIn("renew с точным claim-token", prompt)
-        self.assertIn("Не вызывай send_message_to_thread", prompt)
+        self.assertIn("create_thread", prompt)
+        self.assertIn("owner_rotation_marker", prompt)
+        self.assertIn("list_threads", prompt)
+        self.assertIn("automation_update", prompt)
+        self.assertIn("set_thread_archived", prompt)
+        self.assertIn("system_doctor.py", prompt)
+        self.assertIn("FAIL 0", prompt)
+        self.assertIn("browser_owner_rotation.py", prompt)
         self.assertIn("Не запускай второй reservation gate", prompt)
         self.assertNotIn("codex_app__send_message_to_thread", prompt)
         self.assertNotIn("tools.codex_app__send_message_to_thread", prompt)
         self.assertNotIn("tool_search", prompt)
 
-    def test_relay_contract_targets_browser_owner_task(self) -> None:
+    def test_relay_contract_targets_dynamic_browser_owner_role(self) -> None:
         contract = json.loads(
             (
                 Path(__file__).resolve().parents[1]
@@ -470,14 +478,18 @@ class AutopilotBridgeTests(unittest.TestCase):
             ).read_text(encoding="utf-8")
         )
         owner = contract["threads"]["browser_owner"]
-        relay = contract["threads"]["heartbeat_relay"]
         automation = contract["automations"]["active_relay"]
 
-        self.assertEqual(relay["id"], owner["id"])
-        self.assertEqual(relay["model"], owner["model"])
-        self.assertEqual(relay["reasoning_effort"], "max")
-        self.assertEqual(relay["cwd"], owner["cwd"])
-        self.assertEqual(automation["target_thread_id"], owner["id"])
+        self.assertEqual(
+            owner["id_source"],
+            "config.browser_owner_thread_id",
+        )
+        self.assertEqual(owner["minimum_reasoning_effort"], "max")
+        self.assertEqual(
+            automation["target_thread_role"],
+            "browser_owner",
+        )
+        self.assertNotIn("target_thread_id", automation)
 
     def test_owner_claim_is_not_blocked_by_its_own_active_turn(self) -> None:
         self.write_events([self.event()])

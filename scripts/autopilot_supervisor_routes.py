@@ -24,6 +24,8 @@ class Dependencies:
     outbound_active_owner: Callable[..., dict[str, Any]]
     outbound_claim_due: Callable[..., dict[str, Any]]
     outbound_pause_slot: Callable[..., dict[str, Any]]
+    owner_rotation_pending: Callable[..., dict[str, Any] | None]
+    owner_rotation_reserve: Callable[..., dict[str, Any]]
 
 
 def x_queue_is_exactly_idle(result: dict[str, Any]) -> bool:
@@ -42,11 +44,9 @@ def _owner_route(
     contract: dict[str, Any],
 ) -> dict[str, str]:
     owner = contract["threads"]["browser_owner"]
-    owner_thread_id = str(owner["id"])
-    if str(config.get("browser_owner_thread_id", "")) != owner_thread_id:
-        raise ValueError(
-            "browser owner differs between config and system contract"
-        )
+    owner_thread_id = str(config.get("browser_owner_thread_id", "")).strip()
+    if not owner_thread_id:
+        raise ValueError("browser_owner_thread_id is required")
     return {
         "owner_thread_id": owner_thread_id,
         "owner_model": str(owner["model"]),
@@ -240,6 +240,13 @@ def relay_reserve_handoff(
     contract = dependencies.read_contract(contract_path.expanduser().resolve())
     owner_route = _owner_route(config, contract)
     repair_state = dependencies.repair_gate(config_path, now=now)
+    pending_rotation = dependencies.owner_rotation_pending(config_path, contract)
+    if pending_rotation is not None:
+        return {
+            **pending_rotation,
+            **owner_route,
+            "repair_pending": bool(repair_state.get("repair_pending")),
+        }
     if repair_state.get("repair_pending"):
         return _reserve_repair(
             config_path,
@@ -250,6 +257,29 @@ def relay_reserve_handoff(
             dependencies=dependencies,
         )
     outbound_path = dependencies.outbound_state_path(config_path)
+    x_owner = dependencies.active_x_owner_snapshot(
+        config_path,
+        lease_seconds=lease_seconds,
+        now=now,
+    )
+    outbound_owner = dependencies.outbound_active_owner(
+        outbound_path,
+        now=now,
+    )
+    rotation = dependencies.owner_rotation_reserve(
+        config_path,
+        contract,
+        allow_new=True,
+        owner_busy=bool(x_owner.get("owner_busy")),
+        outbound_busy=bool(outbound_owner.get("owner_busy")),
+        now=now,
+    )
+    if rotation.get("dispatch"):
+        return {
+            **rotation,
+            **owner_route,
+            "repair_pending": bool(repair_state.get("repair_pending")),
+        }
     inbound, x_result = _reserve_inbound(
         config_path,
         outbound_path,

@@ -18,6 +18,7 @@ try:
         autopilot_supervisor_incidents,
         autopilot_supervisor_routes,
         autopilot_state_model,
+        browser_owner_rotation,
         outbound_cycle,
         system_doctor,
     )
@@ -28,6 +29,7 @@ except ModuleNotFoundError:
     import autopilot_supervisor_incidents  # type: ignore[no-redef]
     import autopilot_supervisor_routes  # type: ignore[no-redef]
     import autopilot_state_model  # type: ignore[no-redef]
+    import browser_owner_rotation  # type: ignore[no-redef]
     import outbound_cycle  # type: ignore[no-redef]
     import system_doctor  # type: ignore[no-redef]
 
@@ -448,6 +450,8 @@ def _route_dependencies() -> autopilot_supervisor_routes.Dependencies:
         outbound_active_owner=outbound_cycle.active_owner_snapshot,
         outbound_claim_due=outbound_cycle.claim_due,
         outbound_pause_slot=outbound_cycle.pause_slot,
+        owner_rotation_pending=browser_owner_rotation.pending,
+        owner_rotation_reserve=browser_owner_rotation.reserve,
     )
 
 
