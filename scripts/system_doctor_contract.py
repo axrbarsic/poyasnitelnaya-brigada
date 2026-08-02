@@ -572,51 +572,8 @@ def _runtime_dispatch_checks(
     deps: Dependencies,
 ) -> list[Any]:
     checks: list[Any] = []
-    dispatch_state: dict[str, Any] = {}
-    dispatch_value = str(runtime.get("dispatch_state_file", "")).strip()
-    if dispatch_value:
-        path = deps.resolve_project_path(root, dispatch_value)
-        max_age = int(runtime.get("max_dispatch_age_seconds", 180))
-        try:
-            dispatch_state = deps.read_json(path)
-            checked = deps.parse_timestamp(dispatch_state.get("checked_at"))
-            age = (
-                (datetime.now(timezone.utc) - checked).total_seconds()
-                if checked is not None
-                else float("inf")
-            )
-            ok = 0 <= age <= max_age
-        except (OSError, ValueError, TypeError, AttributeError):
-            ok = False
-            age = float("inf")
-        checks.append(
-            deps.make_check(
-                "runtime.dispatch_health",
-                "pass" if ok else "fail",
-                (
-                    f"Dispatcher свежий, age={round(age, 1)}s."
-                    if ok
-                    else "Dispatcher не обновляет durable state."
-                ),
-                "Проверь loaded dispatch LaunchAgent и выполни его kickstart.",
-                {
-                    "age_seconds": round(age, 1) if age != float("inf") else None,
-                    "max_age_seconds": max_age,
-                },
-            )
-        )
-    event_dispatch_state: dict[str, Any] = {}
-    event_dispatch_value = str(
-        runtime.get("event_dispatch_state_file", "")
-    ).strip()
-    if event_dispatch_value:
-        try:
-            event_dispatch_state = deps.read_json(
-                deps.resolve_project_path(root, event_dispatch_value)
-            )
-        except (OSError, ValueError, TypeError, AttributeError):
-            event_dispatch_state = {}
     owner: Any = None
+    owner_active = False
     owner_state_value = str(runtime.get("autopilot_state_file", "")).strip()
     if owner_state_value:
         try:
@@ -628,9 +585,10 @@ def _runtime_dispatch_checks(
                 owner_details = {"owner": None}
             elif isinstance(owner, dict):
                 expires = deps.parse_timestamp(owner.get("lease_expires_at"))
-                owner_ok = (
+                owner_active = (
                     expires is not None and expires >= datetime.now(timezone.utc)
                 )
+                owner_ok = owner_active
                 owner_details = {
                     "event_ids": owner.get("event_ids", []),
                     "lease_expires_at": owner.get("lease_expires_at"),
@@ -654,6 +612,56 @@ def _runtime_dispatch_checks(
                 owner_details,
             )
         )
+    dispatch_state: dict[str, Any] = {}
+    dispatch_value = str(runtime.get("dispatch_state_file", "")).strip()
+    if dispatch_value:
+        path = deps.resolve_project_path(root, dispatch_value)
+        max_age = int(runtime.get("max_dispatch_age_seconds", 180))
+        try:
+            dispatch_state = deps.read_json(path)
+            checked = deps.parse_timestamp(dispatch_state.get("checked_at"))
+            age = (
+                (datetime.now(timezone.utc) - checked).total_seconds()
+                if checked is not None
+                else float("inf")
+            )
+            ok = 0 <= age <= max_age
+        except (OSError, ValueError, TypeError, AttributeError):
+            ok = False
+            age = float("inf")
+        dispatch_status = "pass" if ok else ("warn" if owner_active else "fail")
+        checks.append(
+            deps.make_check(
+                "runtime.dispatch_health",
+                dispatch_status,
+                (
+                    f"Dispatcher свежий, age={round(age, 1)}s."
+                    if ok
+                    else (
+                        "Dispatcher устарел, но событие уже принадлежит "
+                        "активному Browser owner."
+                        if owner_active
+                        else "Dispatcher не обновляет durable state."
+                    )
+                ),
+                "Проверь loaded dispatch LaunchAgent и выполни его kickstart.",
+                {
+                    "age_seconds": round(age, 1) if age != float("inf") else None,
+                    "max_age_seconds": max_age,
+                },
+            )
+        )
+    event_dispatch_state: dict[str, Any] = {}
+    event_dispatch_value = str(
+        runtime.get("event_dispatch_state_file", "")
+    ).strip()
+    if event_dispatch_value:
+        try:
+            event_dispatch_state = deps.read_json(
+                deps.resolve_project_path(root, event_dispatch_value)
+            )
+        except (OSError, ValueError, TypeError, AttributeError):
+            event_dispatch_state = {}
     max_relay_wait = int(runtime.get("max_relay_wait_seconds", 0))
     if max_relay_wait > 0:
         checks.append(

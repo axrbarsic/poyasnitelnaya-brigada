@@ -1512,6 +1512,67 @@ class SystemDoctorTests(unittest.TestCase):
         "scripts.system_doctor.git_origin",
         return_value="https://example.test/repo.git",
     )
+    def test_active_owner_demotes_stale_dispatcher_to_warning(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        self.contract["runtime"].update(
+            {
+                "dispatch_state_file": "var/dispatch.json",
+                "autopilot_state_file": "var/autopilot.json",
+                "max_dispatch_age_seconds": 180,
+            }
+        )
+        stale = datetime.now(timezone.utc) - timedelta(minutes=10)
+        (self.root / "var" / "dispatch.json").write_text(
+            json.dumps({"checked_at": stale.isoformat()}),
+            encoding="utf-8",
+        )
+        autopilot = self.root / "var" / "autopilot.json"
+        autopilot.write_text(
+            json.dumps(
+                {
+                    "owner": {
+                        "event_ids": ["123"],
+                        "lease_expires_at": (
+                            datetime.now(timezone.utc) + timedelta(minutes=10)
+                        ).isoformat(),
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+        dispatch = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.dispatch_health"
+        )
+        self.assertEqual(dispatch.status, "warn")
+
+        autopilot.write_text(json.dumps({"owner": None}), encoding="utf-8")
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+        dispatch = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.dispatch_health"
+        )
+        self.assertEqual(dispatch.status, "fail")
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
     def test_queue_count_mismatch_is_detected(
         self, _git_origin: mock.Mock
     ) -> None:
