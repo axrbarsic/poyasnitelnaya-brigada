@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify an exact published X long reply through the official note_tweet API."""
+"""Verify an exact published X reply through the official API."""
 
 from __future__ import annotations
 
@@ -43,12 +43,12 @@ def resolve_entity_range(
     *,
     start: int,
     end: int,
-    expected_url: str,
+    expected_text: str,
 ) -> tuple[int, int, str]:
     if start < 0 or end < start:
         raise ValueError("URL entity has an invalid range")
     candidates: dict[tuple[int, int], str] = {}
-    if end <= len(text) and text[start:end] == expected_url:
+    if end <= len(text) and text[start:end] == expected_text:
         candidates[(start, end)] = "codepoint"
     try:
         utf16_start = utf16_offset_to_python_index(text, start)
@@ -56,11 +56,11 @@ def resolve_entity_range(
     except ValueError:
         pass
     else:
-        if text[utf16_start:utf16_end] == expected_url:
+        if text[utf16_start:utf16_end] == expected_text:
             candidates.setdefault((utf16_start, utf16_end), "utf16")
     if not candidates:
         raise ValueError(
-            f"URL entity range does not match its t.co value at {start}:{end}"
+            f"Entity range does not match its expected text at {start}:{end}"
         )
     if len(candidates) > 1:
         raise ValueError("URL entity range is ambiguous")
@@ -109,11 +109,84 @@ def reconstruct_note_tweet(note_tweet: dict[str, Any]) -> tuple[str, list[str]]:
             text,
             start=start,
             end=end,
-            expected_url=short_url,
+            expected_text=short_url,
         )
         text = text[:python_start] + expanded_url + text[python_end:]
         modes.append(mode)
     return text, list(reversed(modes))
+
+
+def reconstruct_published_text(data: dict[str, Any]) -> tuple[str, list[str], str]:
+    note_tweet = data.get("note_tweet")
+    if isinstance(note_tweet, dict):
+        text, modes = reconstruct_note_tweet(note_tweet)
+        return text, modes, "note_tweet"
+
+    text = data.get("text")
+    if not isinstance(text, str):
+        raise ValueError("published status contains neither note_tweet nor text")
+    text_payload = {
+        "text": text,
+        "entities": data.get("entities") or {},
+    }
+    reconstructed, modes = reconstruct_note_tweet(text_payload)
+    return reconstructed, modes, "text"
+
+
+def normalize_hidden_reply_mentions(
+    text: str,
+    *,
+    entities: dict[str, Any],
+    source_text: str,
+    is_expected_reply: bool,
+) -> tuple[str, list[str], str]:
+    if text == source_text:
+        return text, [], "none"
+    if not is_expected_reply or not text.endswith(source_text):
+        return text, [], "none"
+
+    prefix_end = len(text) - len(source_text)
+    prefix = text[:prefix_end]
+    if not prefix or not prefix[-1].isspace():
+        return text, [], "none"
+    mentions = entities.get("mentions") or []
+    if not isinstance(mentions, list):
+        raise ValueError("entities.mentions must be an array")
+
+    covered = [False] * prefix_end
+    usernames: list[str] = []
+    for item in mentions:
+        if not isinstance(item, dict):
+            raise ValueError("Mention entity must be an object")
+        start = item.get("start")
+        end = item.get("end")
+        username = item.get("username")
+        if not isinstance(start, int) or not isinstance(end, int):
+            raise ValueError("Mention entity offsets must be integers")
+        if not isinstance(username, str) or not username:
+            raise ValueError("Mention entity username must be non-empty text")
+        expected = "@" + username
+        python_start, python_end, _mode = resolve_entity_range(
+            text,
+            start=start,
+            end=end,
+            expected_text=expected,
+        )
+        if python_start >= prefix_end:
+            continue
+        if python_end > prefix_end:
+            return text, [], "none"
+        for index in range(python_start, python_end):
+            if covered[index]:
+                raise ValueError("Mention entities overlap")
+            covered[index] = True
+        usernames.append(username)
+
+    if not usernames:
+        return text, [], "none"
+    if any(not covered[index] and not character.isspace() for index, character in enumerate(prefix)):
+        return text, [], "none"
+    return source_text, usernames, "hidden_reply_mentions"
 
 
 def load_live_tweet(
@@ -160,10 +233,6 @@ def build_report(
         raise ValueError("response.data.id must be numeric text")
     if expected_status_id is not None and status_id != expected_status_id:
         raise ValueError("X API returned a different status ID")
-    note_tweet = data.get("note_tweet")
-    if not isinstance(note_tweet, dict):
-        raise ValueError("published status does not contain note_tweet")
-    reconstructed, entity_index_modes = reconstruct_note_tweet(note_tweet)
     referenced = data.get("referenced_tweets") or []
     if not isinstance(referenced, list):
         raise ValueError("referenced_tweets must be an array")
@@ -175,6 +244,21 @@ def build_report(
     parent_matches = (
         expected_parent_status_id is None
         or parent_status_ids == [expected_parent_status_id]
+    )
+    reconstructed, entity_index_modes, text_source = reconstruct_published_text(data)
+    api_code_points = len(reconstructed)
+    entities = data.get("entities") or {}
+    if not isinstance(entities, dict):
+        raise ValueError("response.data.entities must be an object")
+    reconstructed, reply_prefix_mentions, text_normalization = (
+        normalize_hidden_reply_mentions(
+            reconstructed,
+            entities=entities,
+            source_text=source_text,
+            is_expected_reply=(
+                expected_parent_status_id is not None and parent_matches
+            ),
+        )
     )
     forbidden = [character for character in FORBIDDEN if character in reconstructed]
     report = {
@@ -192,6 +276,10 @@ def build_report(
         "sha256": hashlib.sha256(reconstructed.encode("utf-8")).hexdigest(),
         "forbidden": forbidden,
         "entity_index_modes": entity_index_modes,
+        "text_source": text_source,
+        "api_code_points": api_code_points,
+        "reply_prefix_mentions": reply_prefix_mentions,
+        "text_normalization": text_normalization,
     }
     report["valid"] = (
         report["parent_matches"]

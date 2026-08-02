@@ -174,11 +174,12 @@ After clicking each part:
 2. Confirm the composer cleared.
 3. Locate a new thread article from `@axrbarsic`.
 4. Capture the reply URL and verify the exact parent status ID.
-5. For an X long post, fetch its official API `note_tweet`. Replace each
-   `note_tweet.entities.urls` t.co span, in reverse offset order, with its
-   `expanded_url`. The reconstructed text must be non-empty, contain at most
-   4000 Unicode code points, and match the validated source byte-for-byte.
-   In this project, run:
+5. Fetch the official API representation of every published reply. Prefer
+   `note_tweet` when present. For a regular short post without `note_tweet`,
+   use `text` and `entities`. Replace each t.co URL span, in reverse offset
+   order, with its `expanded_url`. The reconstructed text must be non-empty,
+   contain at most 4000 Unicode code points, and match the validated source
+   byte-for-byte. In this project, run:
 
    ```bash
    python3 scripts/verify_x_note_tweet.py \

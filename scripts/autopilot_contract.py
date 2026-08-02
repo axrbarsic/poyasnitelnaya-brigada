@@ -170,7 +170,9 @@ resolution.
 <REPLY_STATUS_ID> --parent-status-id <TARGET_STATUS_ID> --file <reply-file>
 --strip-one-final-newline --max 4000`. Продолжай только при `valid=true`:
 восстановленный официальный `note_tweet` обязан byte-for-byte совпасть с
-validated source. Сохрани JSON-отчет проверки. Соблюдай
+validated source. Для short route выполни ту же команду: если `note_tweet`
+отсутствует, verifier обязан проверить обычные `text` и `entities`, а не считать
+это ошибкой и не повторять публикацию. Сохрани JSON-отчет проверки. Соблюдай
 MAX_PARALLEL_X_READ_TABS и немедленно переходи на
 одну X-вкладку при Browser instability или повышенном memory pressure. Вкладку
 ChatGPT открывай только для

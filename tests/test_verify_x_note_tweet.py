@@ -154,6 +154,118 @@ class VerifyXNoteTweetTests(unittest.TestCase):
         self.assertFalse(oversized["valid"])
         self.assertFalse(oversized["length_within_limit"])
 
+    def test_accepts_regular_short_tweet_without_note_tweet(self) -> None:
+        source = "Короткий обычный ответ"
+        response = {
+            "data": {
+                "id": "222",
+                "text": source,
+                "created_at": "2026-08-02T15:00:00Z",
+                "conversation_id": "111",
+                "referenced_tweets": [
+                    {"type": "replied_to", "id": "111"}
+                ],
+                "entities": {"urls": []},
+            }
+        }
+
+        report = verify_x_note_tweet.build_report(
+            response,
+            source_text=source,
+            maximum_length=4000,
+            expected_status_id="222",
+            expected_parent_status_id="111",
+        )
+
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["text_source"], "text")
+
+    def test_removes_only_entity_backed_hidden_reply_mentions(self) -> None:
+        source = "Короткий обычный ответ"
+        prefix = "@DonHuanMatuss @grytsig "
+        first = "@DonHuanMatuss"
+        second = "@grytsig"
+        response = {
+            "data": {
+                "id": "222",
+                "text": prefix + source,
+                "conversation_id": "111",
+                "referenced_tweets": [
+                    {"type": "replied_to", "id": "111"}
+                ],
+                "entities": {
+                    "mentions": [
+                        {
+                            "start": 0,
+                            "end": len(first),
+                            "username": "DonHuanMatuss",
+                        },
+                        {
+                            "start": len(first) + 1,
+                            "end": len(first) + 1 + len(second),
+                            "username": "grytsig",
+                        },
+                    ]
+                },
+            }
+        }
+
+        report = verify_x_note_tweet.build_report(
+            response,
+            source_text=source,
+            maximum_length=4000,
+            expected_status_id="222",
+            expected_parent_status_id="111",
+        )
+
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["api_code_points"], len(prefix + source))
+        self.assertEqual(
+            report["reply_prefix_mentions"], ["DonHuanMatuss", "grytsig"]
+        )
+        self.assertEqual(report["text_normalization"], "hidden_reply_mentions")
+
+    def test_does_not_strip_unverified_text_prefix(self) -> None:
+        source = "Короткий обычный ответ"
+        response = {
+            "data": {
+                "id": "222",
+                "text": "Чужой префикс " + source,
+                "conversation_id": "111",
+                "referenced_tweets": [
+                    {"type": "replied_to", "id": "111"}
+                ],
+                "entities": {"mentions": []},
+            }
+        }
+
+        report = verify_x_note_tweet.build_report(
+            response,
+            source_text=source,
+            maximum_length=4000,
+            expected_status_id="222",
+            expected_parent_status_id="111",
+        )
+
+        self.assertFalse(report["valid"])
+        self.assertFalse(report["exact_file_match"])
+        self.assertEqual(report["text_normalization"], "none")
+
+    def test_prefers_note_tweet_when_both_text_forms_exist(self) -> None:
+        response = self.response(text="Полный длинный ответ", urls=[])
+        response["data"]["text"] = "Сокращенная версия"
+
+        report = verify_x_note_tweet.build_report(
+            response,
+            source_text="Полный длинный ответ",
+            maximum_length=4000,
+            expected_status_id="222",
+            expected_parent_status_id="111",
+        )
+
+        self.assertTrue(report["valid"])
+        self.assertEqual(report["text_source"], "note_tweet")
+
 
 if __name__ == "__main__":
     unittest.main()
