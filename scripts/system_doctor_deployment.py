@@ -139,6 +139,46 @@ def thread_checks(
                 mismatches or None,
             )
         )
+        if expected.get("unique_unarchived_in_cwd"):
+            title = str(expected.get("title", "")).strip()
+            cwd = Path(str(expected.get("cwd", ""))).expanduser().resolve()
+            try:
+                matching = deps.matching_threads(
+                    database,
+                    cwd=cwd,
+                    title=title,
+                    archived=False,
+                )
+            except (sqlite3.Error, ValueError) as error:
+                checks.append(
+                    deps.make_check(
+                        f"thread.{role}.cardinality",
+                        "fail",
+                        "Не удалось проверить единственность сессии.",
+                        "Проверь read-only Codex state и повтори doctor.",
+                        {"error": type(error).__name__},
+                    )
+                )
+            else:
+                identifiers = [str(item["id"]) for item in matching]
+                unique = identifiers == [thread_id]
+                checks.append(
+                    deps.make_check(
+                        f"thread.{role}.cardinality",
+                        "pass" if unique else "fail",
+                        (
+                            f"Сессия {role} единственная."
+                            if unique
+                            else f"Для роли {role} найдено лишнее число сессий."
+                        ),
+                        "Оставь точную текущую сессию и архивируй остальные "
+                        "через официальный Codex archive.",
+                        None if unique else {
+                            "expected": [thread_id],
+                            "actual": identifiers,
+                        },
+                    )
+                )
         if expected.get("pin_recommended"):
             checks.append(
                 deps.make_check(

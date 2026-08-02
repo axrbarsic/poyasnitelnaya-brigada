@@ -19,7 +19,6 @@ TEMPLATE_DIR = PROJECT_ROOT / "macos"
 TEMPLATES = (
     "com.axrbarsic.xmention.poll.plist",
     "com.axrbarsic.xmention.watchdog.plist",
-    "com.axrbarsic.xmention.janitor.plist",
     "com.axrbarsic.xmention.dispatch.plist",
     "com.axrbarsic.xmention.codex-update.plist",
 )
@@ -50,12 +49,6 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
     watchdog_interval = int(
         config_payload.get("watchdog_interval_seconds", 60)
     )
-    janitor_interval = int(
-        config_payload.get("session_janitor_interval_seconds", 60)
-    )
-    janitor_minimum_age = int(
-        config_payload.get("session_janitor_minimum_age_seconds", 60)
-    )
     dispatch_interval = int(
         config_payload.get("app_server_dispatch_interval_seconds", 60)
     )
@@ -65,15 +58,10 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
     if (
         poll_interval <= 0
         or watchdog_interval <= 0
-        or janitor_interval <= 0
         or dispatch_interval <= 0
         or codex_update_interval <= 0
-        or janitor_minimum_age < 60
     ):
-        raise ValueError(
-            "LaunchAgent intervals must be positive and janitor age "
-            "must be at least 60 seconds"
-        )
+        raise ValueError("LaunchAgent intervals must be positive")
     wake_value = str(config_payload.get("wake_file", "var/wake-request.json"))
     wake_candidate = Path(wake_value).expanduser()
     wake_path = (
@@ -99,14 +87,6 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
         text = text.replace(
             "REPLACE_WATCHDOG_INTERVAL",
             str(watchdog_interval),
-        )
-        text = text.replace(
-            "REPLACE_JANITOR_INTERVAL",
-            str(janitor_interval),
-        )
-        text = text.replace(
-            "REPLACE_JANITOR_MINIMUM_AGE",
-            str(janitor_minimum_age),
         )
         text = text.replace(
             "REPLACE_DISPATCH_INTERVAL",

@@ -253,11 +253,6 @@ def database_integrity(
 
 relay_progress_check = system_doctor_runtime.relay_progress_check
 queue_latency_check = system_doctor_runtime.queue_latency_check
-session_janitor_health_check = (
-    system_doctor_runtime.session_janitor_health_check
-)
-
-
 def reasoning_effort_meets_minimum(
     actual: Any,
     minimum: Any,
@@ -276,6 +271,25 @@ def thread_row(database: Path, thread_id: str) -> dict[str, Any] | None:
     if actual_database is None or actual_database.resolve() != database.resolve():
         raise ValueError("Codex state database changed during doctor run")
     return codex_thread_state.thread_row(codex_home, thread_id)
+
+
+def matching_threads(
+    database: Path,
+    *,
+    cwd: Path,
+    title: str,
+    archived: bool,
+) -> list[dict[str, Any]]:
+    codex_home = database.parent
+    actual_database = codex_thread_state.state_database(codex_home)
+    if actual_database is None or actual_database.resolve() != database.resolve():
+        raise ValueError("Codex state database changed during doctor run")
+    return codex_thread_state.matching_threads(
+        codex_home,
+        cwd=cwd,
+        title=title,
+        archived=archived,
+    )
 
 
 def git_origin(root: Path) -> str:
@@ -316,6 +330,7 @@ def check_contract(
         resolve_home_path=resolve_home_path,
         state_database=state_database,
         thread_row=thread_row,
+        matching_threads=matching_threads,
         reasoning_effort_meets_minimum=reasoning_effort_meets_minimum,
         parse_simple_toml=parse_simple_toml,
         tree_digest=tree_digest,

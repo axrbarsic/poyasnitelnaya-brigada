@@ -215,6 +215,7 @@ class BrowserOwnerRotationTests(unittest.TestCase):
         self.assertEqual(second["rotation_token"], "token")
         self.assertEqual(second["action"], "create_thread")
         self.assertEqual(first["owner_rotation_marker"], "X_OWNER_ROTATION_TOKEN=token")
+        self.assertEqual(first["canonical_root"], str(self.root.resolve()))
         self.assertTrue(first["initial_prompt"].startswith(
             "X_OWNER_ROTATION_TOKEN=token\n\n"
         ))

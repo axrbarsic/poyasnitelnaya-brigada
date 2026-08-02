@@ -136,8 +136,8 @@ start, never the required quality of Sol reasoning or fact checking:
   outbound work. Only a saved transactional `route=rotation` may inspect tasks,
   create one replacement, retarget the existing heartbeat, and archive the
   exact old owner after verified commit;
-- let the model-free `session_janitor.py` LaunchAgent archive exact completed
-  service tasks through the local Codex app-server;
+- require owner rotation to archive only the exact retired owner through the
+  official Codex task API, then let App Server own task unloading;
 - never self-archive the current active run, because this can block normal
   completion;
 - never let a newly arrived event start a second owner while any global owner
@@ -409,7 +409,7 @@ without supplying target IDs.
   Sol and the Browser owner retain classification and publication.
 - A queued local Sol Max follow-up must load the exact recorded local X history and use
   `poyasnitelnaya-brigada-v2` in Sol Max by default.
-- Run poll, watchdog, janitor, and the Python event dispatcher every minute on
+- Run poll, watchdog, and the Python event dispatcher every minute on
   the 8 GB iMac. Empty, leased, voice-paused, and resource-deferred checks stop
   without a model, Browser, or new Codex task.
 - When `dispatch=true`, the supervisor launches Desktop only if needed. The
@@ -425,9 +425,10 @@ without supplying target IDs.
   deterministic `MAX_PARALLEL_X_READ_TABS` cap and fall back to one tab as soon
   as Browser or memory pressure appears. Finish each event end-to-end before
   using the single writer lane for the next event.
-- Close all task-owned tabs and finish normally. The model-free session
-  janitor archives the task after its minimum age. `notLoaded` alone is not
-  proof that a live owner died.
+- Close all task-owned tabs and finish normally. Do not archive the persistent
+  current owner. Only transactional rotation may archive the exact retired
+  owner after verified commit. `notLoaded` alone is not proof that a live
+  owner died.
 - A durable resolution remains successful even if a final API poll cannot read
   Keychain. Record `completed_with_warning`; do not release or republish the
   resolved event. The LaunchAgent owns the next token-free poll.

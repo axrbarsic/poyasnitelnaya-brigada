@@ -320,7 +320,7 @@ Enable this mode only after Alex explicitly grants continuing publication
 authority for queued eligible replies.
 
 1. Keep the Python watcher read-only and token-free.
-2. Run poll, watchdog, session janitor, and event dispatcher LaunchAgents every
+2. Run poll, watchdog, and event dispatcher LaunchAgents every
    minute.
 3. Let the event dispatcher run `autopilot_bridge gate` without a model.
 4. Only for `dispatch=true`, launch Codex Desktop when it is absent. The
@@ -367,11 +367,11 @@ authority for queued eligible replies.
 16. Keep the owner turn free of a final X poll. The one-minute
     LaunchAgent owns token-free polling.
 17. Close all task-owned Browser tabs and finish normally for every terminal
-    outcome. The model-free janitor archives old exact service tasks through
-    the local Codex app-server.
+    outcome. Do not archive the persistent current owner. Transactional owner
+    rotation archives only the exact retired owner after verified commit.
 18. After a Codex restart, a changed runtime ID may immediately reclaim an old
-    owner. After a stream disconnect in the same runtime, the janitor releases
-    the claim only when its related task is inactive and stale. A fresh
+    owner. In the same runtime an unfinished owner remains protected until its
+    lease expires, then the next claim atomically reclaims the queue. A fresh
     `notLoaded` status is not sufficient.
 19. When the queue becomes empty, close only the exact Desktop PID launched by
     the supervisor after its configured grace period. Never close a

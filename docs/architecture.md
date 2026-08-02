@@ -57,11 +57,12 @@ or a recognizable legacy watcher containing `events`, `meta` and `poll_runs`.
 A foreign, unidentified or newer database fails before journal-mode mutation,
 and system doctor compares both header values with the recovery contract.
 
-`session_janitor`, `resource_guard`, `keychain_bundle`, and `outbound_cycle`
-remain single public modules because they each own one bounded capability.
-Their orchestration is split internally into typed snapshots, pure decision
-helpers, and narrow side-effect functions. Native process enumeration and
-CoreAudio access use shared adapters instead of duplicate ctypes setup.
+`resource_guard`, `keychain_bundle`, and `outbound_cycle` remain single public
+modules because they each own one bounded capability. Task lifecycle is not a
+PID-management subsystem: owner rotation uses the official Codex archive API,
+and system doctor enforces one exact unarchived owner in the read-only registry.
+Native process enumeration and CoreAudio access use shared adapters instead of
+duplicate ctypes setup.
 
 ## Control-plane authority
 

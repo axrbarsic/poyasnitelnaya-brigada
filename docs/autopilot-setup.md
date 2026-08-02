@@ -49,7 +49,6 @@ Official architecture references:
 | --- | --- | --- | --- |
 | X watcher LaunchAgent | 1 minute | none | Mentions, tracked conversation tails, dedupe, SQLite, queue |
 | Supervisor LaunchAgent | 1 minute | none | Doctor, repair allowlist, durable incident |
-| Session janitor LaunchAgent | 1 minute | none | Archive service tasks, recover claims |
 | Event dispatcher LaunchAgent | 1 minute | none while idle | Gate, Desktop launch, managed shutdown |
 | Self-owned heartbeat | while Desktop is open | Sol Max | Reservation and claim in the same task |
 | Browser owner | per event | Sol Max | Browser, sources, publication |
@@ -97,8 +96,6 @@ Create ignored `config.json` from the example and set:
   "memory_guard_swap_blocks_dispatch": false,
   "voice_priority_enabled": true,
   "voice_priority_hold_seconds": 300,
-  "session_janitor_interval_seconds": 60,
-  "session_janitor_minimum_age_seconds": 60,
   "commenter_memory_limit": 12,
   "conversation_tail_enabled": true,
   "conversation_tail_poll_interval_seconds": 300,
@@ -168,7 +165,6 @@ Install:
 
 - `com.axrbarsic.xmention.poll.plist`
 - `com.axrbarsic.xmention.watchdog.plist`
-- `com.axrbarsic.xmention.janitor.plist`
 - `com.axrbarsic.xmention.dispatch.plist`
 - `com.axrbarsic.xmention.codex-update.plist`
 
@@ -253,8 +249,10 @@ visible as WARN throughout the handoff and does not reset on repeated kicks.
   If another turn starts during delivery, Codex queues or steers the direct
   follow-up. Mobile Remote, local Desktop, and automated Browser work use the
   same durable thread, while the global owner claim serializes publication.
-- The janitor never terminates the current Browser owner or an ambiguous
-  process.
+- Browser-owner rotation archives only the exact retired task through the
+  official Codex task API. Doctor requires exactly one unarchived owner with
+  the canonical title and working directory. The project never guesses process
+  ownership from timestamps and never kills Codex MCP helpers directly.
 
 ## Live canary
 

@@ -143,37 +143,6 @@ def _runtime_database_queue_checks(
     return checks, QueueContext(database, events, pending)
 
 
-def _runtime_session_janitor_checks(
-    root: Path,
-    runtime: dict[str, Any],
-    deps: Dependencies,
-) -> list[Any]:
-    relative = runtime.get("session_janitor_state_file")
-    max_age = runtime.get("max_session_janitor_age_seconds")
-    if relative is None and max_age is None:
-        return []
-    if relative is None or max_age is None:
-        return [
-            deps.make_check(
-                "runtime.session_janitor",
-                "fail",
-                "Контракт session janitor неполон.",
-                "Задай state file и максимальный возраст одной парой.",
-            )
-        ]
-    state_path = deps.resolve_project_path(root, str(relative))
-    try:
-        state = deps.read_json(state_path)
-    except (OSError, ValueError):
-        state = None
-    return [
-        system_doctor_runtime.session_janitor_health_check(
-            state,
-            max_age_seconds=int(max_age),
-        )
-    ]
-
-
 def _runtime_dispatch_checks(
     root: Path,
     config: dict[str, Any],
@@ -218,7 +187,8 @@ def _runtime_dispatch_checks(
                     if owner_ok
                     else "Browser owner lease протух или повреждён."
                 ),
-                "Запусти штатный session janitor recovery, не удаляй очередь.",
+                "Дождись окончания lease. Следующий claim атомарно вернёт "
+                "события в работу, очередь не удаляй.",
                 owner_details,
             )
         )
@@ -668,9 +638,6 @@ def check_contract(
             queue,
             dependencies,
         )
-    )
-    checks.extend(
-        _runtime_session_janitor_checks(root, runtime, dependencies)
     )
     checks.extend(
         system_doctor_rotation.check_rotation(

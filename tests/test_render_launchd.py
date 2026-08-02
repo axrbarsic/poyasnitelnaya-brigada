@@ -11,7 +11,7 @@ from scripts import render_launchd
 
 
 class RenderLaunchdTests(unittest.TestCase):
-    def test_janitor_minimum_age_is_rendered_from_config(self) -> None:
+    def test_runtime_launchagents_are_rendered_from_config(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             config = root / "config.json"
@@ -21,8 +21,6 @@ class RenderLaunchdTests(unittest.TestCase):
                     {
                         "poll_interval_seconds": 60,
                         "watchdog_interval_seconds": 60,
-                        "session_janitor_interval_seconds": 300,
-                        "session_janitor_minimum_age_seconds": 60,
                         "app_server_dispatch_interval_seconds": 45,
                         "wake_file": "var/wake-request.json",
                         "launchagent_python_executable": sys.executable,
@@ -33,15 +31,11 @@ class RenderLaunchdTests(unittest.TestCase):
 
             rendered = render_launchd.render(config, output)
 
-            janitor_path = next(
-                path
-                for path in rendered
-                if path.name == "com.axrbarsic.xmention.janitor.plist"
+            self.assertEqual(len(rendered), 4)
+            self.assertNotIn(
+                "com.axrbarsic.xmention.janitor.plist",
+                {path.name for path in rendered},
             )
-            payload = plistlib.loads(janitor_path.read_bytes())
-            arguments = payload["ProgramArguments"]
-            age_index = arguments.index("--minimum-age-seconds") + 1
-            self.assertEqual(arguments[age_index], "60")
             dispatch_path = next(
                 path
                 for path in rendered
@@ -75,21 +69,21 @@ class RenderLaunchdTests(unittest.TestCase):
                     sys.executable,
                 )
 
-    def test_janitor_minimum_age_rejects_unsafe_value(self) -> None:
+    def test_nonpositive_interval_is_rejected(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             config = root / "config.json"
             config.write_text(
                 json.dumps(
                     {
-                        "session_janitor_minimum_age_seconds": 59,
+                        "watchdog_interval_seconds": 0,
                         "launchagent_python_executable": sys.executable,
                     }
                 ),
                 encoding="utf-8",
             )
 
-            with self.assertRaisesRegex(ValueError, "at least 60 seconds"):
+            with self.assertRaisesRegex(ValueError, "must be positive"):
                 render_launchd.render(config, root / "rendered")
 
 

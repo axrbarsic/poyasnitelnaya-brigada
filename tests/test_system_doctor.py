@@ -152,10 +152,12 @@ class SystemDoctorTests(unittest.TestCase):
             "threads": {
                 "browser_owner": {
                     "id": "owner",
+                    "title": "Owner",
                     "model": "sol",
                     "minimum_reasoning_effort": "high",
                     "cwd": str(self.root),
                     "must_be_unarchived": True,
+                    "unique_unarchived_in_cwd": True,
                     "pin_recommended": True,
                 },
                 "heartbeat_relay": {
@@ -214,61 +216,6 @@ class SystemDoctorTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "unsupported"):
             system_doctor.contract_schema_version({"schema_version": 3})
-
-    def test_session_janitor_health_requires_fresh_clean_state(self) -> None:
-        now = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
-        healthy = system_doctor.session_janitor_health_check(
-            {
-                "status": "owner_busy",
-                "apply": True,
-                "checked_at": "2026-08-02T11:59:30Z",
-                "helper_error": None,
-                "helper_survivors": [],
-                "helpers_terminated": [10, 11],
-            },
-            max_age_seconds=180,
-            now=now,
-        )
-        self.assertEqual(healthy.status, "pass")
-
-        stale = system_doctor.session_janitor_health_check(
-            {
-                "status": "completed",
-                "apply": True,
-                "checked_at": "2026-08-02T11:50:00Z",
-                "helper_error": None,
-                "helper_survivors": [],
-            },
-            max_age_seconds=180,
-            now=now,
-        )
-        self.assertEqual(stale.status, "fail")
-
-        survivor = system_doctor.session_janitor_health_check(
-            {
-                "status": "completed",
-                "apply": True,
-                "checked_at": "2026-08-02T11:59:30Z",
-                "helper_error": None,
-                "helper_survivors": [42],
-            },
-            max_age_seconds=180,
-            now=now,
-        )
-        self.assertEqual(survivor.status, "fail")
-
-        dry_run = system_doctor.session_janitor_health_check(
-            {
-                "status": "completed",
-                "apply": False,
-                "checked_at": "2026-08-02T11:59:30Z",
-                "helper_error": None,
-                "helper_survivors": [],
-            },
-            max_age_seconds=180,
-            now=now,
-        )
-        self.assertEqual(dry_run.status, "fail")
 
     def test_production_contract_matches_database_identity(self) -> None:
         contract_path = (
@@ -1537,6 +1484,47 @@ class SystemDoctorTests(unittest.TestCase):
         )
         self.assertEqual(owner.status, "fail")
         self.assertIn("archived", owner.details)
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_duplicate_owner_role_fails_cardinality(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        state = self.home / ".codex" / "state_1.sqlite"
+        with closing(sqlite3.connect(state)) as connection:
+            connection.execute(
+                "INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?)",
+                (
+                    "owner-copy",
+                    0,
+                    0,
+                    "Owner",
+                    "sol",
+                    "high",
+                    str(self.root),
+                ),
+            )
+            connection.commit()
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        cardinality = next(
+            check
+            for check in checks
+            if check.identifier == "thread.browser_owner.cardinality"
+        )
+        self.assertEqual(cardinality.status, "fail")
+        self.assertEqual(
+            cardinality.details["actual"],
+            ["owner", "owner-copy"],
+        )
 
     @mock.patch(
         "scripts.system_doctor.git_origin",

@@ -55,87 +55,6 @@ def parse_timestamp(value: Any) -> datetime | None:
     return parsed.astimezone(timezone.utc)
 
 
-def session_janitor_health_check(
-    state: Any,
-    *,
-    max_age_seconds: int,
-    now: datetime | None = None,
-) -> Check:
-    if max_age_seconds <= 0:
-        raise ValueError("session janitor max age must be positive")
-    current = now or datetime.now(timezone.utc)
-    if not isinstance(state, dict):
-        return Check(
-            "runtime.session_janitor",
-            "fail",
-            "Session janitor не оставил читаемое состояние.",
-            "Проверь LaunchAgent janitor и его state file.",
-        )
-    checked_at = parse_timestamp(state.get("checked_at"))
-    age_seconds = (
-        (current - checked_at).total_seconds()
-        if checked_at is not None
-        else None
-    )
-    helper_error = str(state.get("helper_error") or "").strip()
-    raw_survivors = state.get("helper_survivors")
-    survivors = (
-        [int(value) for value in raw_survivors]
-        if isinstance(raw_survivors, list)
-        and all(isinstance(value, int) for value in raw_survivors)
-        else None
-    )
-    status = str(state.get("status", ""))
-    applied = state.get("apply") is True
-    healthy_status = status in {"completed", "owner_busy"}
-    fresh = (
-        age_seconds is not None
-        and 0 <= age_seconds <= max_age_seconds
-    )
-    healthy = (
-        healthy_status
-        and applied
-        and fresh
-        and not helper_error
-        and survivors == []
-    )
-    raw_terminated = state.get("helpers_terminated")
-    terminated = (
-        [int(value) for value in raw_terminated]
-        if isinstance(raw_terminated, list)
-        and all(isinstance(value, int) for value in raw_terminated)
-        else []
-    )
-    details = {
-        "age_seconds": (
-            round(age_seconds, 1) if age_seconds is not None else None
-        ),
-        "max_age_seconds": max_age_seconds,
-        "status": status,
-        "apply": applied,
-        "helper_error": helper_error or None,
-        "helper_survivors": survivors,
-        "helpers_terminated_count": len(terminated),
-        "helpers_terminated_sample": terminated[:10],
-    }
-    if healthy:
-        return Check(
-            "runtime.session_janitor",
-            "pass",
-            "Session janitor свежий, зависших helper-процессов нет.",
-            "Проверь helper lifecycle при следующем doctor run.",
-            details,
-        )
-    return Check(
-        "runtime.session_janitor",
-        "fail",
-        "Session janitor не подтверждает чистый helper lifecycle.",
-        "Запусти штатный janitor с --apply, не завершай процессы вне его "
-        "проверенного списка.",
-        details,
-    )
-
-
 def completion_dispatch_progress(
     state: Any,
     *,
@@ -206,7 +125,7 @@ def _relay_immediate_result(
             "runtime.relay_progress",
             "pass",
             "Ожидающая очередь уже принадлежит Browser owner.",
-            "Проверь owner lease и session janitor.",
+            "Проверь owner lease и terminal исход текущего claim.",
             details,
         )
     if work_kind == "repair" and dispatch_status in ACTIVE_REPAIR_STATUSES:

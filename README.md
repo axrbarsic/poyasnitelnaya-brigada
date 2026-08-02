@@ -116,9 +116,9 @@ Watcher и dispatcher сами никогда ничего не публикую
   тяжелую Browser-работу на паузу. Минутный watcher продолжает складывать
   события в очередь, а пятиминутный защитный хвост закрывает паузы между
   репликами.
-- Безмодельный session janitor через локальный Codex app-server архивирует
-  завершенные служебные задачи и восстанавливает осиротевший claim. Он не
-  создаёт новых задач и не расходует токены.
+- Система использует одну постоянную Browser-owner задачу. Ротация архивирует
+  только точную старую задачу через официальный Codex archive, а doctor требует
+  единственность незархивированного owner. Отдельного process janitor нет.
 - Безмодельный supervisor раз в минуту запускает системный doctor. Зеленое
   состояние никого не будит. Stale poll получает один allowlisted
   `launchctl kickstart`; повторный провал создает один durable incident и
@@ -218,7 +218,7 @@ python3 xmention_watcher.py --config config.json status
 Причины и дальнейшая webhook-миграция описаны в
 [`docs/x-api-cost-control.ru.md`](docs/x-api-cost-control.ru.md).
 
-После этого установите пять LaunchAgent и один выделенный Sol Max service
+После этого установите четыре LaunchAgent и один выделенный Sol Max service
 worker с self-owned heartbeat по
 [русскому руководству автопилота](docs/autopilot-setup.ru.md),
 [контракту локального skill](docs/local-explainer-skill.ru.md) и

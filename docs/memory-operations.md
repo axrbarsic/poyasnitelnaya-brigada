@@ -15,7 +15,7 @@ Codex automation is therefore retired.
 
 ## New low-memory contract
 
-1. Polling, watchdog, janitor, and the Desktop supervisor are plain Python.
+1. Polling, watchdog, and the Desktop supervisor are plain Python.
 2. An idle cycle spends zero model tokens, creates no task, and starts no
    Desktop or Browser.
 3. A ready queue launches Codex Desktop only when it is absent.
@@ -32,8 +32,8 @@ Codex automation is therefore retired.
 10. The dispatcher verifies that every original event ID left the queue.
 11. A released unresolved claim is failure, not success.
 12. Active voice pauses only Browser, never polling or the durable queue.
-13. The janitor archives historical service tasks, while the new design no
-    longer creates one task per minute.
+13. Owner rotation archives the exact retired task through the official Codex
+    task API. Doctor requires exactly one unarchived canonical owner.
 14. After the queue empties, the supervisor closes only the exact Desktop PID
     it launched. It never closes a Desktop instance opened by Alex.
 
@@ -87,7 +87,6 @@ The new idle path:
 | X poll | 0 | 0 | no |
 | Watchdog | 0 | 0 | no |
 | Resource gate | 0 | 0 | no |
-| Session janitor | 0 | 0 | no |
 | Idle dispatcher | 0 | 0 | no |
 
 In normal unattended idle, supervisor-owned Desktop is closed and the heartbeat
@@ -96,24 +95,19 @@ a second model turn for transport. If Alex intentionally keeps Desktop open,
 the self-owned heartbeat continues its small scheduled gate. Substantive Sol
 Max cost follows the number and complexity of real replies.
 
-## Archiving
+## Archiving and process lifecycle
 
-The official Codex documentation states that every standalone scheduled run
-starts a new chat. A model-based housekeeping automation is unsuitable because
-it creates more tasks.
+There is one persistent Browser-owner task. Rotation creates one replacement,
+commits the relay target, archives the exact previous task with the official
+Codex task API, and only then closes the transaction. Doctor queries the
+read-only Codex registry and fails unless the canonical title and working
+directory identify exactly the configured unarchived owner.
 
-`scripts/session_janitor.py` runs every minute as a LaunchAgent. It:
-
-- archives only exact matching completed service tasks;
-- protects the active and pinned Browser owner;
-- retains restorable history;
-- releases an orphaned claim only from strict state and timing evidence;
-- terminates only helpers proven to belong to a completed service task;
-- writes one replacing health state instead of an unbounded log.
-
-The safest final cleanup for helpers left by historical scheduled runs is one
-Codex Desktop restart at a safe boundary. The production dispatcher starts no
-app-server and never depends on heuristically killing unrelated processes.
+The project does not terminate MCP or Browser helpers by PID. Codex App Server
+owns loaded-task process lifetime and unloads a task after subscriptions and
+activity end. Resource guard defers new Browser work while that grace period
+still consumes memory. Historical helpers are reclaimed by one Codex Desktop
+restart at a safe boundary, not by timestamp heuristics.
 
 ## Post-update proof
 

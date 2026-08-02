@@ -54,7 +54,6 @@ owner-сессии внутри приложения.
 | --- | --- | --- | --- |
 | X watcher LaunchAgent | 1 минута | нет | Упоминания, хвост разговоров, дедупликация, SQLite, очередь |
 | Supervisor LaunchAgent | 1 минута | нет | Doctor, allowlist ремонта, durable incident |
-| Session janitor LaunchAgent | 1 минута | нет | Архив служебных задач, recovery claim |
 | Event dispatcher LaunchAgent | 1 минута | нет при idle | Gate, запуск и managed shutdown Desktop |
 | Self-owned heartbeat | пока Desktop открыт | Sol Max | Reservation и claim в той же сессии |
 | Browser owner | по событию | Sol Max | Browser, фактчек, публикация |
@@ -103,8 +102,6 @@ trust_level = "trusted"
   "memory_guard_swap_blocks_dispatch": false,
   "voice_priority_enabled": true,
   "voice_priority_hold_seconds": 300,
-  "session_janitor_interval_seconds": 60,
-  "session_janitor_minimum_age_seconds": 60,
   "commenter_memory_limit": 12,
   "conversation_tail_enabled": true,
   "conversation_tail_poll_interval_seconds": 300,
@@ -181,7 +178,6 @@ python3 scripts/render_launchd.py \
 
 - `com.axrbarsic.xmention.poll.plist`
 - `com.axrbarsic.xmention.watchdog.plist`
-- `com.axrbarsic.xmention.janitor.plist`
 - `com.axrbarsic.xmention.dispatch.plist`
 - `com.axrbarsic.xmention.codex-update.plist`
 
@@ -256,6 +252,10 @@ renew и durable завершение.
 - Idle: ноль model tokens, ноль Browser-вкладок, ноль новых задач.
 - Ограниченный inbound claim: максимум три старейших события и до трёх
   task-owned X-вкладок для независимого read-only просмотра.
+- Ротация Browser owner архивирует только точную выведенную из эксплуатации
+  задачу через официальный Codex archive. Doctor требует ровно одну
+  незархивированную owner-задачу с каноническими title и cwd. Проект не угадывает
+  владельца MCP-процесса по времени и не завершает Codex helper напрямую.
 - Short и local-max: одна последовательная полоса composer и публикации,
   немедленный durable resolve каждого события и ноль ChatGPT-вкладок для
   local-max.
@@ -282,7 +282,9 @@ renew и durable завершение.
   очередь или направляет его в активный turn. Mobile Remote, локальный Desktop
   и автоматический Browser owner используют один durable thread, а глобальный
   owner claim сериализует публикацию.
-- Janitor не должен убивать текущий Browser owner или неоднозначный процесс.
+- Отдельного process janitor нет. Завершением helper-процессов управляет Codex
+  App Server, а протухший owner lease атомарно возвращается в работу следующим
+  claim. Неоднозначные PID никогда не завершаются по эвристике времени запуска.
 
 ## Живой canary
 

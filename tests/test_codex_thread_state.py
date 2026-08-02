@@ -28,9 +28,37 @@ class CodexThreadStateTests(unittest.TestCase):
                     )
                     """
                 )
-                connection.execute(
+                connection.executemany(
                     "INSERT INTO threads VALUES (?, ?, ?, ?, ?, ?, ?)",
-                    ("thread", 0, 0, "Owner", "sol", "max", "/tmp/project"),
+                    [
+                        (
+                            "thread",
+                            0,
+                            0,
+                            "Owner",
+                            "sol",
+                            "max",
+                            "/tmp/project",
+                        ),
+                        (
+                            "archived",
+                            1,
+                            0,
+                            "Owner",
+                            "sol",
+                            "max",
+                            "/tmp/project",
+                        ),
+                        (
+                            "other-project",
+                            0,
+                            0,
+                            "Owner",
+                            "sol",
+                            "max",
+                            "/tmp/other",
+                        ),
+                    ],
                 )
                 connection.commit()
 
@@ -39,6 +67,14 @@ class CodexThreadStateTests(unittest.TestCase):
             self.assertIsNotNone(row)
             self.assertEqual(row["title"], "Owner")
             self.assertEqual(row["reasoning_effort"], "max")
+
+            matching = codex_thread_state.matching_threads(
+                codex_home,
+                cwd=Path("/tmp/project"),
+                title="Owner",
+                archived=False,
+            )
+            self.assertEqual([item["id"] for item in matching], ["thread"])
 
     def test_missing_database_fails_closed(self) -> None:
         with TemporaryDirectory() as temporary:

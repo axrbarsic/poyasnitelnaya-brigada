@@ -58,7 +58,6 @@
     "scripts/event_dispatch.py",
     "scripts/outbound_cycle.py",
     "scripts/resource_guard.py",
-    "scripts/session_janitor.py",
     "scripts/build_outbound_history.py",
     "scripts/install_keychain_helper.sh",
     "scripts/keychain_bundle.py",
@@ -97,6 +96,7 @@
       "minimum_reasoning_effort": "max",
       "cwd": "/Users/alexlane/Developer/x-mention-watcher",
       "must_be_unarchived": true,
+      "unique_unarchived_in_cwd": true,
       "pin_recommended": false,
       "project_id_source": "config.codex_project_id",
       "initial_prompt_source": "macos/x-browser-owner-init.prompt.txt"
@@ -136,14 +136,12 @@
   "launch_agents": [
     "com.axrbarsic.xmention.poll",
     "com.axrbarsic.xmention.watchdog",
-    "com.axrbarsic.xmention.janitor",
     "com.axrbarsic.xmention.dispatch",
     "com.axrbarsic.xmention.codex-update"
   ],
   "launch_agent_programs": {
     "com.axrbarsic.xmention.poll": "xmention_watcher.py",
     "com.axrbarsic.xmention.watchdog": "scripts/autopilot_supervisor.py",
-    "com.axrbarsic.xmention.janitor": "scripts/session_janitor.py",
     "com.axrbarsic.xmention.dispatch": "scripts/app_server_dispatch.py",
     "com.axrbarsic.xmention.codex-update": "scripts/codex_cli_updater.py"
   },
@@ -163,8 +161,6 @@
     "minimum_launchagent_sqlite_version": "3.51.3",
     "autopilot_state_file": "var/autopilot-dispatch.json",
     "owner_rotation_state_file": "var/browser-owner-rotation.json",
-    "session_janitor_state_file": "var/session-janitor-health.json",
-    "max_session_janitor_age_seconds": 180,
     "max_owner_rotation_age_seconds": 900,
     "max_poll_age_seconds": 180,
     "max_dispatch_age_seconds": 180,

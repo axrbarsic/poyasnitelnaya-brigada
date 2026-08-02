@@ -33,7 +33,7 @@ automation, LaunchAgent, SQLite или Keychain. Он сверяет:
 - архивный флаг, модель, минимальный effort и рабочий каталог ролей;
 - официальный heartbeat `x-relay`, paused cron marker `x-15` и остальные
   retired automations;
-- пять LaunchAgent;
+- четыре LaunchAgent;
 - SQLite integrity, очередь и Keychain helper;
 - установленные `x-twitter-operator`, обе версии
   `poyasnitelnaya-brigada` и `377` с Git-копиями;

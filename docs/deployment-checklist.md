@@ -42,10 +42,10 @@
 
 ## Gate 3: production
 
-- [x] Render the five machine-specific LaunchAgent plists.
+- [x] Render the four machine-specific LaunchAgent plists.
 - [x] Inspect their absolute paths. Keep the dispatcher plist unloaded until
   its live relay gate succeeds.
-- [x] Confirm the loaded poll, watchdog, and janitor complete with exit code 0.
+- [x] Confirm the loaded poll and watchdog complete with exit code 0.
 - [x] Confirm the retired CLI launcher exits nonzero before claiming an event.
 - [x] Create the Sol Max Codex Desktop Browser owner.
 - [x] Pause the five-minute Luna Low dispatcher automation.

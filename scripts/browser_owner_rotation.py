@@ -244,6 +244,7 @@ def _result(
         "old_thread_id": str(transaction["old_thread_id"]),
         "new_thread_id": transaction.get("new_thread_id"),
         "project_id": project_id,
+        "canonical_root": str(root),
         "owner_title": str(owner.get("title", "X: Browser owner")),
         "owner_model": str(owner["model"]),
         "owner_thinking": str(owner["minimum_reasoning_effort"]),

@@ -160,7 +160,7 @@ post or official X API record is append-only verified.
 
 ## Current checkpoint
 
-Polling, supervisor, janitor, and event dispatcher LaunchAgents run every minute
+Polling, supervisor, and event dispatcher LaunchAgents run every minute
 for `@axrbarsic`. The dispatcher checks the compact queue without a model and
 starts the existing Sol owner only for ready work. A complete initial
 review remains a separate gate and must finish before an empty incremental
@@ -698,13 +698,12 @@ and applies the correction atomically, so append-only history remains intact.
 
 ## Background service
 
-The `macos/` directory contains five LaunchAgent templates whose intervals come
-from `config.json`: poll, supervisor, session janitor, event dispatcher, and
-Codex CLI updater. The idle terminal path is entirely model-free. A ready queue
-starts Codex Desktop when needed, then the existing Sol Max heartbeat claims
-the route. The janitor archives historical service tasks
-and recovers orphaned claims without creating a Codex task or spending model
-tokens.
+The `macos/` directory contains four LaunchAgent templates whose intervals come
+from `config.json`: poll, supervisor, event dispatcher, and Codex CLI updater.
+The idle terminal path is entirely model-free. A ready queue starts Codex
+Desktop when needed, then the existing Sol Max heartbeat claims the route.
+Owner rotation archives the exact retired task through the official Codex task
+API, and expired claims are reclaimed atomically by the next claim.
 
 Do not install the LaunchAgents on another machine until a live shadow run with
 the official X API has matched a manual Browser scan.

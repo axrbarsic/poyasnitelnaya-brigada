@@ -48,3 +48,35 @@ def thread_row(codex_home: Path, thread_id: str) -> dict[str, Any] | None:
             (identifier,),
         ).fetchone()
     return dict(row) if row is not None else None
+
+
+def matching_threads(
+    codex_home: Path,
+    *,
+    cwd: Path,
+    title: str,
+    archived: bool,
+) -> list[dict[str, Any]]:
+    """Read the exact Codex tasks that satisfy one deployment role."""
+
+    database = state_database(codex_home)
+    if database is None:
+        raise ValueError("Codex state database is missing")
+    expected_title = title.strip()
+    if not expected_title:
+        raise ValueError("thread title is required")
+    uri = f"{database.resolve().as_uri()}?mode=ro"
+    expected_cwd = cwd.expanduser().resolve()
+    with closing(sqlite3.connect(uri, uri=True)) as connection:
+        connection.row_factory = sqlite3.Row
+        rows = connection.execute(
+            f"SELECT {', '.join(THREAD_FIELDS)} FROM threads "
+            "WHERE title = ? AND archived = ? "
+            "ORDER BY id",
+            (expected_title, int(archived)),
+        ).fetchall()
+    return [
+        dict(row)
+        for row in rows
+        if Path(str(row["cwd"])).expanduser().resolve() == expected_cwd
+    ]

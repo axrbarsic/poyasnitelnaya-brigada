@@ -27,6 +27,7 @@ class Dependencies:
     resolve_home_path: Callable[[Path, str], Path]
     state_database: Callable[[Path], Path | None]
     thread_row: Callable[..., dict[str, Any] | None]
+    matching_threads: Callable[..., list[dict[str, Any]]]
     reasoning_effort_meets_minimum: Callable[[Any, Any], bool]
     parse_simple_toml: Callable[[Path], dict[str, Any]]
     tree_digest: Callable[[Path], str]
