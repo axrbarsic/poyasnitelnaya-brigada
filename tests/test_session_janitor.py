@@ -516,6 +516,14 @@ class SessionJanitorTests(unittest.TestCase):
                 "command": "child",
             },
             {
+                "pid": 42,
+                "ppid": 1,
+                "started_at": 100,
+                "command": (
+                    "python3 /project/scripts/lightpanda_mcp.py"
+                ),
+            },
+            {
                 "pid": 50,
                 "ppid": 1,
                 "started_at": 200,
@@ -537,7 +545,7 @@ class SessionJanitorTests(unittest.TestCase):
         )
 
         self.assertEqual([item["id"] for item in eligible], ["x15-done"])
-        self.assertEqual(helpers, [40, 41])
+        self.assertEqual(helpers, [40, 41, 42])
 
     def test_process_parser_reads_mac_lstart(self) -> None:
         parsed = session_janitor.parse_processes(
@@ -548,6 +556,53 @@ class SessionJanitorTests(unittest.TestCase):
         self.assertEqual(parsed[0]["pid"], 10)
         self.assertEqual(parsed[0]["ppid"], 1)
         self.assertEqual(parsed[0]["command"], "node ./mcp/server.mjs")
+
+    def test_archived_inventory_is_helper_only(self) -> None:
+        calls = []
+
+        class Client:
+            def call(self, method, params):
+                if method != "thread/list":
+                    raise AssertionError(f"unexpected method: {method}")
+                calls.append(dict(params))
+                archived = bool(params["archived"])
+                suffix = "archived" if archived else "live"
+                return {
+                    "data": [
+                        {
+                            "id": suffix,
+                            "name": session_janitor.AUTOMATION_TITLE,
+                            "threadSource": "automation",
+                            "preview": (
+                                "Automation: X: автопилот ответов\n"
+                                "Automation ID: x\n"
+                            ),
+                            "status": {"type": "notLoaded"},
+                            "createdAt": 100,
+                            "updatedAt": 120,
+                        }
+                    ],
+                    "nextCursor": None,
+                }
+
+        inventory = session_janitor._list_automation_threads(
+            Client(),
+            page_limit=100,
+            include_archived_helpers=True,
+        )
+
+        self.assertEqual(
+            {thread["id"] for thread in inventory.all_threads},
+            {"live", "archived"},
+        )
+        self.assertEqual(
+            [thread["id"] for thread in inventory.unarchived_threads],
+            ["live"],
+        )
+        self.assertEqual(
+            {bool(params["archived"]) for params in calls},
+            {False, True},
+        )
 
     def test_only_old_completed_automation_threads_are_eligible(self) -> None:
         threads = [

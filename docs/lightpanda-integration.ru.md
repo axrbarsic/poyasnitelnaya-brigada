@@ -185,6 +185,37 @@ Worker отдельно обнаруживает:
 | CDP подключение через Playwright | pass, title и h1 прочитаны из реального процесса |
 | Контрольный maximum RSS | около 59 MB на одиночном публичном X probe |
 
+## Жизненный цикл project MCP
+
+Официальная документация
+[Codex MCP](https://learn.chatgpt.com/docs/extend/mcp.md) определяет stdio server
+как локальный процесс, запускаемый командой, а
+[Codex app-server](https://learn.chatgpt.com/docs/app-server.md) привязывает MCP
+startup status к загруженной задаче. Автоматические задачи могут завершиться
+раньше, чем Desktop освободит дочерний stdio-процесс.
+Поэтому `session_janitor.py` считает `scripts/lightpanda_mcp.py` task-owned
+helper, сопоставляет его только с завершённой automation по времени запуска и
+завершает через штатный проверенный список. Активная owner-задача и её потомки
+защищены от уборки.
+
+System doctor отдельно требует свежий janitor state, отсутствие ошибки helper
+scan и нулевой список `helper_survivors`. Это защищает не только память, но и
+неограниченный рост PID и открытых pipe даже при малом RSS каждого процесса.
+
+Обычный минутный запуск читает только незархивированные automation. Для
+разового восстановления старых утечек используется явный bounded режим:
+
+```bash
+python3 scripts/session_janitor.py \
+  --config config.json \
+  --apply \
+  --minimum-age-seconds 60 \
+  --include-archived-helpers
+```
+
+Архивные задачи в этом режиме служат только доказательством принадлежности
+helper. Повторно архивировать или изменять их janitor не пытается.
+
 Upstream приводит benchmark примерно 123 MB против 2 GB и 5 секунд против
 46 секунд на 100 страницах. Эти цифры являются benchmark upstream, а не
 результатом нашего полного независимого воспроизведения. Наш локальный замер

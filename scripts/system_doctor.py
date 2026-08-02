@@ -253,6 +253,9 @@ def database_integrity(
 
 relay_progress_check = system_doctor_runtime.relay_progress_check
 queue_latency_check = system_doctor_runtime.queue_latency_check
+session_janitor_health_check = (
+    system_doctor_runtime.session_janitor_health_check
+)
 
 
 def reasoning_effort_meets_minimum(

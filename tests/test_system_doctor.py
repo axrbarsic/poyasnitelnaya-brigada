@@ -215,6 +215,61 @@ class SystemDoctorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported"):
             system_doctor.contract_schema_version({"schema_version": 3})
 
+    def test_session_janitor_health_requires_fresh_clean_state(self) -> None:
+        now = datetime(2026, 8, 2, 12, 0, tzinfo=timezone.utc)
+        healthy = system_doctor.session_janitor_health_check(
+            {
+                "status": "owner_busy",
+                "apply": True,
+                "checked_at": "2026-08-02T11:59:30Z",
+                "helper_error": None,
+                "helper_survivors": [],
+                "helpers_terminated": [10, 11],
+            },
+            max_age_seconds=180,
+            now=now,
+        )
+        self.assertEqual(healthy.status, "pass")
+
+        stale = system_doctor.session_janitor_health_check(
+            {
+                "status": "completed",
+                "apply": True,
+                "checked_at": "2026-08-02T11:50:00Z",
+                "helper_error": None,
+                "helper_survivors": [],
+            },
+            max_age_seconds=180,
+            now=now,
+        )
+        self.assertEqual(stale.status, "fail")
+
+        survivor = system_doctor.session_janitor_health_check(
+            {
+                "status": "completed",
+                "apply": True,
+                "checked_at": "2026-08-02T11:59:30Z",
+                "helper_error": None,
+                "helper_survivors": [42],
+            },
+            max_age_seconds=180,
+            now=now,
+        )
+        self.assertEqual(survivor.status, "fail")
+
+        dry_run = system_doctor.session_janitor_health_check(
+            {
+                "status": "completed",
+                "apply": False,
+                "checked_at": "2026-08-02T11:59:30Z",
+                "helper_error": None,
+                "helper_survivors": [],
+            },
+            max_age_seconds=180,
+            now=now,
+        )
+        self.assertEqual(dry_run.status, "fail")
+
     def test_production_contract_matches_database_identity(self) -> None:
         contract_path = (
             Path(__file__).resolve().parents[1]

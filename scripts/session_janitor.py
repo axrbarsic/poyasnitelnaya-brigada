@@ -49,6 +49,7 @@ HELPER_COMMAND_MARKERS = (
     "/cua_node/bin/node_repl",
     "node ./mcp/server.mjs",
     "uv run --project . --frozen python scripts/mcp_server.py",
+    "/scripts/lightpanda_mcp.py",
 )
 PROCESS_PATTERN = re.compile(
     r"^\s*(\d+)\s+(\d+)\s+"
@@ -402,6 +403,7 @@ def eligible_threads(
 @dataclass(frozen=True)
 class ThreadInventory:
     all_threads: list[dict[str, Any]]
+    unarchived_threads: list[dict[str, Any]]
     matched: list[dict[str, Any]]
 
 
@@ -501,44 +503,56 @@ def _list_automation_threads(
     client: AppServerClient,
     *,
     page_limit: int,
+    include_archived_helpers: bool,
 ) -> ThreadInventory:
     all_threads: list[dict[str, Any]] = []
+    unarchived_threads: list[dict[str, Any]] = []
     matched: list[dict[str, Any]] = []
     seen_thread_ids: set[str] = set()
-    for _, title in AUTOMATION_IDENTITIES:
-        cursor: str | None = None
-        while True:
-            result = client.call(
-                "thread/list",
-                {
-                    "archived": False,
-                    "cursor": cursor,
-                    "limit": page_limit,
-                    "searchTerm": title,
-                    "sortDirection": "desc",
-                    "sortKey": "updated_at",
-                    "sourceKinds": ["vscode"],
-                    "useStateDbOnly": True,
-                },
-            )
-            data = result.get("data", [])
-            if not isinstance(data, list):
-                raise RuntimeError("thread/list data is not an array")
-            for item in data:
-                if not isinstance(item, dict):
-                    continue
-                thread_id = str(item.get("id", ""))
-                if not thread_id or thread_id in seen_thread_ids:
-                    continue
-                seen_thread_ids.add(thread_id)
-                all_threads.append(item)
-                if matches_automation(item):
-                    matched.append(_thread_summary(item))
-            next_cursor = result.get("nextCursor")
-            if not isinstance(next_cursor, str) or not next_cursor:
-                break
-            cursor = next_cursor
-    return ThreadInventory(all_threads=all_threads, matched=matched)
+    archive_filters = (
+        (False, True) if include_archived_helpers else (False,)
+    )
+    for archived in archive_filters:
+        for _, title in AUTOMATION_IDENTITIES:
+            cursor: str | None = None
+            while True:
+                result = client.call(
+                    "thread/list",
+                    {
+                        "archived": archived,
+                        "cursor": cursor,
+                        "limit": page_limit,
+                        "searchTerm": title,
+                        "sortDirection": "desc",
+                        "sortKey": "updated_at",
+                        "sourceKinds": ["vscode"],
+                        "useStateDbOnly": True,
+                    },
+                )
+                data = result.get("data", [])
+                if not isinstance(data, list):
+                    raise RuntimeError("thread/list data is not an array")
+                for item in data:
+                    if not isinstance(item, dict):
+                        continue
+                    thread_id = str(item.get("id", ""))
+                    if not thread_id or thread_id in seen_thread_ids:
+                        continue
+                    seen_thread_ids.add(thread_id)
+                    all_threads.append(item)
+                    if not archived:
+                        unarchived_threads.append(item)
+                    if matches_automation(item):
+                        matched.append(_thread_summary(item))
+                next_cursor = result.get("nextCursor")
+                if not isinstance(next_cursor, str) or not next_cursor:
+                    break
+                cursor = next_cursor
+    return ThreadInventory(
+        all_threads=all_threads,
+        unarchived_threads=unarchived_threads,
+        matched=matched,
+    )
 
 
 def _owner_threads(
@@ -633,6 +647,7 @@ def _owner_busy_result(
     owner: dict[str, Any],
     owning_thread: dict[str, Any] | None,
     *,
+    apply: bool,
     age_seconds: float | None,
     lease_remaining_seconds: float | None,
     thread_is_live: bool,
@@ -641,6 +656,7 @@ def _owner_busy_result(
 ) -> dict[str, Any]:
     return {
         "status": "owner_busy",
+        "apply": apply,
         "owner_age_seconds": (
             round(age_seconds, 1) if age_seconds is not None else None
         ),
@@ -705,6 +721,7 @@ def _recover_or_report_busy_owner(
             _owner_busy_result(
                 owner,
                 owning_thread,
+                apply=apply,
                 age_seconds=age_seconds,
                 lease_remaining_seconds=lease_remaining_seconds,
                 thread_is_live=thread_is_live,
@@ -764,6 +781,7 @@ def run_janitor(
     minimum_age_seconds: int,
     orphan_owner_seconds: int,
     page_limit: int,
+    include_archived_helpers: bool = False,
 ) -> dict[str, Any]:
     config = autopilot_dispatch.read_json(config_path)
     state_path, owner = owner_snapshot(config_path)
@@ -773,10 +791,14 @@ def run_janitor(
     client = AppServerClient.start(str(config.get("codex_cli_path", "codex")))
     try:
         client.initialize()
-        inventory = _list_automation_threads(client, page_limit=page_limit)
+        inventory = _list_automation_threads(
+            client,
+            page_limit=page_limit,
+            include_archived_helpers=include_archived_helpers,
+        )
         owner_threads = _owner_threads(
             config,
-            inventory.all_threads,
+            inventory.unarchived_threads,
             owner,
             outbound_owner,
         )
@@ -786,12 +808,16 @@ def run_janitor(
             protected_ids=owner_threads.protected_ids,
             apply=apply,
         )
-        archive = _archive_eligible_threads(
-            client,
-            inventory.all_threads,
-            protected_ids=owner_threads.protected_ids,
-            minimum_age_seconds=minimum_age_seconds,
-            apply=apply,
+        archive = (
+            ArchiveResult([], [])
+            if helpers.error or helpers.survivors
+            else _archive_eligible_threads(
+                client,
+                inventory.unarchived_threads,
+                protected_ids=owner_threads.protected_ids,
+                minimum_age_seconds=minimum_age_seconds,
+                apply=apply,
+            )
         )
         busy, recovery_candidate, recovered_owner = (
             _recover_or_report_busy_owner(
@@ -829,6 +855,7 @@ def main() -> int:
     parser.add_argument("--minimum-age-seconds", type=int, default=900)
     parser.add_argument("--orphan-owner-seconds", type=int)
     parser.add_argument("--page-limit", type=int, default=100)
+    parser.add_argument("--include-archived-helpers", action="store_true")
     arguments = parser.parse_args()
     if arguments.minimum_age_seconds < 60:
         parser.error("--minimum-age-seconds must be at least 60")
@@ -865,6 +892,7 @@ def main() -> int:
             minimum_age_seconds=arguments.minimum_age_seconds,
             orphan_owner_seconds=orphan_owner_seconds,
             page_limit=arguments.page_limit,
+            include_archived_helpers=arguments.include_archived_helpers,
         )
     result["checked_at"] = autopilot_dispatch.isoformat()
     state_path = autopilot_dispatch.resolve_path(
