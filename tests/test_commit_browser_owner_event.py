@@ -301,6 +301,27 @@ class CommitBrowserOwnerEventTests(unittest.TestCase):
                 requested_event_dir=self.event_dir,
             )
 
+    def test_repairs_stale_generated_records_before_manifest(self) -> None:
+        self._write_evidence(self._published_evidence())
+        history_path = self.event_dir / "conversation-history.jsonl"
+        ledger_path = self.event_dir / "run-ledger.jsonl"
+        history_path.write_text("{}\n", encoding="utf-8")
+        ledger_path.write_text("{}\n", encoding="utf-8")
+
+        result = browser_owner_evidence.commit_event(
+            config_path=self.config_path,
+            claim_token=self.claim_token,
+            requested_event_dir=self.event_dir,
+        )
+
+        history = json.loads(history_path.read_text(encoding="utf-8"))
+        ledger = json.loads(ledger_path.read_text(encoding="utf-8"))
+        self.assertEqual(result["history"], "repaired")
+        self.assertEqual(result["ledger"], "repaired")
+        self.assertEqual(history["chain_id"], self.conversation_id)
+        self.assertEqual(ledger["event_id"], self.event_id)
+        self.assertEqual(ledger["disposition"], "published")
+
     def test_generated_event_records_finalize_as_one_claim(self) -> None:
         self._write_evidence(self._published_evidence())
         browser_owner_evidence.commit_event(

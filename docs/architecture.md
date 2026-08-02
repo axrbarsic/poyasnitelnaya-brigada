@@ -168,6 +168,10 @@ an X reply.
     JSON documents and generated JSONL use the same crash-safe text replace
     primitive: unique temporary file, file `fsync`, atomic replace and parent
     directory `fsync`.
+    Before a claim manifest exists, stale per-event JSONL is a repairable
+    projection: after an idempotent SQLite sync, the committer replaces it from
+    canonical `evidence.json`. Aggregate JSONL and manifested evidence remain
+    immutable and conflicting content still fails closed.
 19. `autopilot_bridge` enriches each claimed event with compact
     `commenter_memory` keyed by stable X user ID. It contains source-linked
     public turns and exact Alex children from any stored conversation. A deeper

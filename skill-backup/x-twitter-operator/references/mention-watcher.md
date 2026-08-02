@@ -188,11 +188,15 @@ the durable `conversation_chains` row before history import. A supplied value
 is used only when the conversation has no stored chain yet, and it must be one
 of `short`, `pro`, or `mixed`.
 
-Missing history, a mismatched chain, an invalid field, or conflicting evidence
-blocks the commit. Repeating the same commit is idempotent. A publication also
-blocks unless its verified reply URL resolves to an imported Alex turn whose
-parent is the inspected event. Do not call `browser-handoff-sync`, history
-import, or resolve directly in the Browser-owner workflow.
+Missing history, a mismatched chain, an invalid field, or conflicting canonical
+evidence blocks the commit. Repeating the same commit is idempotent. Before the
+claim manifest exists, per-event history and ledger JSONL are generated
+projections: after a successful idempotent SQLite sync, the committer repairs a
+stale projection from `evidence.json`. Never edit those JSONL files by hand. A
+publication also blocks unless its verified reply URL resolves to an imported
+Alex turn whose parent is the inspected event. Do not call
+`browser-handoff-sync`, history import, or resolve directly in the
+Browser-owner workflow.
 
 For canonical runtime evidence, the same successful sync must also return a
 complete `evidence_manifest`. It atomically creates and self-audits

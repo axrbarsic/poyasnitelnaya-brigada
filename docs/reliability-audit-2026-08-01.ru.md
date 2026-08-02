@@ -395,6 +395,9 @@ runtime уже знал.
    importer больше не поддерживают расходящиеся списки допустимых значений.
 4. JSON и JSONL evidence теперь используют один `atomic_write_text`: уникальный
    temporary file, file `fsync`, atomic replace и directory `fsync`.
+5. Per-event history и ledger до manifest считаются производными проекциями.
+   После успешного idempotent SQLite sync committer сам заменяет stale JSONL из
+   canonical evidence. Aggregate и manifested evidence остаются неизменяемыми.
 
 Живая эксплуатационная проверка перед этим изменением завершила три события:
 
@@ -406,11 +409,16 @@ runtime уже знал.
 
 После освобождения claim система без ручного poll, gate или kick сама взяла
 следующую тройку в claim `7c0596ab-fb22-4ab5-addd-ca5c644ecfda`. Это
-подтверждает self-owned handoff на непустой очереди.
+подтверждает self-owned handoff на непустой очереди. Claim опубликовал и
+проверил ответы `2083861945862484194`, `2083862797423657147` и
+`2083864712026992932`, затем создал manifest с тремя resolution proof и
+освободил owner. На третьем событии live canary воспроизвёл stale ledger с
+неверным учётом одной технической финальной новой строки. Новый regression test
+закрепляет автоматическое восстановление этой производной проекции.
 
 | Проверка текущего checkpoint | Результат |
 | --- | --- |
-| Полный Python suite | 512 тестов, 0 ошибок |
+| Полный Python suite | 513 тестов, 0 ошибок |
 | `py_compile` | все runtime scripts и composition roots прошли |
 | Canonical layout | complete, установленные skills совпадают с backup |
 | `git diff --check` и Unicode scan | чисто |

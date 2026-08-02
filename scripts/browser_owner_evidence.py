@@ -714,23 +714,19 @@ def build_event_records(
     return history, ledger
 
 
-def _write_or_confirm(path: Path, record: dict[str, Any]) -> str:
+def _write_or_repair(path: Path, record: dict[str, Any]) -> str:
     serialized = _canonical_record(record)
     if path.exists():
-        if path.is_symlink() or path.read_text(encoding="utf-8") != serialized:
-            raise ValueError(f"Generated evidence conflicts with {path.name}")
-        return "unchanged"
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(
+                f"Generated evidence path is not regular: {path.name}"
+            )
+        if path.read_text(encoding="utf-8") == serialized:
+            return "unchanged"
+        json_contract.atomic_write_text(path, serialized)
+        return "repaired"
     json_contract.atomic_write_text(path, serialized)
     return "created"
-
-
-def _confirm_existing_record(path: Path, record: dict[str, Any]) -> None:
-    if not path.exists():
-        return
-    if path.is_symlink() or path.read_text(encoding="utf-8") != _canonical_record(
-        record
-    ):
-        raise ValueError(f"Generated evidence conflicts with {path.name}")
 
 
 def commit_event(
@@ -768,8 +764,6 @@ def commit_event(
             )
             history_path = event_dir / HISTORY_NAME
             ledger_path = event_dir / LEDGER_NAME
-            _confirm_existing_record(history_path, history)
-            _confirm_existing_record(ledger_path, ledger)
             with tempfile.TemporaryDirectory(
                 prefix=".event-commit.",
                 dir=event_dir,
@@ -785,8 +779,8 @@ def commit_event(
                     history_path=staging_history,
                     ledger_path=staging_ledger,
                 )
-            history_state = _write_or_confirm(history_path, history)
-            ledger_state = _write_or_confirm(ledger_path, ledger)
+            history_state = _write_or_repair(history_path, history)
+            ledger_state = _write_or_repair(ledger_path, ledger)
         resolution = connection.execute(
             "SELECT disposition, reply_url, blocker_code, resolved_at "
             "FROM event_resolutions WHERE event_id = ?",
