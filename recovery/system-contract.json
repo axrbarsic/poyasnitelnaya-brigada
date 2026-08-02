@@ -10,7 +10,6 @@
     "xmention_watcher.py",
     "scripts/app_server_dispatch.py",
     "scripts/app_server_desktop.py",
-    "scripts/app_server_external.py",
     "scripts/autopilot_bridge.py",
     "scripts/autopilot_continuation.py",
     "scripts/autopilot_contract.py",

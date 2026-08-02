@@ -45,7 +45,6 @@ REQUIRED_PATHS = (
     "scripts/launchagent_runtime.py",
     "scripts/app_server_dispatch.py",
     "scripts/app_server_desktop.py",
-    "scripts/app_server_external.py",
     "scripts/autopilot_supervisor.py",
     "scripts/autopilot_supervisor_incidents.py",
     "scripts/autopilot_supervisor_routes.py",

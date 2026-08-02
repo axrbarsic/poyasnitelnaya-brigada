@@ -23,9 +23,9 @@ The system separates token-free mechanics from content decisions:
    publishes, and stores exact history.
 8. The supervisor may later stop only a Desktop process it launched itself.
 
-The external app-server performs neither relay nor Browser work. It has no
-Codex Desktop built-in Browser session or desktop-only cross-thread tools. The
-authenticated Browser always belongs to the persistent in-app owner.
+The retired external app-server relay has been removed from the runtime. The
+dispatcher accepts only `in_app_heartbeat`, and the authenticated Browser
+always belongs to the persistent in-app owner.
 
 > Current deployment status, 2026-08-01: the persistent Sol Max owner and its
 > self-owned heartbeat pass doctor with zero failures. The explainer route runs as a
@@ -39,7 +39,6 @@ authenticated Browser always belongs to the persistent in-app owner.
 
 Official architecture references:
 
-- [Codex app-server](https://learn.chatgpt.com/docs/app-server)
 - [Scheduled tasks](https://learn.chatgpt.com/docs/automations)
 - [Project config files](https://learn.chatgpt.com/docs/config-file/config-advanced#project-config-files-codexconfigtoml)
 - [Built-in Browser](https://learn.chatgpt.com/docs/browser?surface=app)

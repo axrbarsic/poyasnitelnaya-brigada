@@ -26,9 +26,9 @@
 8. После завершения supervisor может закрыть только тот Desktop, который
    запустил сам. Пользовательский Desktop он не закрывает.
 
-Внешний app-server не выполняет relay или Browser-работу: его runtime не имеет
-встроенной Browser-сессии Codex Desktop и desktop-only cross-thread tools.
-Browser всегда принадлежит постоянной owner-сессии внутри приложения.
+Старый внешний app-server relay полностью удалён из runtime. Dispatcher
+принимает только `in_app_heartbeat`, а Browser всегда принадлежит постоянной
+owner-сессии внутри приложения.
 
 > Текущее состояние deployment на 2026-08-01: постоянный Sol Max owner и его
 > self-owned heartbeat проходят doctor без FAIL. Маршрут «Пояснительной бригады»

@@ -6,10 +6,8 @@ from __future__ import annotations
 import argparse
 import fcntl
 import json
-import os
 import re
 import sys
-import tempfile
 import urllib.parse
 import uuid
 from contextlib import contextmanager
@@ -48,24 +46,7 @@ def read_json(path: Path) -> dict[str, Any]:
     return json_contract.read_object(path)
 
 
-def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    file_descriptor, temporary_name = tempfile.mkstemp(
-        prefix=path.name + ".",
-        suffix=".tmp",
-        dir=path.parent,
-    )
-    temporary_path = Path(temporary_name)
-    try:
-        with os.fdopen(file_descriptor, "w", encoding="utf-8") as handle:
-            json.dump(payload, handle, ensure_ascii=False, indent=2, sort_keys=True)
-            handle.write("\n")
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary_path, path)
-    finally:
-        if temporary_path.exists():
-            temporary_path.unlink()
+atomic_write_json = json_contract.atomic_write
 
 
 def resolve_path(config_path: Path, value: str) -> Path:

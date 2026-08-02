@@ -32,7 +32,7 @@ their implementation is divided by durable authority:
 
 | Public boundary | Internal modules | Responsibility |
 | --- | --- | --- |
-| `app_server_dispatch` | `app_server_desktop`, `app_server_external` | Desktop ownership and disabled external app-server diagnostics |
+| `app_server_dispatch` | `app_server_desktop` | Fail-closed Desktop ownership for the only supported in-app heartbeat route |
 | `autopilot_supervisor` | `autopilot_supervisor_incidents`, `autopilot_supervisor_routes` | Incident persistence and deterministic recovery routing |
 | `browser_owner_rotation` | `autopilot_supervisor_routes`, official Codex app tools | Recoverable replacement of the one Browser owner without task accumulation |
 | `system_doctor` | `system_doctor_runtime`, `system_doctor_contract` | Runtime projections and versioned deployment checks |

@@ -336,3 +336,41 @@ doctor после завершения показал `39 PASS`, `0 FAIL`, `1 WA
 Regression test требует `self-owned` во всех трёх операционных документах и
 запрещает возвращение `send_message_to_thread`, `Luna gate` и старого pinned
 Sol owner transport. Полный suite после исправления: 513 тестов, 0 ошибок.
+
+## Дополнение 2026-08-02: удаление мёртвого transport
+
+Строгий архитектурный review обнаружил, что старый внешний app-server relay
+оставался полностью реализованным, хотя production уже использовал только
+self-owned in-app heartbeat. Одно ошибочное значение `desktop_relay_mode`
+могло вернуть отдельную Luna-сессию, cross-thread отправку и исходный класс
+пропусков. Это был второй скрытый владелец доставки, а не полезный fallback.
+
+Вместо нового условного запрета выполнено структурное упрощение:
+
+1. Модуль `app_server_external.py`, relay prompt, app-server client и весь
+   cross-thread handoff удалены.
+2. Dispatcher принимает только точное значение `in_app_heartbeat` и
+   останавливается до gate и Desktop при отсутствующем или старом режиме.
+3. Recovery contract, layout audit, config example, deployment checklist и
+   тесты больше не сохраняют мёртвую архитектуру.
+4. Три расходившиеся реализации атомарной записи JSON заменены одним
+   durability primitive: уникальный temporary file, flush, file `fsync`,
+   atomic replace и directory `fsync`. Старые публичные имена остались aliases,
+   поэтому callers не получили второй путь записи.
+
+Такое решение следует модели queue-based load leveling: очередь переживает
+consumer, а скорость consumer не меняет durable intake. Оно также следует
+принципу idempotent retries AWS: одна identity операции и один атомарный
+переход лучше fallback-ветвей с разной семантикой. Для связанных X-событий
+сохранён один последовательный writer, а независимое чтение остаётся bounded.
+
+Контрольный gate после удаления 1 430 строк мёртвого и дублирующего кода:
+
+| Проверка | Результат |
+| --- | --- |
+| Полный Python suite | 509 тестов, 0 ошибок |
+| Конечная модель | 124 416 комбинаций, 77 760 достижимых, 0 нарушений |
+| Seeded fault traces | 1 000 000 шагов, 0 failing traces |
+| `py_compile` | все runtime entrypoints прошли |
+| Canonical layout | complete |
+| `git diff --check` и Unicode scan | чисто |

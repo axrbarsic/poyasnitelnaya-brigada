@@ -1,9 +1,5 @@
 # Deployment checklist
 
-> Historical note: cross-thread Luna relay checks below describe the retired
-> transport. Production now uses the self-owned Sol Max heartbeat documented in
-> `docs/architecture.md` and `macos/x-relay.prompt.txt`.
-
 ## Gate 1: local validation
 
 - [x] Python compile succeeds.
@@ -53,22 +49,16 @@
 - [x] Confirm the retired CLI launcher exits nonzero before claiming an event.
 - [x] Create the Sol Max Codex Desktop Browser owner.
 - [x] Pause the five-minute Luna Low dispatcher automation.
-- [x] Prove that direct app-server Browser ownership fails closed because the
-  external runtime has no Codex Desktop Browser session.
-- [x] Prove that the exact archived relay thread can be unarchived, resumed,
-  completed on Luna Low, and archived again without creating another task.
-- [x] Prove that the current external app-server runtime exposes neither
-  `tool_search` nor the desktop-only `codex_app.send_message_to_thread` tool.
-- [x] Latch this capability failure to the exact Codex binary so a queued
-  LaunchAgent cannot spend another Luna turn every minute.
-- [x] Confirm the ready-only in-app Luna relay wakes the pinned owner through
-  the direct Codex app tool.
+- [x] Remove the retired external app-server and cross-thread Luna transport
+  from production source, config examples, tests, and recovery contracts.
+- [x] Require `desktop_relay_mode=in_app_heartbeat` and fail closed before gate
+  or Desktop work for a missing or retired transport value.
+- [x] Confirm the ready-only self-owned heartbeat routes work inside the exact
+  pinned Sol Max owner without a cross-thread message.
 - [x] Confirm an atomic reservation suppresses a second handoff before the
   owner claim appears.
 - [x] Confirm one isolated empty dispatcher cycle spends no model turn,
   creates no task, and starts no helper bundle.
-- [x] Confirm every transient relay process exits after a terminal relay
-  outcome, including a failed handoff.
 - [x] Keep the retired dispatcher automation `x` paused as a recovery marker.
   The current Desktop build exposes the official `automation_update` tool, and
   automation state is changed only through that tool.
@@ -108,8 +98,8 @@
   repeated empty cycles.
 - [x] Prove on two organic events that the loaded dispatcher launches an
   absent Desktop, marks the exact PID as supervisor-managed, lets the existing
-  Luna relay wake the pinned Sol owner, preserves the queue through a resource
-  deferral, and closes the managed Desktop after durable resolution.
+  self-owned heartbeat wake the pinned Sol owner, preserves the queue through
+  a resource deferral, and closes the managed Desktop after durable resolution.
 
 ## Gate 4: backup
 
