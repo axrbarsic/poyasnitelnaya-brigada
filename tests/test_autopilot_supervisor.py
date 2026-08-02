@@ -346,6 +346,59 @@ class AutopilotSupervisorTests(unittest.TestCase):
         self.assertEqual(completed["status"], "completed")
         self.assertFalse(autopilot_supervisor.gate(self.config)["dispatch"])
 
+    def test_healthy_recheck_clears_terminal_failed_owner_immediately(
+        self,
+    ) -> None:
+        failure = self.check("automation.outbound_local_skill", "fail")
+        autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now,
+            checks=[failure],
+        )
+        autopilot_supervisor.reserve_handoff(
+            self.config,
+            lease_seconds=1800,
+            now=self.now + timedelta(seconds=1),
+        )
+        claimed = autopilot_supervisor.claim(
+            self.config,
+            lease_seconds=1800,
+            now=self.now + timedelta(seconds=2),
+        )
+        autopilot_supervisor.started(
+            self.config,
+            claim_token=claimed["claim_token"],
+            now=self.now + timedelta(seconds=3),
+        )
+        autopilot_supervisor.failed(
+            self.config,
+            claim_token=claimed["claim_token"],
+            error="official automation update was temporarily unavailable",
+            now=self.now + timedelta(seconds=4),
+        )
+
+        recovered = autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now + timedelta(seconds=5),
+            checks=[self.check("automation.outbound_local_skill", "pass")],
+        )
+
+        self.assertTrue(recovered["healthy"])
+        state = autopilot_supervisor.load_state(
+            autopilot_supervisor.state_path(self.config)
+        )
+        self.assertIsNone(state["incident"])
+        self.assertEqual(
+            state["last_incident"]["resolution"]["kind"],
+            "automatic_recovery",
+        )
+        self.assertEqual(
+            autopilot_supervisor.gate(self.config)["status"],
+            "idle",
+        )
+
     def test_relay_falls_through_to_x_when_repair_is_idle(self) -> None:
         x_reservation = {
             "status": "handoff_reserved_ready",
@@ -541,6 +594,43 @@ class AutopilotSupervisorTests(unittest.TestCase):
             self.contract,
             now=self.now,
             checks=[queue_latency],
+        )
+        x_reservation = {
+            "status": "handoff_reserved_ready",
+            "dispatch": True,
+            "event_ids": ["synthetic-event"],
+            "reservation_token": "synthetic-reservation",
+        }
+        with mock.patch.object(
+            autopilot_supervisor.autopilot_bridge,
+            "reserve_handoff",
+            return_value=x_reservation,
+        ) as reserve_x:
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        reserve_x.assert_called_once_with(
+            self.config,
+            lease_seconds=1800,
+        )
+        self.assertEqual(result["route"], "x")
+        self.assertTrue(result["dispatch"])
+        self.assertFalse(result["repair_pending"])
+
+    def test_relay_and_latency_failures_together_yield_to_x(self) -> None:
+        failures = [
+            self.check("runtime.relay_progress", "fail"),
+            self.check("runtime.queue_latency", "fail"),
+        ]
+        autopilot_supervisor.run_once(
+            self.config,
+            self.contract,
+            now=self.now,
+            checks=failures,
         )
         x_reservation = {
             "status": "handoff_reserved_ready",

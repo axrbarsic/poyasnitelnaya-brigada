@@ -1,5 +1,42 @@
 # Architecture
 
+## Control-plane authority
+
+The runtime has one router, `x-relay`, and three disjoint state owners. No
+operator task, doctor run, or retired automation may duplicate their authority.
+
+| State | Sole owner | Meaning |
+| --- | --- | --- |
+| Inbound queue and global X lease | `autopilot_bridge` | Which exact X events are pending or owned |
+| Repair incident and repair lease | `autopilot_supervisor` | Whether a system defect needs doctor work |
+| Ten-minute outbound slot | `outbound_cycle` | Whether one idle-only outbound attempt is due |
+| Final route | `x-relay` through `relay-reserve-handoff` | Exactly one of inbound X, repair, outbound, or idle |
+
+The retired `x-15` automation is permanently `PAUSED`. Its status is a
+deployment invariant, not a runtime switch. The ten-minute cadence lives only
+in `outbound-cycle.json`; normal operation must never activate or pause an
+automation to express queue pressure.
+
+Doctor observations are classified by recovery owner in
+`autopilot_state_model.recovery_owner`. `runtime.relay_progress` and
+`runtime.queue_latency` belong to X delivery, so they must release the relay to
+the inbound route instead of creating competing doctor work. Any mixed failure
+containing a storage, contract, credential, or deployment defect belongs to
+doctor because publication may no longer be durable or safe.
+
+This gives one fixed priority rule:
+
+1. Continue an already active authenticated writer transaction.
+2. Recover pending inbound X delivery.
+3. Repair a defect that blocks safe durable work.
+4. Run one due outbound attempt only when inbound is exactly idle.
+5. Otherwise do nothing.
+
+The doctor observes these owners and verifies their leases. It does not become
+a second scheduler. The root Codex task may change versioned source and deploy
+an explicit repair, but it does not toggle runtime automation state during
+normal queue operation.
+
 ## Boundary
 
 The watcher is a read-only detector. It never drafts, classifies, or publishes

@@ -6,6 +6,24 @@ from scripts import autopilot_emulator, autopilot_state_model
 
 
 class AutopilotStateModelTests(unittest.TestCase):
+    def test_recovery_owner_is_explicit_and_closed(self) -> None:
+        self.assertEqual(
+            autopilot_state_model.recovery_owner([]),
+            "none",
+        )
+        self.assertEqual(
+            autopilot_state_model.recovery_owner(
+                ["runtime.relay_progress", "runtime.queue_latency"]
+            ),
+            "x",
+        )
+        self.assertEqual(
+            autopilot_state_model.recovery_owner(
+                ["runtime.queue_latency", "runtime.database"]
+            ),
+            "doctor",
+        )
+
     def test_exhaustive_model_has_no_invariant_counterexample(self) -> None:
         report = autopilot_emulator.exhaustive_report()
 

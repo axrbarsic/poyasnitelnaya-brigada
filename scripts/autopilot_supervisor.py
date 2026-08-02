@@ -18,6 +18,7 @@ try:
         automation_target_health,
         autopilot_bridge,
         autopilot_dispatch,
+        autopilot_state_model,
         outbound_cycle,
         system_doctor,
     )
@@ -25,6 +26,7 @@ except ModuleNotFoundError:
     import automation_target_health  # type: ignore[no-redef]
     import autopilot_bridge  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
+    import autopilot_state_model  # type: ignore[no-redef]
     import outbound_cycle  # type: ignore[no-redef]
     import system_doctor  # type: ignore[no-redef]
 
@@ -45,7 +47,6 @@ OPEN_STATUSES = {
 }
 TERMINAL_STATUSES = {"resolved"}
 EXTERNAL_ACTION_STATUS = "external_action_required"
-X_QUEUE_RECOVERY_FAILURES = {"runtime.queue_latency"}
 REPAIRABLE_POLL_STATUSES = {
     "stale",
     "failing",
@@ -132,6 +133,22 @@ def check_payload(check: system_doctor.Check) -> dict[str, Any]:
         "repair": check.repair,
         "details": check.details,
     }
+
+
+def incident_can_auto_resolve(incident: dict[str, Any]) -> bool:
+    """Return whether a healthy recheck may close this incident safely."""
+
+    status = str(incident.get("status", ""))
+    if incident.get("canary"):
+        return False
+    if status == "failed":
+        return True
+    return status in {
+        "repair_observing",
+        "escalation_pending",
+        "handoff_pending",
+        EXTERNAL_ACTION_STATUS,
+    } and not incident.get("owner")
 
 
 def collect_checks(
@@ -487,17 +504,8 @@ def run_once(
             recover_expired_coordination(incident, now=current)
         if not failures:
             state["last_healthy_at"] = isoformat(current)
-            if (
-                isinstance(incident, dict)
-                and incident.get("status") in {
-                    "repair_observing",
-                    "escalation_pending",
-                    "handoff_pending",
-                    "failed",
-                    EXTERNAL_ACTION_STATUS,
-                }
-                and not incident.get("canary")
-                and not incident.get("owner")
+            if isinstance(incident, dict) and incident_can_auto_resolve(
+                incident
             ):
                 incident["status"] = "resolved"
                 incident["resolution"] = {
@@ -1124,7 +1132,7 @@ def is_x_queue_recovery_incident(incident: dict[str, Any]) -> bool:
         for check in incident.get("checks", [])
         if isinstance(check, dict) and check.get("status") == "fail"
     }
-    return failure_ids == X_QUEUE_RECOVERY_FAILURES
+    return autopilot_state_model.recovery_owner(failure_ids) == "x"
 
 
 def repair_prompt(incident: dict[str, Any]) -> str:

@@ -9,6 +9,25 @@ from random import Random
 from typing import Any, Iterable
 
 
+X_DELIVERY_FAILURES = frozenset(
+    {
+        "runtime.queue_latency",
+        "runtime.relay_progress",
+    }
+)
+
+
+def recovery_owner(failure_ids: Iterable[str]) -> str:
+    """Return the only subsystem allowed to recover these failures."""
+
+    identifiers = frozenset(str(value) for value in failure_ids)
+    if not identifiers:
+        return "none"
+    if identifiers <= X_DELIVERY_FAILURES:
+        return "x"
+    return "doctor"
+
+
 FACTOR_SPACE: dict[str, tuple[Any, ...]] = {
     "event_count": (0, 1, 3),
     "poll": ("success", "failure"),
