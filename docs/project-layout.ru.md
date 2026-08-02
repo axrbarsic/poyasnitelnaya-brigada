@@ -23,6 +23,11 @@ x-mention-watcher/
   config.example.json      безопасный шаблон конфигурации
 ```
 
+Watcher entrypoint служит только composition root. Durable domains находятся
+в модулях `scripts/watcher_*.py`, а каждый tracked runtime module перечислен в
+`recovery/system-contract.json`. Поэтому deployment drift обнаруживается без
+создания копий исходного дерева.
+
 `browser_owner_cwd` равен `.`. Поэтому Browser owner запускается в том же
 каноническом каталоге и не требует отдельного проекта в `Documents/Codex`.
 Новые screenshots, ledgers, payloads и другие evidence должны сохраняться под

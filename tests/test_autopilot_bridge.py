@@ -183,7 +183,7 @@ class AutopilotBridgeTests(unittest.TestCase):
         database = self.root / "var" / "watcher.sqlite3"
         connection = watcher.connect_database(database)
         connection.close()
-        with sqlite3.connect(database) as connection:
+        with closing(sqlite3.connect(database)) as connection, connection:
             for event_id in event_ids:
                 connection.execute(
                     """

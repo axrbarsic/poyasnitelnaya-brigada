@@ -1,5 +1,31 @@
 # Architecture
 
+## Runtime module boundary
+
+`xmention_watcher.py` is the composition root and compatibility facade. It
+owns the process lock, opens exactly one SQLite connection for a CLI command,
+wires explicit dependencies, and closes that connection in `finally`. Domain
+logic is split by durable responsibility:
+
+| Module | Single responsibility |
+| --- | --- |
+| `watcher_database` | Schema creation and SQLite connection lifecycle |
+| `watcher_events` | Ingestion, deduplication, eligibility, queue projection |
+| `watcher_polling` | Mentions, conversation tails, budgets, pagination state |
+| `watcher_history` | Append-only conversation history |
+| `watcher_resolution` | Validated terminal event transitions and audit export |
+| `watcher_audit_state`, `watcher_audit_lifecycle` | Read-only audit state and transactional audit changes |
+| `watcher_memory` | Commenter memory and memory consistency checks |
+| `watcher_health` | Failure recording, health projection, watchdog decisions |
+| `watcher_auth`, `watcher_http` | Keychain boundary and minimal X HTTP client |
+| `watcher_cli` | Declarative CLI schema without runtime mutation |
+
+Cross-domain side effects are injected at the composition root. A domain
+module cannot silently open a second database, operate the Browser, or resolve
+an event through an alternate path. `browser_owner_evidence` is the only
+semantic evidence validator and per-event committer; aggregate finalization
+derives its records from those already committed event records.
+
 ## Control-plane authority
 
 The runtime has one router, `x-relay`, and three disjoint state owners. No

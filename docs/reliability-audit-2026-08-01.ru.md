@@ -84,6 +84,26 @@ flowchart LR
 завершение. Внешнюю платформу стоит рассматривать только при переносе на
 несколько машин.
 
+## Структурный checkpoint
+
+Watcher и doctor разделены по устойчивым границам, а не по случайным helper
+функциям. `xmention_watcher.py` остался composition root: он один владеет
+process lock и жизненным циклом SQLite connection, затем передает явные
+dependencies модулям событий, polling, истории, resolution, аудита, memory,
+health, Keychain и HTTP. CLI parser не импортирует runtime state.
+
+Browser evidence теперь имеет одну смысловую реализацию. Один детерминированный
+committer проверяет `evidence.json`, историю, parent, URL и terminal disposition,
+после чего атомарно импортирует историю и выполняет durable resolve. Session
+finalizer только проверяет полноту набора уже committed events и строит
+aggregate manifest. Это убирает semantic dual write, при котором два пути могли
+по-разному трактовать один и тот же опубликованный ответ.
+
+`system_doctor` также разделен: orchestration и live checks находятся отдельно
+от декларативных contract checks. Поэтому добавление одной проверки больше не
+требует изменять единый giant conditional и меньше рискует сломать соседний
+recovery route.
+
 ## Prompt и «Пояснительная бригада v2»
 
 Официальные рекомендации OpenAI требуют versioned prompt, явную структуру,
