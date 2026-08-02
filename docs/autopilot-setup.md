@@ -229,7 +229,8 @@ count as a stalled relay.
   resolution after each event, and zero ChatGPT tabs for local-max.
 - Only Sol makes publication decisions. The local-max route always requires
   reasoning effort `max`.
-- Luna never analyzes X content or drafts responses.
+- No helper model transports work, analyzes X content, or drafts responses.
+  The self-owned Sol Max task reads the deterministic route and executes it.
 - The resource guard pauses Browser work without deleting queued events.
 - Renderer limits use 256 MiB RSS equivalents, while the raw process count and
   total renderer RSS remain visible. Cached lightweight renderer processes do

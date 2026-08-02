@@ -24,10 +24,10 @@ Check each layer in order:
 3. `events` contains the exact payload and correct `delivery_state`.
 4. Eligibility classified it as queued or ignored for an explicit reason.
 5. `wake-request.json` exposed every queued event.
-6. The Luna gate returned `dispatch=true`.
-7. Luna called `send_message_to_thread` directly and the pinned Sol owner
-   received the follow-up.
-8. The pinned owner claimed the event exactly once.
+6. The model-free event dispatcher marked the exact queue ready for Desktop.
+7. The self-owned heartbeat in the Sol Max owner task returned
+   `dispatch=true` with one saved route and reservation.
+8. The same owner task claimed the event exactly once.
 9. The production claim contains at most the configured bounded oldest-first
    batch, currently three events.
 10. Browser preflight used `@axrbarsic` and opened the exact live thread.
@@ -49,15 +49,13 @@ before local-max work, and commit every event immediately. If Browser or memory
 pressure appears, close extra read-only tabs and continue with one. A retryable
 failure releases only unresolved events after preserving every prior commit.
 
-If the gate is ready but the owner never wakes, inspect the Luna trace. A direct
-dynamic-tool call discovered through `tool_search` can remain pending inside a
-heartbeat task even while the same app callable works through `functions.exec`.
-Use one `functions.exec`, locate `codex_app__send_message_to_thread` in
-`ALL_TOOLS`, await exactly one
-`tools.codex_app__send_message_to_thread(...)` call, and require the returned
-object to contain the exact requested `threadId`. Do not call the old
-`codex_app.send_message_to_thread` handler name. Keep the queue unclaimed on
-delivery failure and let the next cycle retry.
+If the queue is ready but the owner heartbeat never starts, do not create a
+relay task or send a cross-task message. Check `thread.browser_owner`,
+`automation.active_relay`, `runtime.relay_progress`, the exact automation
+target task, and the tracked `macos/x-relay.prompt.txt`. If a reservation was
+created but the matching repair or X claim never started, release only that
+exact reservation and let the next heartbeat retry. Never clear the queue or
+create a second Browser owner to hide a stalled heartbeat.
 
 ## Proven failure signature
 
@@ -98,8 +96,8 @@ After fixing a weak link:
    the same hours and exact `as-of`.
 6. Do not pass the reported event ID to the requeue command, automation prompt
    or Browser owner.
-7. Let the ordinary one-minute watcher and in-app heartbeat relay discover the
-   event and wake the pinned Sol owner through the direct Codex app tool.
+7. Let the ordinary one-minute watcher, event dispatcher, and self-owned owner
+   heartbeat discover the event through durable state.
 8. Observe without manually claiming, drafting or publishing.
 9. Verify the live direct reply, exact history, durable resolution, empty queue
    and released lease.

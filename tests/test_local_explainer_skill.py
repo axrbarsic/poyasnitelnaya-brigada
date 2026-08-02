@@ -27,6 +27,20 @@ VALIDATOR = (
 X_OPERATOR_SKILL = (
     ROOT / "skill-backup" / "x-twitter-operator" / "SKILL.md"
 )
+X_OPERATOR_WATCHER_REFERENCE = (
+    ROOT
+    / "skill-backup"
+    / "x-twitter-operator"
+    / "references"
+    / "mention-watcher.md"
+)
+X_OPERATOR_RELIABILITY_REFERENCE = (
+    ROOT
+    / "skill-backup"
+    / "x-twitter-operator"
+    / "references"
+    / "reliability-debugging.md"
+)
 V2_SKILL = (
     ROOT / "skill-backup" / "poyasnitelnaya-brigada-v2" / "SKILL.md"
 )
@@ -75,6 +89,19 @@ class LocalExplainerSkillTests(unittest.TestCase):
         self.assertIn("Never use browsing history as the durable X", skill)
         self.assertIn("Full CDP Developer mode", skill)
         self.assertIn("requires explicit approval", skill)
+
+    def test_x_operator_uses_self_owned_heartbeat_contract(self) -> None:
+        documents = (
+            X_OPERATOR_SKILL.read_text(encoding="utf-8"),
+            X_OPERATOR_WATCHER_REFERENCE.read_text(encoding="utf-8"),
+            X_OPERATOR_RELIABILITY_REFERENCE.read_text(encoding="utf-8"),
+        )
+
+        for document in documents:
+            self.assertIn("self-owned", document)
+            self.assertNotIn("send_message_to_thread", document)
+            self.assertNotIn("Luna gate", document)
+            self.assertNotIn("pinned Sol owner", document)
 
     def test_v2_is_default_and_keeps_v1_available(self) -> None:
         v1 = SKILL.read_text(encoding="utf-8")

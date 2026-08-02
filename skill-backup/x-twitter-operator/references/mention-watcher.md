@@ -313,18 +313,17 @@ authority for queued eligible replies.
 2. Run poll, watchdog, session janitor, and event dispatcher LaunchAgents every
    minute.
 3. Let the event dispatcher run `autopilot_bridge gate` without a model.
-4. Only for `dispatch=true`, launch Codex Desktop when it is absent. One
-   existing in-app Luna Low heartbeat calls one `relay-reserve-handoff`.
-   Python chooses repair or X and returns one unambiguous `dispatch` plus
-   `route`. The atomic reservation suppresses adjacent heartbeat ticks. The
-   relay sends one direct `send_message_to_thread` follow-up to the pinned Sol
-   High owner without a separate live status read. Codex queues or steers the
-   follow-up when a turn is active, while the global owner claim serializes
-   Browser work.
-5. If delivery fails, run `scripts/autopilot_bridge.py release-handoff` with
-   the exact reservation token and finish without Browser. Leave the durable
-   queue pending.
-6. Let the pinned owner atomically claim the queue with
+4. Only for `dispatch=true`, launch Codex Desktop when it is absent. The
+   existing self-owned heartbeat is attached directly to the dedicated Sol Max
+   owner task and calls one `relay-reserve-handoff`. Python chooses rotation,
+   repair, inbound X, or idle-only outbound and returns one unambiguous
+   `dispatch` plus `route`. The same task executes the corresponding claim;
+   no cross-task message or process-local `hostId` is involved.
+5. If the heartbeat fails before a repair or X claim starts, run the matching
+   `release-handoff` command with the exact reservation token and finish
+   without Browser. Leave the durable queue pending. An outbound route already
+   owns a slot claim and must use its exact failure or pause command instead.
+6. Let the same Sol Max owner task atomically claim the queue with
    `scripts/autopilot_bridge.py claim`.
 7. Run the mechanical claim before loading X skills and references. If the
    queue is empty, another global owner is active, or memory is deferred, use
@@ -351,8 +350,7 @@ authority for queued eligible replies.
 13. Treat the lease as crash recovery, not permission to post twice. Every Sol
     turn still runs live X and ledger duplicate checks before composer fill.
 14. Never perform Browser work in Codex CLI or the external app-server
-    fallback. The in-app relay's cross-thread message is only a wakeup. Browser
-    belongs to the pinned Codex Desktop owner.
+    fallback. Browser belongs to the single self-owned Codex Desktop task.
 15. After durable history and resolution remove every claimed ID from the wake
     queue, mark `completed`. If a later API poll cannot read Keychain, mark
     `completed_with_warning`; do not release or republish resolved events.
@@ -372,9 +370,9 @@ authority for queued eligible replies.
     voice or system sleep defers Browser work and leaves every event durable.
 
 Do not retire the paused fallback automation until the installed dispatcher
-LaunchAgent proves one complete live cycle. On 2026-07-26, the in-app relay
-already completed repeated live handoffs and the reservation suppressed the
-observed adjacent-heartbeat race.
+LaunchAgent proves one complete live cycle. Repeated live self-owned heartbeat
+runs completed the full route, and the reservation suppressed the observed
+adjacent-heartbeat race without cross-task delivery.
 
 ## Mandatory response reconciliation
 
@@ -392,13 +390,13 @@ It selects recent eligible `skip` resolutions and previously ignored mention
 replies with no exact direct Alex child, records the prior state in
 `response_policy_requeues`, and returns them to the ordinary wake queue. The
 model-free dispatcher then launches Desktop when needed, and the existing
-in-app relay wakes the pinned owner through the same queue contract as any new
-event. Existing publications and proven already-answered events remain
-untouched.
+self-owned heartbeat discovers the work from the same durable queue contract
+as any new event. Existing publications and proven already-answered events
+remain untouched.
 
 When diagnosing a reported miss, do not manually queue its known ID. Fix the
 universal eligibility rule, run the target-agnostic reconciliation, and let the
-ordinary dispatcher and pinned Sol owner discover and process it. See
+ordinary dispatcher and self-owned Sol owner discover and process it. See
 [reliability-debugging.md](reliability-debugging.md).
 
 ## Conversation history commands

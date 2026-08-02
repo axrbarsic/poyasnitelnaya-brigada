@@ -317,3 +317,22 @@ doctor после завершения показал `39 PASS`, `0 FAIL`, `1 WA
 | `git diff --check` | чисто |
 | Запрещённые U+2013 и U+2014 в изменённых файлах | отсутствуют |
 | Live system doctor | 39 PASS, 0 FAIL, 1 ожидаемый queue-latency WARN |
+
+### Устранение instruction drift
+
+После deployment-аудита в активных references `x-twitter-operator` были
+найдены остатки выведенного из эксплуатации маршрута: отдельная Luna relay
+задача и `send_message_to_thread`. Runtime уже не использовал этот transport,
+но stale recovery-инструкция могла вернуть его при будущем ремонте.
+
+Основной skill, watcher reference, reliability-debugging и setup-документация
+теперь описывают один и тот же production-контракт: heartbeat прикреплён прямо
+к единственной Sol Max owner-задаче, выполняет deterministic reservation и в
+той же задаче запускает выбранный route. Cross-task message отсутствует.
+`route=rotation` является единственным ограниченным случаем, когда разрешено
+найти или создать одну replacement-задачу и после verified commit архивировать
+точную старую.
+
+Regression test требует `self-owned` во всех трёх операционных документах и
+запрещает возвращение `send_message_to_thread`, `Luna gate` и старого pinned
+Sol owner transport. Полный suite после исправления: 513 тестов, 0 ошибок.

@@ -116,15 +116,14 @@ start, never the required quality of Sol reasoning or fact checking:
 - close every task-owned Browser tab before the owner turn exits;
 - run `autopilot_bridge gate` in the model-free dispatcher before starting
   Desktop or any model;
-- on `dispatch=true`, launch Codex Desktop only when absent. One existing
-  in-app Luna Low heartbeat must call one `relay-reserve-handoff`. Python
-  chooses repair or X and returns one unambiguous `dispatch` plus `route`. Its
-  atomic reservation suppresses adjacent heartbeat ticks. The relay must invoke
-  `send_message_to_thread` exactly once without reading owner status. Codex
-  queues or steers a follow-up when a turn is active, while the
-  global owner claim serializes Browser work;
-- if delivery fails, release only that exact reservation with
-  `release-handoff` and leave the queue pending;
+- on `dispatch=true`, launch Codex Desktop only when absent. The existing
+  self-owned heartbeat is attached directly to the dedicated Sol Max owner
+  task and calls one `relay-reserve-handoff`. Python chooses rotation, repair,
+  inbound X, or idle-only outbound and returns one unambiguous `dispatch` plus
+  `route`. The same task executes the corresponding claim. There is no
+  cross-task message, relay task, or process-local `hostId` dependency;
+- if the heartbeat fails before a repair or X claim starts, release only that
+  exact reservation with `release-handoff` and leave the queue pending;
 - let the reservation suppress adjacent heartbeat ticks before the owner claim
   becomes visible;
 - never use the external app-server relay in production. It has no Codex
@@ -133,7 +132,10 @@ start, never the required quality of Sol reasoning or fact checking:
   supervisor. Never close a Desktop instance opened by Alex;
 - require the dispatcher to verify that every original event ID left the
   durable wake queue before reporting success;
-- never run `list_threads` or archive tasks inside the relay or owner turn;
+- never run `list_threads` or archive tasks during normal repair, X, or
+  outbound work. Only a saved transactional `route=rotation` may inspect tasks,
+  create one replacement, retarget the existing heartbeat, and archive the
+  exact old owner after verified commit;
 - let the model-free `session_janitor.py` LaunchAgent archive exact completed
   service tasks through the local Codex app-server;
 - never self-archive the current active run, because this can block normal
@@ -408,17 +410,14 @@ without supplying target IDs.
   the 8 GB iMac. Empty, leased, voice-paused, and resource-deferred checks stop
   without a model, Browser, or new Codex task.
 - When `dispatch=true`, the supervisor launches Desktop only if needed. The
-  existing in-app Luna heartbeat calls one `relay-reserve-handoff`. Python
-  chooses repair or X and returns one unambiguous `dispatch` plus `route`.
-  The command atomically reserves one handoff without a model. After a
-  reservation, Luna calls the direct Codex app tool exactly once with
-  `gpt-5.6-sol` and `max`, without reading owner status. A delivery failure
-  releases the exact reservation without touching the queue. The
-  pinned Sol owner atomically claims the batch and executes the queued or
-  steered wake prompt.
-- In normal unattended idle, supervisor-owned Desktop is closed and Luna does
-  not run. If Alex intentionally keeps Desktop open, the heartbeat still
-  performs its small scheduled gate, but it never wakes Sol for an empty queue.
+  existing self-owned heartbeat is already attached to the single Sol Max
+  owner task and calls one `relay-reserve-handoff`. Python chooses rotation,
+  repair, inbound X, or idle-only outbound and atomically reserves at most one
+  route. The same task executes the matching claim. A pre-claim failure
+  releases the exact reservation without touching the queue.
+- In normal unattended idle, supervisor-owned Desktop is closed and no model
+  turn runs. If Alex intentionally keeps Desktop open, the self-owned heartbeat
+  performs its small scheduled gate but opens no Browser for an empty queue.
 - Keep zero Browser tabs while idle. During a production claim, obey the
   deterministic `MAX_PARALLEL_X_READ_TABS` cap and fall back to one tab as soon
   as Browser or memory pressure appears. Finish each event end-to-end before

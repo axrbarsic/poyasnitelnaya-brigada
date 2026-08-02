@@ -318,17 +318,17 @@ contradiction claim, or factual conclusion.
   Queue snapshots and watcher replacements share a separate wake-file lock.
   A live lease prevents duplicate Browser-owner runs. Failure before durable
   resolution removes the claim token for an immediate retry.
-- Each production owner claim selects one oldest pending event and uses one
-  task-owned X tab. Composer, publication, verification, history import and
-  resolve form one short ordered transaction. The multi-event capability is
-  retained only for an explicit bounded diagnostic override.
+- Each production owner claim selects at most three oldest pending events.
+  The resource profile caps independent read-only X tabs at one, two, or three.
+  Composer, publication, verification, history import and resolve remain one
+  ordered writer lane, and each event is committed before the next mutation.
 - Resolved events disappear from the wake file and are pruned from dispatcher
   state. An unresolved event becomes eligible again after the lease expires,
   so a crashed Browser-owner turn cannot strand the queue forever.
 - The built-in Browser is unavailable in an external app-server runtime.
-  Production therefore uses the existing in-app relay and dedicated Codex
-  Desktop service worker. The legacy app-server path remains only as a disabled diagnostic
-  fallback.
+  Production therefore uses one self-owned heartbeat attached directly to the
+  dedicated Codex Desktop Sol Max owner task. The legacy app-server path
+  remains only as a disabled diagnostic fallback.
 - The dispatcher never launches Desktop for an empty or deferred queue. It
   records the exact PID it starts and never closes a Desktop instance opened
   by Alex.
