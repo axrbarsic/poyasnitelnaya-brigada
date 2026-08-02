@@ -12,6 +12,7 @@
   "autopilot_owner_rotation_after_runs": 20,
   "autopilot_owner_rotation_state_file": "var/browser-owner-rotation.json",
   "autopilot_max_claim_events": 3,
+  "inbound_priority_author_ids": [],
   "autopilot_max_parallel_read_tabs": 3,
   "browser_owner_cwd": ".",
   "launchagent_python_executable": "/opt/homebrew/bin/python3",

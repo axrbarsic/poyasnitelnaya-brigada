@@ -121,6 +121,43 @@ class AutopilotDispatchTests(unittest.TestCase):
             [event["event_id"] for event in events[:3]],
         )
 
+    def test_claim_prioritizes_requested_author_then_preserves_fifo(self) -> None:
+        oldest = self.event("2080998938828501439")
+        oldest["author_id"] = "100"
+        oldest["first_seen_at"] = "2026-07-25T12:55:00Z"
+        priority_old = self.event("2080998938828501440")
+        priority_old["author_id"] = "200"
+        priority_old["username"] = None
+        priority_old["first_seen_at"] = "2026-07-25T12:56:00Z"
+        priority_new = self.event("2080998938828501441")
+        priority_new["author_id"] = "200"
+        priority_new["username"] = None
+        priority_new["first_seen_at"] = "2026-07-25T12:57:00Z"
+        self.write_events([oldest, priority_new, priority_old])
+
+        result = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+            max_events=2,
+            priority_author_ids=frozenset({"200"}),
+        )
+
+        self.assertEqual(
+            [event["id"] for event in result["events"]],
+            [priority_old["event_id"], priority_new["event_id"]],
+        )
+        self.assertEqual(
+            [event["author_id"] for event in result["events"]],
+            ["200", "200"],
+        )
+
+    def test_priority_author_ids_reject_invalid_config(self) -> None:
+        with self.assertRaisesRegex(ValueError, "must be numeric"):
+            autopilot_dispatch.configured_priority_author_ids(
+                {"inbound_priority_author_ids": ["not-an-id"]}
+            )
+
     def test_bounded_claim_rejects_nonpositive_limit(self) -> None:
         self.write_events([self.event()])
 
@@ -230,7 +267,7 @@ class AutopilotDispatchTests(unittest.TestCase):
             [first_event["event_id"]],
         )
         state = autopilot_dispatch.read_json(self.state_file)
-        self.assertNotIn(second_event["event_id"], state["events"])
+        self.assertNotIn(second_event["event_id"], state["attempts"])
 
     def test_renew_rejects_non_owner_token(self) -> None:
         self.write_events([self.event()])
@@ -309,8 +346,23 @@ class AutopilotDispatchTests(unittest.TestCase):
 
         self.assertEqual(finished["finished"], [self.event()["event_id"]])
         state = json.loads(self.state_file.read_text(encoding="utf-8"))
-        self.assertEqual(state["events"], {})
+        self.assertEqual(state["attempts"], {})
         self.assertIsNone(state["owner"])
+
+    def test_claim_lease_has_one_authoritative_copy(self) -> None:
+        self.write_events([self.event()])
+
+        claimed = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+        )
+
+        state = autopilot_dispatch.read_json(self.state_file)
+        self.assertEqual(state["version"], autopilot_dispatch.STATE_VERSION)
+        self.assertEqual(state["attempts"], {self.event()["event_id"]: 1})
+        self.assertEqual(state["owner"]["claim_token"], claimed["claim_token"])
+        self.assertNotIn("claim_token", state["attempts"])
 
     def test_expired_lease_is_reclaimed(self) -> None:
         self.write_events([self.event()])
@@ -375,10 +427,50 @@ class AutopilotDispatchTests(unittest.TestCase):
 
         self.assertTrue(status["owner_busy"])
         state = autopilot_dispatch.read_json(self.state_file)
+        self.assertEqual(state["version"], autopilot_dispatch.STATE_VERSION)
+        self.assertEqual(state["attempts"], {event["event_id"]: 1})
         self.assertEqual(
             state["owner"]["lease_expires_at"],
             "2026-07-25T13:30:00Z",
         )
+
+    def test_migrates_legacy_event_only_lease_to_global_owner(self) -> None:
+        event = self.event()
+        self.write_events([event])
+        self.state_file.parent.mkdir(parents=True, exist_ok=True)
+        self.state_file.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "events": {
+                        event["event_id"]: {
+                            "claim_token": "legacy-token",
+                            "dispatch_count": 2,
+                            "last_dispatched_at": "2026-07-25T13:00:00Z",
+                        }
+                    },
+                    "owner": None,
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with mock.patch(
+            "scripts.autopilot_dispatch.utc_now",
+            return_value=datetime(2026, 7, 25, 13, 5, tzinfo=timezone.utc),
+        ):
+            status = autopilot_dispatch.status(
+                self.wake_file,
+                self.state_file,
+                lease_seconds=1800,
+            )
+
+        state = autopilot_dispatch.read_json(self.state_file)
+        self.assertTrue(status["owner_busy"])
+        self.assertEqual(state["version"], autopilot_dispatch.STATE_VERSION)
+        self.assertEqual(state["attempts"], {event["event_id"]: 2})
+        self.assertEqual(state["owner"]["claim_token"], "legacy-token")
+        self.assertEqual(state["owner"]["event_ids"], [event["event_id"]])
 
     def test_codex_restart_reclaims_owner_without_waiting_for_lease(self) -> None:
         self.write_events([self.event()])
@@ -418,13 +510,13 @@ class AutopilotDispatchTests(unittest.TestCase):
         state = autopilot_dispatch.read_json(self.state_file)
         self.assertFalse(result["dispatch"])
         self.assertTrue(result["owner_busy"])
-        self.assertIn(self.event()["event_id"], state["events"])
+        self.assertIn(self.event()["event_id"], state["attempts"])
         autopilot_dispatch.finish(
             self.state_file,
             claimed["claim_token"],
         )
         state = autopilot_dispatch.read_json(self.state_file)
-        self.assertEqual(state["events"], {})
+        self.assertEqual(state["attempts"], {})
         self.assertIsNone(state["owner"])
 
     def test_malformed_wake_fails_without_overwriting_state(self) -> None:

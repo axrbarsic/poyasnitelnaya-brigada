@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from scripts import system_doctor, watcher_constants
+from scripts import autopilot_dispatch, system_doctor, watcher_constants
 
 
 class SystemDoctorTests(unittest.TestCase):
@@ -888,6 +888,46 @@ class SystemDoctorTests(unittest.TestCase):
         )
         self.assertEqual(latency.status, "warn")
         self.assertTrue(latency.details["active_x_delivery"])
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_contract_rejects_dispatch_state_version_drift(
+        self,
+        _git_origin: mock.Mock,
+    ) -> None:
+        (self.root / "var" / "autopilot.json").write_text(
+            json.dumps({"version": 1, "events": {}, "owner": None}),
+            encoding="utf-8",
+        )
+        self.contract["runtime"].update(
+            {
+                "autopilot_state_file": "var/autopilot.json",
+                "autopilot_dispatch_state_version": (
+                    autopilot_dispatch.STATE_VERSION
+                ),
+            }
+        )
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        owner = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.owner_lease"
+        )
+        self.assertEqual(owner.status, "fail")
+        self.assertEqual(owner.details["state_version"], 1)
+        self.assertEqual(
+            owner.details["expected_state_version"],
+            autopilot_dispatch.STATE_VERSION,
+        )
 
     @mock.patch(
         "scripts.system_doctor.git_origin",

@@ -77,6 +77,21 @@ operator task, doctor run, or retired automation may duplicate their authority.
 | Browser-owner lifecycle | `browser_owner_rotation` | Which one task is current and which durable rotation phase must resume |
 | Final route | `x-relay` through `relay-reserve-handoff` | Exactly one of rotation, inbound X, repair, outbound, or idle |
 
+The inbound dispatcher state is versioned. Version 2 keeps the active lease
+only in the global `owner` object; per-event data contains attempt counters but
+never duplicates claim tokens or lease timestamps. Version 1 is normalized on
+the first locked operation. This makes the owner token the single authority
+for renew, release, finish, doctor inspection, and recovery.
+
+Inbound selection uses immutable `author_id`, not the optional X handle. The
+low-cost mentions poll intentionally avoids expanded user resources, so a
+valid queued event may have `username=null` while retaining its stable author
+ID. `inbound_priority_author_ids` is an operator-controlled runtime override:
+matching events move ahead of the general queue, preserve FIFO inside the
+author group, and remain subject to the same global owner lease, duplicate
+checks, evidence, and durable resolution. Removing the ID restores ordinary
+oldest-first selection without rewriting queue state.
+
 The retired `x-15` automation is permanently `PAUSED`. Its status is a
 deployment invariant, not a runtime switch. The ten-minute cadence lives only
 in `outbound-cycle.json`; normal operation must never activate or pause an

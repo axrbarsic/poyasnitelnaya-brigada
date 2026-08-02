@@ -143,6 +143,64 @@ def _runtime_database_queue_checks(
     return checks, QueueContext(database, events, pending)
 
 
+def _runtime_owner_state_check(
+    root: Path,
+    runtime: dict[str, Any],
+    deps: Dependencies,
+) -> tuple[Any, bool, Any | None]:
+    owner: Any = None
+    owner_active = False
+    owner_state_value = str(runtime.get("autopilot_state_file", "")).strip()
+    if not owner_state_value:
+        return owner, owner_active, None
+    try:
+        owner_state = deps.read_json(
+            deps.resolve_project_path(root, owner_state_value)
+        )
+        owner = owner_state.get("owner")
+        expected_version = runtime.get("autopilot_dispatch_state_version")
+        actual_version = owner_state.get("version")
+        version_ok = expected_version is None or actual_version == expected_version
+        owner_details = {
+            "state_version": actual_version,
+            "expected_state_version": expected_version,
+        }
+        if owner is None:
+            owner_ok = version_ok
+            owner_details["owner"] = None
+        elif isinstance(owner, dict):
+            expires = deps.parse_timestamp(owner.get("lease_expires_at"))
+            owner_active = (
+                expires is not None and expires >= datetime.now(timezone.utc)
+            )
+            owner_ok = version_ok and owner_active
+            owner_details.update(
+                {
+                    "event_ids": owner.get("event_ids", []),
+                    "lease_expires_at": owner.get("lease_expires_at"),
+                }
+            )
+        else:
+            owner_ok = False
+            owner_details["owner_type"] = type(owner).__name__
+    except (OSError, ValueError, TypeError, AttributeError):
+        owner_ok = False
+        owner_details = {"state": "unreadable"}
+    check = deps.make_check(
+        "runtime.owner_lease",
+        "pass" if owner_ok else "fail",
+        (
+            "Browser owner lease согласован."
+            if owner_ok
+            else "Browser owner lease протух или повреждён."
+        ),
+        "Дождись окончания lease. Следующий claim атомарно вернёт "
+        "события в работу, очередь не удаляй.",
+        owner_details,
+    )
+    return owner, owner_active, check
+
+
 def _runtime_dispatch_checks(
     root: Path,
     config: dict[str, Any],
@@ -151,47 +209,13 @@ def _runtime_dispatch_checks(
     deps: Dependencies,
 ) -> list[Any]:
     checks: list[Any] = []
-    owner: Any = None
-    owner_active = False
-    owner_state_value = str(runtime.get("autopilot_state_file", "")).strip()
-    if owner_state_value:
-        try:
-            owner = deps.read_json(
-                deps.resolve_project_path(root, owner_state_value)
-            ).get("owner")
-            if owner is None:
-                owner_ok = True
-                owner_details = {"owner": None}
-            elif isinstance(owner, dict):
-                expires = deps.parse_timestamp(owner.get("lease_expires_at"))
-                owner_active = (
-                    expires is not None and expires >= datetime.now(timezone.utc)
-                )
-                owner_ok = owner_active
-                owner_details = {
-                    "event_ids": owner.get("event_ids", []),
-                    "lease_expires_at": owner.get("lease_expires_at"),
-                }
-            else:
-                owner_ok = False
-                owner_details = {"owner_type": type(owner).__name__}
-        except (OSError, ValueError, TypeError, AttributeError):
-            owner_ok = False
-            owner_details = {"state": "unreadable"}
-        checks.append(
-            deps.make_check(
-                "runtime.owner_lease",
-                "pass" if owner_ok else "fail",
-                (
-                    "Browser owner lease согласован."
-                    if owner_ok
-                    else "Browser owner lease протух или повреждён."
-                ),
-                "Дождись окончания lease. Следующий claim атомарно вернёт "
-                "события в работу, очередь не удаляй.",
-                owner_details,
-            )
-        )
+    owner, owner_active, owner_check = _runtime_owner_state_check(
+        root,
+        runtime,
+        deps,
+    )
+    if owner_check is not None:
+        checks.append(owner_check)
     dispatch_state: dict[str, Any] = {}
     dispatch_value = str(runtime.get("dispatch_state_file", "")).strip()
     if dispatch_value:

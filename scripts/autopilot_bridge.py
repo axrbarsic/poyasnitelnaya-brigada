@@ -506,6 +506,9 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         lease_seconds=lease_seconds,
         max_events=policy.claim_events,
         runtime_id=resource_guard.codex_runtime_id(),
+        priority_author_ids=(
+            autopilot_dispatch.configured_priority_author_ids(config)
+        ),
     )
     if not result["dispatch"]:
         return _non_dispatch_claim_result(
@@ -536,6 +539,9 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
     selected_events = autopilot_dispatch.select_claim_events(
         pending_events,
         max_events=policy.claim_events,
+        priority_author_ids=(
+            autopilot_dispatch.configured_priority_author_ids(config)
+        ),
     )
     selected_event_ids = [str(event["id"]) for event in selected_events]
     queue = autopilot_dispatch.status(
@@ -598,15 +604,7 @@ def _recover_claim_event_ids(
     claim_token: str,
 ) -> list[str]:
     state = autopilot_dispatch.load_state(state_file)
-    event_ids = sorted(
-        (
-            event_id
-            for event_id, record in state["events"].items()
-            if isinstance(record, dict)
-            and record.get("claim_token") == claim_token
-        ),
-        key=int,
-    )
+    event_ids = autopilot_dispatch.claim_event_ids(state, claim_token)
     if event_ids:
         return event_ids
     path = health_path(config_path)
@@ -804,15 +802,7 @@ def reconcile_completed(
 def mark_started(config_path: Path, claim_token: str) -> dict[str, Any]:
     _, state_file = autopilot_dispatch.load_paths(config_path)
     state = autopilot_dispatch.load_state(state_file)
-    event_ids = sorted(
-        (
-            event_id
-            for event_id, record in state["events"].items()
-            if isinstance(record, dict)
-            and record.get("claim_token") == claim_token
-        ),
-        key=int,
-    )
+    event_ids = autopilot_dispatch.claim_event_ids(state, claim_token)
     if not event_ids:
         raise ValueError("claim token is not active")
     write_health(

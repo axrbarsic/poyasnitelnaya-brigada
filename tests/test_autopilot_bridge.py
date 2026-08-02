@@ -339,6 +339,28 @@ class AutopilotBridgeTests(unittest.TestCase):
             claimed["prompt"],
         )
 
+    def test_gate_and_claim_prioritize_configured_author(self) -> None:
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["inbound_priority_author_ids"] = ["902"]
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        oldest = self.event()
+        oldest["author_id"] = "901"
+        priority = dict(self.event())
+        priority["event_id"] = "2081050838240211435"
+        priority["event_url"] = (
+            "https://x.com/Priority/status/2081050838240211435"
+        )
+        priority["author_id"] = "902"
+        priority["username"] = None
+        priority["first_seen_at"] = "2026-07-25T16:30:00Z"
+        self.write_events([priority, oldest])
+
+        gated = autopilot_bridge.gate(self.config, lease_seconds=1800)
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        self.assertEqual(gated["event_ids"], [priority["event_id"]])
+        self.assertEqual(claimed["event_ids"], [priority["event_id"]])
+
     def test_configured_claim_batches_three_oldest_events(self) -> None:
         config = json.loads(self.config.read_text(encoding="utf-8"))
         config["autopilot_max_claim_events"] = 3
@@ -753,7 +775,7 @@ class AutopilotBridgeTests(unittest.TestCase):
                 encoding="utf-8"
             )
         )
-        self.assertEqual(dispatch["events"], {})
+        self.assertEqual(dispatch["attempts"], {})
 
     def test_claim_includes_cross_thread_commenter_memory(self) -> None:
         watcher_config = watcher.load_config(self.config)
@@ -1579,7 +1601,7 @@ class AutopilotBridgeTests(unittest.TestCase):
         state_path = self.root / "var" / "autopilot-dispatch.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state["owner"] = None
-        state["events"][current["event_id"]] = {"dispatch_count": 1}
+        state["attempts"][current["event_id"]] = 1
         state_path.write_text(json.dumps(state), encoding="utf-8")
         database = self.root / "var" / "watcher.sqlite3"
         with closing(sqlite3.connect(database)) as connection, connection:
@@ -1630,7 +1652,7 @@ class AutopilotBridgeTests(unittest.TestCase):
         state_path = self.root / "var" / "autopilot-dispatch.json"
         state = json.loads(state_path.read_text(encoding="utf-8"))
         state["owner"] = None
-        state["events"][current["event_id"]] = {"dispatch_count": 1}
+        state["attempts"][current["event_id"]] = 1
         state_path.write_text(json.dumps(state), encoding="utf-8")
         database = self.root / "var" / "watcher.sqlite3"
         with closing(sqlite3.connect(database)) as connection, connection:

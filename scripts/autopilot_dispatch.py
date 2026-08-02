@@ -21,7 +21,8 @@ except ModuleNotFoundError:
     import inbound_policy  # type: ignore[no-redef]
     import json_contract  # type: ignore[no-redef]
 
-STATE_VERSION = 1
+STATE_VERSION = 2
+LEGACY_STATE_VERSION = 1
 DEFAULT_MAX_CLAIM_EVENTS = inbound_policy.DEFAULT_MAX_CLAIM_EVENTS
 X_STATUS_PATH = re.compile(
     r"^/(?:[A-Za-z0-9_]{1,15}|i/web)/status/([0-9]{1,19})$"
@@ -69,6 +70,19 @@ def load_paths(config_path: Path) -> tuple[Path, Path]:
     return wake_file, state_file
 
 
+def configured_priority_author_ids(config: dict[str, Any]) -> frozenset[str]:
+    raw_ids = config.get("inbound_priority_author_ids", [])
+    if not isinstance(raw_ids, list):
+        raise ValueError("inbound_priority_author_ids must be a list")
+    result: set[str] = set()
+    for raw_id in raw_ids:
+        author_id = str(raw_id)
+        if not author_id.isdigit() or len(author_id) > 19:
+            raise ValueError("inbound_priority_author_ids must be numeric")
+        result.add(author_id)
+    return frozenset(result)
+
+
 def _validated_wake_event(
     raw_event: Any,
     seen: set[str],
@@ -100,6 +114,11 @@ def _validated_wake_event(
         str(username),
     ) is None:
         raise ValueError("wake-request username must be a valid X handle")
+    author_id = raw_event.get("author_id")
+    if author_id is not None and (
+        not str(author_id).isdigit() or len(str(author_id)) > 19
+    ):
+        raise ValueError("wake-request author_id must be numeric")
     conversation_id = raw_event.get("conversation_id")
     if conversation_id is not None and not str(conversation_id).isdigit():
         raise ValueError("wake-request conversation_id must be numeric")
@@ -109,6 +128,7 @@ def _validated_wake_event(
     return {
         "id": event_id,
         "url": url,
+        "author_id": str(author_id) if author_id is not None else None,
         "username": username,
         "conversation_id": conversation_id,
         "created_at": raw_event.get("created_at"),
@@ -133,20 +153,145 @@ def load_wake_events(path: Path) -> list[dict[str, Any]]:
     return [_validated_wake_event(raw_event, seen) for raw_event in events]
 
 
-def load_state(path: Path) -> dict[str, Any]:
-    if not path.exists():
-        return {"version": STATE_VERSION, "events": {}, "owner": None}
-    payload = read_json(path)
-    if payload.get("version") != STATE_VERSION:
-        raise ValueError("Unsupported autopilot dispatcher state version")
+def _default_state() -> dict[str, Any]:
+    return {"version": STATE_VERSION, "attempts": {}, "owner": None}
+
+
+def _event_id(value: Any, *, field: str) -> str:
+    event_id = str(value or "")
+    if not event_id.isdigit() or len(event_id) > 19:
+        raise ValueError(f"{field} contains an invalid event ID")
+    return event_id
+
+
+def _validated_attempts(value: Any) -> dict[str, int]:
+    if not isinstance(value, dict):
+        raise ValueError("autopilot dispatcher attempts must be an object")
+    attempts: dict[str, int] = {}
+    for raw_event_id, raw_count in value.items():
+        event_id = _event_id(raw_event_id, field="dispatcher attempts")
+        if not isinstance(raw_count, int) or isinstance(raw_count, bool):
+            raise ValueError("dispatcher attempt count must be an integer")
+        if raw_count < 0:
+            raise ValueError("dispatcher attempt count must not be negative")
+        attempts[event_id] = raw_count
+    return attempts
+
+
+def _validated_owner(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("autopilot dispatcher owner must be an object or null")
+    claim_token = str(value.get("claim_token") or "").strip()
+    if not claim_token:
+        raise ValueError("autopilot dispatcher owner lacks a claim token")
+    raw_event_ids = value.get("event_ids")
+    if not isinstance(raw_event_ids, list):
+        raise ValueError("autopilot dispatcher owner event_ids must be an array")
+    event_ids = [
+        _event_id(item, field="dispatcher owner event_ids")
+        for item in raw_event_ids
+    ]
+    if not event_ids or len(event_ids) != len(set(event_ids)):
+        raise ValueError("autopilot dispatcher owner event_ids are invalid")
+    claimed_at = str(value.get("claimed_at") or "").strip()
+    if parse_time(claimed_at) is None:
+        raise ValueError("autopilot dispatcher owner claimed_at is invalid")
+    lease_expires_at = value.get("lease_expires_at")
+    if lease_expires_at is not None and parse_time(str(lease_expires_at)) is None:
+        raise ValueError("autopilot dispatcher owner lease expiry is invalid")
+    runtime_id = value.get("runtime_id")
+    if runtime_id is not None and not str(runtime_id).strip():
+        raise ValueError("autopilot dispatcher owner runtime_id is invalid")
+    owner = dict(value)
+    owner["claim_token"] = claim_token
+    owner["claimed_at"] = claimed_at
+    owner["event_ids"] = event_ids
+    if runtime_id is not None:
+        owner["runtime_id"] = str(runtime_id).strip()
+    return owner
+
+
+def _legacy_owner(events: dict[str, Any]) -> dict[str, Any] | None:
+    leases: dict[str, list[tuple[str, datetime]]] = {}
+    for raw_event_id, record in events.items():
+        event_id = _event_id(raw_event_id, field="legacy dispatcher events")
+        if not isinstance(record, dict):
+            raise ValueError("legacy dispatcher event record must be an object")
+        token = str(record.get("claim_token") or "").strip()
+        dispatched_at = parse_time(str(record.get("last_dispatched_at") or ""))
+        if not token and dispatched_at is None:
+            continue
+        if not token or dispatched_at is None:
+            raise ValueError("legacy dispatcher lease is incomplete")
+        leases.setdefault(token, []).append((event_id, dispatched_at))
+    if not leases:
+        return None
+    if len(leases) != 1:
+        raise ValueError("legacy dispatcher state has multiple active owners")
+    claim_token, records = next(iter(leases.items()))
+    return {
+        "claim_token": claim_token,
+        "claimed_at": isoformat(min(value for _, value in records)),
+        "event_ids": sorted((event_id for event_id, _ in records), key=int),
+        "runtime_id": None,
+    }
+
+
+def _migrate_legacy_state(payload: dict[str, Any]) -> dict[str, Any]:
     events = payload.get("events")
     if not isinstance(events, dict):
-        raise ValueError("autopilot dispatcher events must be an object")
+        raise ValueError("legacy autopilot dispatcher events must be an object")
+    attempts: dict[str, int] = {}
+    for raw_event_id, record in events.items():
+        event_id = _event_id(raw_event_id, field="legacy dispatcher events")
+        if not isinstance(record, dict):
+            raise ValueError("legacy dispatcher event record must be an object")
+        raw_count = record.get("dispatch_count", 0)
+        if not isinstance(raw_count, int) or isinstance(raw_count, bool):
+            raise ValueError("legacy dispatcher attempt count must be an integer")
+        attempts[event_id] = raw_count
     owner = payload.get("owner")
-    if owner is not None and not isinstance(owner, dict):
-        raise ValueError("autopilot dispatcher owner must be an object or null")
-    payload.setdefault("owner", None)
-    return payload
+    return {
+        "version": STATE_VERSION,
+        "attempts": _validated_attempts(attempts),
+        "owner": _validated_owner(
+            owner if owner is not None else _legacy_owner(events)
+        ),
+        "updated_at": payload.get("updated_at"),
+    }
+
+
+def _load_state(path: Path) -> tuple[dict[str, Any], bool]:
+    if not path.exists():
+        return _default_state(), False
+    payload = read_json(path)
+    version = payload.get("version")
+    if version == LEGACY_STATE_VERSION:
+        return _migrate_legacy_state(payload), True
+    if version != STATE_VERSION:
+        raise ValueError("Unsupported autopilot dispatcher state version")
+    return (
+        {
+            "version": STATE_VERSION,
+            "attempts": _validated_attempts(payload.get("attempts")),
+            "owner": _validated_owner(payload.get("owner")),
+            "updated_at": payload.get("updated_at"),
+        },
+        False,
+    )
+
+
+def load_state(path: Path) -> dict[str, Any]:
+    return _load_state(path)[0]
+
+
+def claim_event_ids(state: dict[str, Any], claim_token: str) -> list[str]:
+    owner = state.get("owner")
+    if not isinstance(owner, dict) or owner.get("claim_token") != claim_token:
+        return []
+    return sorted((str(value) for value in owner.get("event_ids", [])), key=int)
 
 
 @contextmanager
@@ -179,6 +324,7 @@ def compact_event(event: dict[str, Any]) -> dict[str, Any]:
         for key in (
             "id",
             "url",
+            "author_id",
             "username",
             "conversation_id",
             "created_at",
@@ -192,8 +338,9 @@ def select_claim_events(
     events: list[dict[str, Any]],
     *,
     max_events: int,
+    priority_author_ids: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
-    """Select one bounded oldest-first claim without mutating the queue."""
+    """Select a bounded claim, prioritizing requested authors then age."""
 
     if not 1 <= max_events <= inbound_policy.MAX_SUPPORTED_CLAIM_EVENTS:
         raise ValueError(
@@ -202,11 +349,14 @@ def select_claim_events(
         )
     latest = datetime.max.replace(tzinfo=timezone.utc)
 
-    def priority(event: dict[str, Any]) -> tuple[datetime, int]:
+    def priority(event: dict[str, Any]) -> tuple[int, datetime, int]:
         observed_at = parse_time(
             str(event.get("first_seen_at") or event.get("created_at") or "")
         )
-        return observed_at or latest, int(str(event["id"]))
+        author_rank = (
+            0 if str(event.get("author_id") or "") in priority_author_ids else 1
+        )
+        return author_rank, observed_at or latest, int(str(event["id"]))
 
     return sorted(events, key=priority)[:max_events]
 
@@ -229,13 +379,14 @@ def _owner_lease_expiry(
     owner: dict[str, Any],
     *,
     lease_seconds: int,
-) -> tuple[datetime | None, datetime | None]:
+) -> tuple[datetime | None, datetime | None, bool]:
     claimed_at = parse_time(owner.get("claimed_at"))
     expires_at = parse_time(owner.get("lease_expires_at"))
-    if expires_at is None and claimed_at is not None:
+    changed = expires_at is None and claimed_at is not None
+    if changed:
         expires_at = claimed_at + timedelta(seconds=lease_seconds)
         owner["lease_expires_at"] = isoformat(expires_at)
-    return claimed_at, expires_at
+    return claimed_at, expires_at, changed
 
 
 def _active_owner_result(
@@ -247,9 +398,10 @@ def _active_owner_result(
     current_time: datetime,
     lease_seconds: int,
     runtime_id: str | None,
+    persist_state: bool,
 ) -> dict[str, Any] | None:
     runtime_changed = _owner_runtime_changed(owner, runtime_id)
-    claimed_at, expires_at = _owner_lease_expiry(
+    claimed_at, expires_at, lease_changed = _owner_lease_expiry(
         owner,
         lease_seconds=lease_seconds,
     )
@@ -261,8 +413,9 @@ def _active_owner_result(
     ):
         return None
     active_ids = [str(value) for value in owner.get("event_ids", [])]
-    state["updated_at"] = isoformat(current_time)
-    atomic_write_json(state_file, state)
+    if persist_state or lease_changed:
+        state["updated_at"] = isoformat(current_time)
+        atomic_write_json(state_file, state)
     return {
         "dispatch": False,
         "owner_busy": True,
@@ -274,68 +427,17 @@ def _active_owner_result(
     }
 
 
-def _release_changed_runtime_owner(
-    state_events: dict[str, Any],
-    owner: dict[str, Any],
-    runtime_id: str | None,
-) -> None:
-    if not _owner_runtime_changed(owner, runtime_id):
-        return
-    owner_token = owner.get("claim_token")
-    for event_id in owner.get("event_ids", []):
-        record = state_events.get(str(event_id))
-        if (
-            isinstance(record, dict)
-            and record.get("claim_token") == owner_token
-        ):
-            record.pop("claim_token", None)
-            record.pop("last_dispatched_at", None)
-
-
-def _legacy_active_result(
-    state_events: dict[str, Any],
-    pending_events: list[dict[str, Any]],
-    *,
-    current_time: datetime,
-    lease_seconds: int,
-) -> dict[str, Any] | None:
-    active: list[tuple[str, dict[str, Any]]] = []
-    for event_id, record in state_events.items():
-        if not isinstance(record, dict):
-            continue
-        dispatched_at = parse_time(record.get("last_dispatched_at"))
-        if dispatched_at is None:
-            continue
-        age_seconds = (current_time - dispatched_at).total_seconds()
-        if age_seconds < lease_seconds and record.get("claim_token"):
-            active.append((event_id, record))
-    if not active:
-        return None
-    tokens = sorted({str(record["claim_token"]) for _, record in active})
-    active_ids = sorted((event_id for event_id, _ in active), key=int)
-    return {
-        "dispatch": False,
-        "owner_busy": True,
-        "active_claim_token": tokens[0] if len(tokens) == 1 else None,
-        "active_claim_tokens": tokens,
-        "active_event_ids": active_ids,
-        "pending_count": len(pending_events),
-        "leased_count": len(active_ids),
-        "lease_seconds": lease_seconds,
-    }
-
-
-def _prune_state_events(
+def _prune_attempts(
     state: dict[str, Any],
     pending_events: list[dict[str, Any]],
 ) -> dict[str, Any]:
     pending_ids = {event["id"] for event in pending_events}
-    state["events"] = {
+    state["attempts"] = {
         event_id: value
-        for event_id, value in state["events"].items()
+        for event_id, value in state["attempts"].items()
         if event_id in pending_ids
     }
-    return state["events"]
+    return state["attempts"]
 
 
 def _idle_claim_result(
@@ -359,7 +461,7 @@ def _idle_claim_result(
 def _create_claim(
     state_file: Path,
     state: dict[str, Any],
-    state_events: dict[str, Any],
+    attempts: dict[str, int],
     pending_events: list[dict[str, Any]],
     events: list[dict[str, Any]],
     *,
@@ -373,17 +475,7 @@ def _create_claim(
         current_time + timedelta(seconds=lease_seconds)
     )
     for event in events:
-        previous = state_events.get(event["id"])
-        dispatch_count = (
-            int(previous.get("dispatch_count", 0))
-            if isinstance(previous, dict)
-            else 0
-        )
-        state_events[event["id"]] = {
-            "claim_token": claim_token,
-            "dispatch_count": dispatch_count + 1,
-            "last_dispatched_at": claimed_at,
-        }
+        attempts[event["id"]] = attempts.get(event["id"], 0) + 1
     state["owner"] = {
         "claim_token": claim_token,
         "claimed_at": claimed_at,
@@ -413,15 +505,19 @@ def claim(
     max_events: int = DEFAULT_MAX_CLAIM_EVENTS,
     now: datetime | None = None,
     runtime_id: str | None = None,
+    priority_author_ids: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     if lease_seconds <= 0:
         raise ValueError("lease_seconds must be positive")
     current_time = now or utc_now()
     with locked_state(state_file):
         pending_events = load_wake_events(wake_file)
-        events = select_claim_events(pending_events, max_events=max_events)
-        state = load_state(state_file)
-        state_events = state["events"]
+        events = select_claim_events(
+            pending_events,
+            max_events=max_events,
+            priority_author_ids=priority_author_ids,
+        )
+        state, migrated = _load_state(state_file)
         owner = state.get("owner")
         if isinstance(owner, dict):
             active = _active_owner_result(
@@ -432,24 +528,12 @@ def claim(
                 current_time=current_time,
                 lease_seconds=lease_seconds,
                 runtime_id=runtime_id,
+                persist_state=migrated,
             )
             if active is not None:
                 return active
-            _release_changed_runtime_owner(
-                state_events,
-                owner,
-                runtime_id,
-            )
             state["owner"] = None
-        legacy = _legacy_active_result(
-            state_events,
-            pending_events,
-            current_time=current_time,
-            lease_seconds=lease_seconds,
-        )
-        if legacy is not None:
-            return legacy
-        state_events = _prune_state_events(state, pending_events)
+        attempts = _prune_attempts(state, pending_events)
         if not pending_events:
             return _idle_claim_result(
                 state_file,
@@ -460,7 +544,7 @@ def claim(
         return _create_claim(
             state_file,
             state,
-            state_events,
+            attempts,
             pending_events,
             events,
             current_time=current_time,
@@ -482,23 +566,13 @@ def renew(
         raise ValueError("lease_seconds must be positive")
     current_time = now or utc_now()
     with locked_state(state_file):
-        state = load_state(state_file)
+        state, _ = _load_state(state_file)
         owner = state.get("owner")
         if not isinstance(owner, dict) or owner.get("claim_token") != claim_token:
             raise ValueError("claim token is not the active global owner")
-        event_ids = [str(value) for value in owner.get("event_ids", [])]
+        event_ids = claim_event_ids(state, claim_token)
         if not event_ids:
             raise ValueError("active owner has no event ids")
-        state_events = state["events"]
-        for event_id in event_ids:
-            record = state_events.get(event_id)
-            if (
-                not isinstance(record, dict)
-                or record.get("claim_token") != claim_token
-            ):
-                raise ValueError(
-                    f"claim state is inconsistent for event {event_id}"
-                )
 
         renewed_at = isoformat(current_time)
         lease_expires_at = isoformat(
@@ -506,8 +580,6 @@ def renew(
         )
         owner["last_renewed_at"] = renewed_at
         owner["lease_expires_at"] = lease_expires_at
-        for event_id in event_ids:
-            state_events[event_id]["last_dispatched_at"] = renewed_at
         state["updated_at"] = renewed_at
         atomic_write_json(state_file, state)
         return {
@@ -521,16 +593,8 @@ def renew(
 
 def release(state_file: Path, claim_token: str) -> dict[str, Any]:
     with locked_state(state_file):
-        state = load_state(state_file)
-        released: list[str] = []
-        for event_id, record in state["events"].items():
-            if (
-                isinstance(record, dict)
-                and record.get("claim_token") == claim_token
-            ):
-                record.pop("claim_token", None)
-                record.pop("last_dispatched_at", None)
-                released.append(event_id)
+        state, _ = _load_state(state_file)
+        released = claim_event_ids(state, claim_token)
         owner = state.get("owner")
         if isinstance(owner, dict) and owner.get("claim_token") == claim_token:
             state["owner"] = None
@@ -541,18 +605,10 @@ def release(state_file: Path, claim_token: str) -> dict[str, Any]:
 
 def finish(state_file: Path, claim_token: str) -> dict[str, Any]:
     with locked_state(state_file):
-        state = load_state(state_file)
-        finished = sorted(
-            (
-                event_id
-                for event_id, record in state["events"].items()
-                if isinstance(record, dict)
-                and record.get("claim_token") == claim_token
-            ),
-            key=int,
-        )
+        state, _ = _load_state(state_file)
+        finished = claim_event_ids(state, claim_token)
         for event_id in finished:
-            del state["events"][event_id]
+            state["attempts"].pop(event_id, None)
         owner = state.get("owner")
         if isinstance(owner, dict) and owner.get("claim_token") == claim_token:
             state["owner"] = None
@@ -564,20 +620,18 @@ def finish(state_file: Path, claim_token: str) -> dict[str, Any]:
 def status(wake_file: Path, state_file: Path, *, lease_seconds: int) -> dict[str, Any]:
     with locked_state(state_file):
         events = load_wake_events(wake_file)
-        state = load_state(state_file)
+        state, migrated = _load_state(state_file)
         current_time = utc_now()
         owner = state.get("owner")
         owner_busy = False
         active_claim_token: str | None = None
         active_event_ids: list[str] = []
         if isinstance(owner, dict):
-            claimed_at = parse_time(owner.get("claimed_at"))
-            lease_expires_at = parse_time(owner.get("lease_expires_at"))
-            if lease_expires_at is None and claimed_at is not None:
-                lease_expires_at = claimed_at + timedelta(
-                    seconds=lease_seconds
-                )
-                owner["lease_expires_at"] = isoformat(lease_expires_at)
+            claimed_at, lease_expires_at, lease_changed = _owner_lease_expiry(
+                owner,
+                lease_seconds=lease_seconds,
+            )
+            if migrated or lease_changed:
                 state["updated_at"] = isoformat(current_time)
                 atomic_write_json(state_file, state)
             if (
@@ -590,19 +644,13 @@ def status(wake_file: Path, state_file: Path, *, lease_seconds: int) -> dict[str
                 active_event_ids = [
                     str(value) for value in owner.get("event_ids", [])
                 ]
-        leased_ids: list[str] = []
-        for event in events:
-            record = state["events"].get(event["id"])
-            dispatched_at = (
-                parse_time(record.get("last_dispatched_at"))
-                if isinstance(record, dict)
-                else None
-            )
-            if (
-                dispatched_at is not None
-                and (current_time - dispatched_at).total_seconds() < lease_seconds
-            ):
-                leased_ids.append(event["id"])
+        elif migrated:
+            state["updated_at"] = isoformat(current_time)
+            atomic_write_json(state_file, state)
+        pending_ids = {event["id"] for event in events}
+        leased_ids = [
+            event_id for event_id in active_event_ids if event_id in pending_ids
+        ]
         return {
             "pending_count": len(events),
             "pending_ids": [event["id"] for event in events],
@@ -655,6 +703,7 @@ def main(argv: list[str] | None = None) -> int:
             state_file,
             lease_seconds=arguments.lease_seconds,
             max_events=max_events,
+            priority_author_ids=configured_priority_author_ids(config),
         )
     elif arguments.command == "release":
         result = release(state_file, arguments.claim_token)

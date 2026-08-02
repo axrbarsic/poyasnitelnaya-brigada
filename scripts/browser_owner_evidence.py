@@ -119,17 +119,9 @@ def active_claim_event_ids(
     claim_token: str,
 ) -> list[str]:
     state = autopilot_dispatch.load_state(state_file)
-    owner = state.get("owner")
-    if not isinstance(owner, dict) or owner.get("claim_token") != claim_token:
+    event_ids = autopilot_dispatch.claim_event_ids(state, claim_token)
+    if not event_ids:
         raise ValueError("claim token is not the active Browser-owner claim")
-    event_ids = [str(value) for value in owner.get("event_ids", [])]
-    if not event_ids or any(
-        not event_id.isdigit() or len(event_id) > 19
-        for event_id in event_ids
-    ):
-        raise ValueError("Active Browser-owner claim has invalid event IDs")
-    if len(event_ids) != len(set(event_ids)):
-        raise ValueError("Active Browser-owner claim has duplicate event IDs")
     return event_ids
 
 

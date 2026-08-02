@@ -134,9 +134,11 @@ class FinalizeBrowserOwnerSessionTests(unittest.TestCase):
             state_file,
             {
                 "version": autopilot_dispatch.STATE_VERSION,
-                "events": {},
+                "attempts": {event_id: 1 for event_id in event_ids},
                 "owner": {
                     "claim_token": self.claim_token,
+                    "claimed_at": "2026-08-02T04:00:00Z",
+                    "lease_expires_at": "2026-08-02T04:30:00Z",
                     "event_ids": event_ids,
                 },
             },
@@ -222,7 +224,7 @@ class FinalizeBrowserOwnerSessionTests(unittest.TestCase):
             state_file,
             {
                 "version": autopilot_dispatch.STATE_VERSION,
-                "events": {},
+                "attempts": {},
                 "owner": None,
             },
         )
