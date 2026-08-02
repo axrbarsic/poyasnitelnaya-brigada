@@ -11,6 +11,7 @@ from typing import Any, Iterable
 
 X_DELIVERY_FAILURES = frozenset(
     {
+        "runtime.dispatch_health",
         "runtime.queue_latency",
         "runtime.relay_progress",
     }

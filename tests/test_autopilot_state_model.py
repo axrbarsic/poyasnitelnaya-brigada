@@ -13,7 +13,11 @@ class AutopilotStateModelTests(unittest.TestCase):
         )
         self.assertEqual(
             autopilot_state_model.recovery_owner(
-                ["runtime.relay_progress", "runtime.queue_latency"]
+                [
+                    "runtime.dispatch_health",
+                    "runtime.relay_progress",
+                    "runtime.queue_latency",
+                ]
             ),
             "x",
         )
