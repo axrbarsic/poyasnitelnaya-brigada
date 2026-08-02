@@ -1026,6 +1026,130 @@ class AutopilotSupervisorTests(unittest.TestCase):
         self.assertEqual(result["owner_thread_id"], "owner")
         reserve_x.assert_not_called()
 
+    def test_relay_forces_rotation_after_failed_owner_contract_repair(
+        self,
+    ) -> None:
+        rotation = {
+            "status": "owner_rotation_required",
+            "dispatch": True,
+            "route": "rotation",
+            "action": "create_thread",
+            "rotation_token": "rotation-token",
+            "old_thread_id": "owner",
+            "new_thread_id": None,
+            "rotation_reason": "failed_owner_contract_repair",
+        }
+        with (
+            mock.patch.object(
+                autopilot_supervisor,
+                "gate",
+                return_value={
+                    "status": "failed",
+                    "dispatch": False,
+                    "repair_pending": True,
+                    "failures": ["thread.browser_owner"],
+                },
+            ),
+            mock.patch.object(
+                autopilot_supervisor.browser_owner_rotation,
+                "pending",
+                return_value=None,
+            ),
+            mock.patch.object(
+                autopilot_supervisor.browser_owner_rotation,
+                "reserve",
+                return_value=rotation,
+            ) as reserve_rotation,
+            mock.patch.object(
+                autopilot_supervisor,
+                "active_x_owner_snapshot",
+                return_value={"owner_busy": False},
+            ),
+            mock.patch.object(
+                outbound_cycle,
+                "active_owner_snapshot",
+                return_value={"owner_busy": False},
+            ),
+            mock.patch.object(
+                autopilot_supervisor,
+                "reserve_handoff",
+            ) as reserve_repair,
+            mock.patch.object(
+                autopilot_supervisor.autopilot_bridge,
+                "reserve_handoff",
+            ) as reserve_x,
+        ):
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["route"], "rotation")
+        self.assertTrue(result["forced_rotation"])
+        self.assertTrue(result["repair_pending"])
+        self.assertEqual(
+            reserve_rotation.call_args.kwargs["force_reason"],
+            "failed_owner_contract_repair",
+        )
+        reserve_repair.assert_not_called()
+        reserve_x.assert_not_called()
+
+    def test_failed_non_owner_repair_keeps_repair_priority(self) -> None:
+        repair = {
+            "status": "repair_handoff_pending",
+            "dispatch": True,
+            "repair_pending": True,
+            "incident_id": "incident",
+            "reservation_token": "repair-token",
+        }
+        with (
+            mock.patch.object(
+                autopilot_supervisor,
+                "gate",
+                return_value={
+                    "status": "failed",
+                    "dispatch": False,
+                    "repair_pending": True,
+                    "failures": ["runtime.database"],
+                },
+            ),
+            mock.patch.object(
+                autopilot_supervisor.browser_owner_rotation,
+                "pending",
+                return_value=None,
+            ),
+            mock.patch.object(
+                autopilot_supervisor.browser_owner_rotation,
+                "reserve",
+            ) as reserve_rotation,
+            mock.patch.object(
+                autopilot_supervisor,
+                "active_x_owner_snapshot",
+                side_effect=[
+                    {"owner_busy": False},
+                    {"owner_busy": False},
+                ],
+            ),
+            mock.patch.object(
+                autopilot_supervisor,
+                "reserve_handoff",
+                return_value=repair,
+            ),
+        ):
+            result = autopilot_supervisor.relay_reserve_handoff(
+                self.config,
+                self.contract,
+                lease_seconds=1800,
+                now=self.now,
+            )
+
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["route"], "repair")
+        reserve_rotation.assert_not_called()
+
     def test_relay_resumes_open_rotation_before_repair(self) -> None:
         pending = {
             "status": "owner_rotation_required",

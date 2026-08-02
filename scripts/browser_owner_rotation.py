@@ -249,6 +249,9 @@ def _result(
         "owner_model": str(owner["model"]),
         "owner_thinking": str(owner["minimum_reasoning_effort"]),
         "owner_rotation_marker": marker,
+        "rotation_reason": str(
+            transaction.get("rotation_reason", "handoff_threshold")
+        ),
         "initial_prompt": initial_prompt,
     }
 
@@ -260,6 +263,7 @@ def reserve(
     allow_new: bool,
     owner_busy: bool,
     outbound_busy: bool,
+    force_reason: str | None = None,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return or create one recoverable rotation transaction."""
@@ -276,7 +280,8 @@ def reserve(
             return _result(config, contract, transaction)
 
         due, handoff_count = _rotation_due(config_path, config)
-        if not due:
+        normalized_force_reason = str(force_reason or "").strip() or None
+        if not due and normalized_force_reason is None:
             return {
                 "status": "owner_rotation_not_due",
                 "dispatch": False,
@@ -292,6 +297,9 @@ def reserve(
                 "repair_pending": not allow_new,
                 "owner_busy": owner_busy,
                 "outbound_busy": outbound_busy,
+                "rotation_reason": (
+                    normalized_force_reason or "handoff_threshold"
+                ),
             }
 
         owner_thread_id = _current_owner(config)
@@ -309,6 +317,9 @@ def reserve(
             "started_at": isoformat(current),
             "updated_at": isoformat(current),
             "handoff_count": handoff_count,
+            "rotation_reason": (
+                normalized_force_reason or "handoff_threshold"
+            ),
             "last_error": None,
         }
         state["transaction"] = transaction

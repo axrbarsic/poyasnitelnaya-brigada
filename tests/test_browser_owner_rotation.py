@@ -184,6 +184,37 @@ class BrowserOwnerRotationTests(unittest.TestCase):
             ]
         )
 
+    @mock.patch("scripts.browser_owner_rotation.uuid.uuid4", return_value="token")
+    def test_force_reason_creates_rotation_below_run_threshold(
+        self,
+        _uuid: mock.Mock,
+    ) -> None:
+        self.write_health(1)
+
+        result = browser_owner_rotation.reserve(
+            self.config,
+            self.contract,
+            allow_new=True,
+            owner_busy=False,
+            outbound_busy=False,
+            force_reason="failed_owner_contract_repair",
+            now=self.now,
+        )
+
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["action"], "create_thread")
+        self.assertEqual(
+            result["rotation_reason"],
+            "failed_owner_contract_repair",
+        )
+        transaction = browser_owner_rotation.load_state(
+            self.root / "rotation.json"
+        )["transaction"]
+        self.assertEqual(
+            transaction["rotation_reason"],
+            "failed_owner_contract_repair",
+        )
+
     def test_busy_owner_defers_without_creating_transaction(self) -> None:
         result = browser_owner_rotation.reserve(
             self.config,

@@ -90,6 +90,11 @@
   rotation transaction. Never create a second replacement while a transaction
   already records `new_thread_id`. A partial rotation must resume from its
   durable phase instead of starting over.
+- A terminal failed repair whose doctor failures include
+  `thread.browser_owner` must force the same transactional rotation even below
+  the normal completed-run threshold. Do not retry an in-place repair that the
+  owner already proved impossible, and do not let that failed incident block
+  the inbound queue.
 - Treat helper results as evidence. Sol performs the final live-context
   decision and publication transaction.
 - Every visual publication must preserve the generated image file and SHA-256,

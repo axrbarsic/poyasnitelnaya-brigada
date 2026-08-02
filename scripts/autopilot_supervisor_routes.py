@@ -9,6 +9,10 @@ from pathlib import Path
 from typing import Any, Callable
 
 
+OWNER_CONTRACT_FAILURE = "thread.browser_owner"
+OWNER_CONTRACT_ROTATION_REASON = "failed_owner_contract_repair"
+
+
 @dataclass(frozen=True)
 class Dependencies:
     read_config: Callable[[Path], dict[str, Any]]
@@ -52,6 +56,21 @@ def _owner_route(
         "owner_model": str(owner["model"]),
         "owner_thinking": str(owner["minimum_reasoning_effort"]),
     }
+
+
+def _forced_rotation_reason(repair_state: dict[str, Any]) -> str | None:
+    """Return a universal rotation reason for an unrepairable owner task."""
+
+    if repair_state.get("status") != "failed":
+        return None
+    failures = {
+        str(identifier)
+        for identifier in repair_state.get("failures", [])
+        if str(identifier).strip()
+    }
+    if OWNER_CONTRACT_FAILURE in failures:
+        return OWNER_CONTRACT_ROTATION_REASON
+    return None
 
 
 def _reserve_repair(
@@ -246,6 +265,33 @@ def relay_reserve_handoff(
             **pending_rotation,
             **owner_route,
             "repair_pending": bool(repair_state.get("repair_pending")),
+        }
+    forced_rotation_reason = _forced_rotation_reason(repair_state)
+    if forced_rotation_reason is not None:
+        outbound_path = dependencies.outbound_state_path(config_path)
+        x_owner = dependencies.active_x_owner_snapshot(
+            config_path,
+            lease_seconds=lease_seconds,
+            now=now,
+        )
+        outbound_owner = dependencies.outbound_active_owner(
+            outbound_path,
+            now=now,
+        )
+        rotation = dependencies.owner_rotation_reserve(
+            config_path,
+            contract,
+            allow_new=True,
+            owner_busy=bool(x_owner.get("owner_busy")),
+            outbound_busy=bool(outbound_owner.get("owner_busy")),
+            force_reason=forced_rotation_reason,
+            now=now,
+        )
+        return {
+            **rotation,
+            **owner_route,
+            "repair_pending": True,
+            "forced_rotation": True,
         }
     if repair_state.get("repair_pending"):
         return _reserve_repair(
