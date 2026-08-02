@@ -198,6 +198,10 @@ ChatGPT открывай только для
 явно разрешённого satirical-media route отдельного визуального бота. Для
 обычного local-max route ChatGPT запрещён. После terminal результата закрой
 все принадлежащие этой задаче Browser-вкладки. После обработки закончи.
+После terminal completed текущего claim запрещено вызывать новый `gate`,
+`claim` или `poll` в этом же turn, даже если очередь непуста или действует
+долгая цель автопилота. Один wake обрабатывает ровно один bounded claim.
+Следующий batch приходит только новым штатным x-relay handoff.
 Следующий X API poll выполняет LaunchAgent. Не
 создавай автоматики, задачи или Browser helpers. В финале укажи event ID,
 disposition и verified reply URL.

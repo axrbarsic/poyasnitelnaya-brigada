@@ -737,6 +737,14 @@ class AutopilotBridgeTests(unittest.TestCase):
             "Следующий X API poll выполняет LaunchAgent",
             result["prompt"],
         )
+        self.assertIn(
+            "Один wake обрабатывает ровно один bounded claim",
+            result["prompt"],
+        )
+        self.assertIn(
+            "Следующий batch приходит только новым штатным x-relay handoff",
+            result["prompt"],
+        )
         self.assertIn("Content-based skip запрещен", result["prompt"])
         self.assertIn("`satirical-media`", result["prompt"])
         self.assertIn("`requested-media`", result["prompt"])

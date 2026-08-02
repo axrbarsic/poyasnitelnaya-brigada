@@ -384,6 +384,10 @@ old version.
   every event reports `status=committed`, run
   `scripts/finalize_browser_owner_session.py` once for the claim and require a
   complete manifest before `completed`.
+- One relay wake processes exactly one bounded claim. After terminal
+  `completed`, close task-owned tabs and end the current turn. Never call a new
+  `gate`, `claim`, or `poll` in that same turn, even when the queue remains
+  non-empty. Only the next official `x-relay` handoff may start another claim.
 - The terminal target must exactly match the stored API text, author ID,
   parent status ID and conversation ID. A `local_sol_max` outcome names
   `poyasnitelnaya-brigada-v2`; a `sol_short` outcome names no skill;
