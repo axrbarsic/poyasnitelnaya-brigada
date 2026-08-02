@@ -90,6 +90,19 @@ class LocalExplainerSkillTests(unittest.TestCase):
         self.assertIn("Full CDP Developer mode", skill)
         self.assertIn("requires explicit approval", skill)
 
+    def test_x_operator_fulfills_explicit_commenter_image_requests(self) -> None:
+        skill = X_OPERATOR_SKILL.read_text(encoding="utf-8")
+        watcher_reference = X_OPERATOR_WATCHER_REFERENCE.read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("`requested-media`", skill)
+        self.assertIn("official local `imagegen` skill", skill)
+        self.assertIn('waitForEvent("filechooser")', skill)
+        self.assertIn("--require-media", skill)
+        self.assertIn("commenter_requested_image", watcher_reference)
+        self.assertIn("composer_attachment_verified=true", watcher_reference)
+
     def test_x_operator_uses_self_owned_heartbeat_contract(self) -> None:
         documents = (
             X_OPERATOR_SKILL.read_text(encoding="utf-8"),

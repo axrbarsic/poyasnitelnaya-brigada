@@ -266,6 +266,54 @@ class VerifyXNoteTweetTests(unittest.TestCase):
         self.assertTrue(report["valid"])
         self.assertEqual(report["text_source"], "note_tweet")
 
+    def test_requires_and_records_published_photo(self) -> None:
+        source = "Готово, вот запрошенная инфографика."
+        response = self.response(text=source, urls=[])
+        response["data"]["attachments"] = {"media_keys": ["3_photo"]}
+        response["includes"] = {
+            "media": [
+                {
+                    "media_key": "3_photo",
+                    "type": "photo",
+                    "url": "https://pbs.twimg.com/media/example.jpg",
+                    "width": 1024,
+                    "height": 1024,
+                }
+            ]
+        }
+
+        report = verify_x_note_tweet.build_report(
+            response,
+            source_text=source,
+            maximum_length=4000,
+            expected_status_id="222",
+            expected_parent_status_id="111",
+            require_media=True,
+        )
+
+        self.assertTrue(report["valid"])
+        self.assertTrue(report["media_verified"])
+        self.assertEqual(report["media_count"], 1)
+        self.assertEqual(report["published_media_types"], ["photo"])
+
+    def test_rejects_required_media_when_expansion_is_missing(self) -> None:
+        source = "Готово."
+        response = self.response(text=source, urls=[])
+        response["data"]["attachments"] = {"media_keys": ["3_missing"]}
+
+        report = verify_x_note_tweet.build_report(
+            response,
+            source_text=source,
+            maximum_length=4000,
+            expected_status_id="222",
+            expected_parent_status_id="111",
+            require_media=True,
+        )
+
+        self.assertFalse(report["valid"])
+        self.assertFalse(report["media_verified"])
+        self.assertFalse(report["media_expansion_complete"])
+
 
 if __name__ == "__main__":
     unittest.main()

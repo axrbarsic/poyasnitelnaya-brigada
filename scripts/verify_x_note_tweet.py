@@ -193,16 +193,33 @@ def load_live_tweet(
     *,
     config_path: Path,
     status_id: str,
+    require_media: bool = False,
 ) -> dict[str, Any]:
     if not status_id.isdigit():
         raise ValueError("status ID must be numeric")
     config = xmention_watcher.load_config(config_path)
-    params = {
-        "tweet.fields": (
-            "author_id,created_at,conversation_id,in_reply_to_user_id,"
-            "referenced_tweets,entities,note_tweet"
+    tweet_fields = [
+        "author_id",
+        "created_at",
+        "conversation_id",
+        "in_reply_to_user_id",
+        "referenced_tweets",
+        "entities",
+        "note_tweet",
+    ]
+    params = {"tweet.fields": ",".join(tweet_fields)}
+    if require_media:
+        tweet_fields.append("attachments")
+        params.update(
+            {
+                "tweet.fields": ",".join(tweet_fields),
+                "expansions": "attachments.media_keys",
+                "media.fields": (
+                    "media_key,type,url,preview_image_url,alt_text,"
+                    "width,height"
+                ),
+            }
         )
-    }
     url = (
         f"{config.api_base}/tweets/{urllib.parse.quote(status_id)}?"
         f"{urllib.parse.urlencode(params)}"
@@ -217,6 +234,76 @@ def load_live_tweet(
     return response
 
 
+def published_media_report(response: dict[str, Any]) -> dict[str, Any]:
+    data = response.get("data")
+    if not isinstance(data, dict):
+        raise ValueError("response.data must be an object")
+    attachments = data.get("attachments") or {}
+    if not isinstance(attachments, dict):
+        raise ValueError("response.data.attachments must be an object")
+    raw_keys = attachments.get("media_keys") or []
+    if not isinstance(raw_keys, list):
+        raise ValueError("attachments.media_keys must be an array")
+    media_keys = [str(value) for value in raw_keys]
+    if any(not value for value in media_keys):
+        raise ValueError("attachments.media_keys contains an empty value")
+
+    includes = response.get("includes") or {}
+    if not isinstance(includes, dict):
+        raise ValueError("response.includes must be an object")
+    included_media = includes.get("media") or []
+    if not isinstance(included_media, list):
+        raise ValueError("response.includes.media must be an array")
+    indexed: dict[str, dict[str, Any]] = {}
+    for item in included_media:
+        if not isinstance(item, dict):
+            raise ValueError("response.includes.media items must be objects")
+        media_key = item.get("media_key")
+        if not isinstance(media_key, str) or not media_key:
+            raise ValueError("included media lacks media_key")
+        if media_key in indexed:
+            raise ValueError("response.includes.media has duplicate media_key")
+        indexed[media_key] = item
+
+    published_media: list[dict[str, Any]] = []
+    for media_key in media_keys:
+        item = indexed.get(media_key)
+        if item is None:
+            continue
+        media_type = item.get("type")
+        if not isinstance(media_type, str) or not media_type:
+            raise ValueError("included media lacks type")
+        record: dict[str, Any] = {
+            "media_key": media_key,
+            "type": media_type,
+        }
+        for name in (
+            "url",
+            "preview_image_url",
+            "alt_text",
+            "width",
+            "height",
+        ):
+            value = item.get(name)
+            if value is not None:
+                record[name] = value
+        published_media.append(record)
+
+    return {
+        "media_keys": media_keys,
+        "media_count": len(media_keys),
+        "expanded_media_count": len(published_media),
+        "media_expansion_complete": len(published_media) == len(media_keys),
+        "published_media": published_media,
+        "published_media_types": [
+            str(item["type"]) for item in published_media
+        ],
+        "published_photo_present": any(
+            item["type"] == "photo" for item in published_media
+        ),
+    }
+
+
 def build_report(
     response: dict[str, Any],
     *,
@@ -224,6 +311,7 @@ def build_report(
     maximum_length: int,
     expected_status_id: str | None,
     expected_parent_status_id: str | None,
+    require_media: bool = False,
 ) -> dict[str, Any]:
     data = response.get("data")
     if not isinstance(data, dict):
@@ -261,6 +349,7 @@ def build_report(
         )
     )
     forbidden = [character for character in FORBIDDEN if character in reconstructed]
+    media_report = published_media_report(response)
     report = {
         "status_id": status_id,
         "created_at": data.get("created_at"),
@@ -280,12 +369,23 @@ def build_report(
         "api_code_points": api_code_points,
         "reply_prefix_mentions": reply_prefix_mentions,
         "text_normalization": text_normalization,
+        "require_media": require_media,
+        **media_report,
     }
+    report["media_verified"] = (
+        not require_media
+        or (
+            report["media_count"] > 0
+            and report["media_expansion_complete"]
+            and report["published_photo_present"]
+        )
+    )
     report["valid"] = (
         report["parent_matches"]
         and report["non_empty"]
         and report["length_within_limit"]
         and report["exact_file_match"]
+        and report["media_verified"]
         and not forbidden
     )
     return report
@@ -308,6 +408,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--file", type=Path, required=True)
     parser.add_argument("--max", dest="maximum", type=int, default=4000)
     parser.add_argument("--strip-one-final-newline", action="store_true")
+    parser.add_argument("--require-media", action="store_true")
     return parser
 
 
@@ -321,6 +422,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         response = load_live_tweet(
             config_path=args.config,
             status_id=args.status_id,
+            require_media=args.require_media,
         )
     else:
         if args.status_id:
@@ -336,6 +438,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         maximum_length=args.maximum,
         expected_status_id=args.status_id,
         expected_parent_status_id=args.parent_status_id,
+        require_media=args.require_media,
     )
     print(json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True))
     return 0 if report["valid"] else 1

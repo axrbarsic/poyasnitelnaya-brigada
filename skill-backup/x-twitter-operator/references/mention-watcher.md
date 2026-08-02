@@ -177,10 +177,12 @@ The target in `evidence.json` must match the stored API event by exact text,
 author ID, parent status ID and conversation ID. A published
 `generation_profile=local_sol_max` must name
 `generation_skill=poyasnitelnaya-brigada-v2`; `sol_short` names no skill;
-`satirical_377` names skill `377`; and `lozhkin_web` is valid only after Alex
-explicitly authorizes that web visual bot. Every profile keeps the owner on
-`gpt-5.6-sol` with effort `max`. ChatGPT web is forbidden outside
-`lozhkin_web`.
+`commenter_requested_image` names skill `imagegen`; `satirical_377` names skill
+`377`; and `lozhkin_web` is valid only after Alex explicitly authorizes that
+web visual bot. Every visual profile must preserve the generated image file,
+SHA-256, MIME, `composer_attachment_verified=true`, and exact official
+`reply.media`. Every profile keeps the owner on `gpt-5.6-sol` with effort
+`max`. ChatGPT web is forbidden outside `lozhkin_web`.
 
 For an existing conversation, omit `chain_provenance` unless it is needed for
 human-readable evidence. The committer always canonicalizes that field from

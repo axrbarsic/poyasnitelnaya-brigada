@@ -217,6 +217,11 @@ def _reply_turn(
     parent_status_id = status_id(reply, "parent_status_id")
     if parent_status_id != target_status_id:
         raise ValueError("reply parent_status_id does not match target")
+    reply_media = reply.get("media", [])
+    if not isinstance(reply_media, list):
+        raise ValueError("reply media must be an array")
+    if not all(isinstance(item, dict) for item in reply_media):
+        raise ValueError("reply media items must be objects")
     return {
         "status_id": reply_status_id,
         "parent_status_id": parent_status_id,
@@ -235,7 +240,7 @@ def _reply_turn(
         ),
         "posted_at": optional_text(reply, "posted_at"),
         "provenance": optional_text(reply, "provenance") or "pro",
-        "media": [],
+        "media": reply_media,
         "source_urls": sources,
     }
 

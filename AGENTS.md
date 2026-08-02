@@ -29,6 +29,13 @@
   `377` skill and image generation, not ChatGPT. Open ChatGPT only for an
   explicitly authorized `Ложкин` visual-bot route, never for «Пояснительная
   бригада».
+- When an eligible commenter explicitly asks `@axrbarsic` to create a picture,
+  photo, meme, illustration, chart, or infographic, classify it as
+  `requested-media`. Generate the requested visual locally with the official
+  `imagegen` skill, copy the selected output into that event evidence directory,
+  inspect it, and attach it through the Browser file chooser. Do not open
+  ChatGPT. A temporary generation or upload failure leaves the event queued;
+  it never becomes a text-only substitute or a content skip.
 - Close every task-owned Browser tab before the scheduled run ends. Never close
   a user-owned tab.
 - One global owner lease covers the whole queue. A new event must wait while
@@ -77,6 +84,10 @@
   durable phase instead of starting over.
 - Treat helper results as evidence. Sol performs the final live-context
   decision and publication transaction.
+- Every visual publication must preserve the generated image file and SHA-256,
+  prove the populated composer attachment before clicking Reply, and use the
+  official X API with expanded media to prove that the exact published reply
+  contains a `photo` attachment.
 
 ## Lightpanda public read-only route
 

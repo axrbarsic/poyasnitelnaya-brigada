@@ -312,7 +312,8 @@ def _validate_report(
     status_id: str,
     parent_status_id: str,
     exact_text: str,
-) -> Path:
+    require_media: bool = False,
+) -> tuple[Path, dict[str, Any]]:
     report_path = _evidence_file(event_dir, report_name)
     report = _read_object(report_path)
     required_true = ("valid", "exact_file_match", "parent_matches")
@@ -328,10 +329,19 @@ def _validate_report(
     exact_sha = hashlib.sha256(exact_text.encode("utf-8")).hexdigest()
     if str(report.get("sha256") or "") != exact_sha:
         raise ValueError("Official X verification SHA-256 does not match")
-    return report_path
+    if require_media:
+        if report.get("require_media") is not True:
+            raise ValueError("Official X verification did not require media")
+        if report.get("media_verified") is not True:
+            raise ValueError("Official X verification did not prove media")
+        if int(report.get("media_count") or 0) < 1:
+            raise ValueError("Official X verification has no media")
+        if report.get("published_photo_present") is not True:
+            raise ValueError("Official X verification has no published photo")
+    return report_path, report
 
 
-def _validate_generation(evidence: dict[str, Any]) -> None:
+def _validate_generation(evidence: dict[str, Any]) -> str:
     generation = _required_object(evidence, "generation")
     profile = _required_text(generation, "generation_profile")
     skill = generation.get("generation_skill")
@@ -341,6 +351,7 @@ def _validate_generation(evidence: dict[str, Any]) -> None:
         "sol_short",
         "short_sol_max",
         "satirical_377",
+        "commenter_requested_image",
         "lozhkin_web",
     }
     if profile not in allowed_profiles:
@@ -366,8 +377,63 @@ def _validate_generation(evidence: dict[str, Any]) -> None:
     elif profile == "satirical_377":
         if skill != "377" or web_used is not False:
             raise ValueError("satirical_377 must use local skill 377")
+    elif profile == "commenter_requested_image":
+        if skill != "imagegen" or web_used is not False:
+            raise ValueError(
+                "commenter_requested_image must use local imagegen"
+            )
     elif skill != "lozhkin" or web_used is not True:
         raise ValueError("lozhkin_web requires the explicit web visual bot")
+    return profile
+
+
+def _image_mime_type(path: Path) -> str:
+    prefix = path.read_bytes()[:16]
+    if prefix.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if prefix.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if prefix.startswith(b"RIFF") and prefix[8:12] == b"WEBP":
+        return "image/webp"
+    raise ValueError("Generated media file is not a supported image")
+
+
+def _validate_generated_media(
+    event_dir: Path,
+    evidence: dict[str, Any],
+    *,
+    profile: str,
+    report: dict[str, Any],
+) -> Path | None:
+    media_profiles = {
+        "satirical_377",
+        "commenter_requested_image",
+        "lozhkin_web",
+    }
+    if profile not in media_profiles:
+        return None
+    generation = _required_object(evidence, "generation")
+    media_path = _evidence_file(
+        event_dir,
+        _required_text(generation, "media_file"),
+    )
+    if media_path.stat().st_size <= 0:
+        raise ValueError("Generated media file is empty")
+    actual_sha = hashlib.sha256(media_path.read_bytes()).hexdigest()
+    if _required_text(generation, "media_sha256") != actual_sha:
+        raise ValueError("Generated media SHA-256 does not match")
+    actual_mime = _image_mime_type(media_path)
+    if _required_text(generation, "media_mime_type") != actual_mime:
+        raise ValueError("Generated media MIME type does not match")
+    if generation.get("composer_attachment_verified") is not True:
+        raise ValueError("Composer attachment was not verified")
+    published_media = report.get("published_media")
+    if not isinstance(published_media, list) or not published_media:
+        raise ValueError("Official X report lacks published media records")
+    reply = _required_object(evidence, "reply")
+    if reply.get("media") != published_media:
+        raise ValueError("Reply media does not match official X report")
+    return media_path
 
 
 def _validated_published_reply(
@@ -409,7 +475,12 @@ def _published_fields(
     *,
     event_id: str,
 ) -> tuple[dict[str, Any], list[Path]]:
-    _validate_generation(evidence)
+    profile = _validate_generation(evidence)
+    require_media = profile in {
+        "satirical_377",
+        "commenter_requested_image",
+        "lozhkin_web",
+    }
     verification = _required_object(evidence, "verification")
     reply, reply_file, exact_text = _validated_published_reply(
         event_dir,
@@ -421,12 +492,19 @@ def _published_fields(
         or _optional_text(verification, "official_api_verification_file")
         or "api-verification.json"
     )
-    report_path = _validate_report(
+    report_path, report = _validate_report(
         event_dir,
         report_name,
         status_id=_required_text(reply, "status_id"),
         parent_status_id=event_id,
         exact_text=exact_text,
+        require_media=require_media,
+    )
+    media_path = _validate_generated_media(
+        event_dir,
+        evidence,
+        profile=profile,
+        report=report,
     )
     _require_exact_published_history(history, exact_text)
     return (
@@ -437,7 +515,10 @@ def _published_fields(
             "source_code_points": len(exact_text),
             "alex_history_status": "exact_alex_turn_appended",
         },
-        [report_path],
+        [
+            report_path,
+            *([media_path] if media_path is not None else []),
+        ],
     )
 
 
@@ -456,7 +537,7 @@ def _skip_fields(
     exact_file = _evidence_file(event_dir, _required_text(existing, "file"))
     exact_text = build_outbound_history.read_exact_file(exact_file)
     report_name = _required_text(verification, "verification_file")
-    report_path = _validate_report(
+    report_path, _report = _validate_report(
         event_dir,
         report_name,
         status_id=status_id,

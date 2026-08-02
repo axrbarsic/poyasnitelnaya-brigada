@@ -445,6 +445,89 @@ class CommitBrowserOwnerEventTests(unittest.TestCase):
         self.assertEqual(result["status"], "committed")
         self.assertEqual(result["disposition"], "published")
 
+    def test_commits_commenter_requested_image_with_media_proof(self) -> None:
+        payload = self._published_evidence()
+        media_file = self.event_dir / "generated-image.png"
+        media_file.write_bytes(b"\x89PNG\r\n\x1a\nverified-image")
+        media_sha = hashlib.sha256(media_file.read_bytes()).hexdigest()
+        published_media = [
+            {
+                "media_key": "3_verified",
+                "type": "photo",
+                "url": "https://pbs.twimg.com/media/verified.png",
+                "width": 1024,
+                "height": 1024,
+            }
+        ]
+        payload["generation"].update(
+            {
+                "generation_profile": "commenter_requested_image",
+                "generation_skill": "imagegen",
+                "media_file": media_file.name,
+                "media_sha256": media_sha,
+                "media_mime_type": "image/png",
+                "composer_attachment_verified": True,
+            }
+        )
+        payload["reply"]["media"] = published_media
+        report_path = self.event_dir / "api-verification.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report.update(
+            {
+                "require_media": True,
+                "media_verified": True,
+                "media_count": 1,
+                "published_photo_present": True,
+                "published_media": published_media,
+            }
+        )
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        self._write_evidence(payload)
+
+        result = browser_owner_evidence.commit_event(
+            config_path=self.config_path,
+            claim_token=self.claim_token,
+            requested_event_dir=self.event_dir,
+        )
+
+        self.assertEqual(result["status"], "committed")
+        stored_media = self.connection.execute(
+            "SELECT media_json FROM conversation_turns WHERE status_id = ?",
+            (self.reply_id,),
+        ).fetchone()["media_json"]
+        self.assertEqual(json.loads(stored_media), published_media)
+        ledger = json.loads(
+            (self.event_dir / "run-ledger.jsonl").read_text(encoding="utf-8")
+        )
+        self.assertTrue(
+            any(value.endswith("generated-image.png") for value in ledger["evidence"])
+        )
+
+    def test_rejects_requested_image_without_official_media_proof(self) -> None:
+        payload = self._published_evidence()
+        media_file = self.event_dir / "generated-image.png"
+        media_file.write_bytes(b"\x89PNG\r\n\x1a\nverified-image")
+        payload["generation"].update(
+            {
+                "generation_profile": "commenter_requested_image",
+                "generation_skill": "imagegen",
+                "media_file": media_file.name,
+                "media_sha256": hashlib.sha256(
+                    media_file.read_bytes()
+                ).hexdigest(),
+                "media_mime_type": "image/png",
+                "composer_attachment_verified": True,
+            }
+        )
+        self._write_evidence(payload)
+
+        with self.assertRaisesRegex(ValueError, "did not require media"):
+            browser_owner_evidence.commit_event(
+                config_path=self.config_path,
+                claim_token=self.claim_token,
+                requested_event_dir=self.event_dir,
+            )
+
     def test_sync_failure_leaves_no_generated_event_records(self) -> None:
         self._write_evidence(self._published_evidence())
 

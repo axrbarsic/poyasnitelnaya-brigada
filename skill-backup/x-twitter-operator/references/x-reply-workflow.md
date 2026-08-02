@@ -114,6 +114,33 @@ value.
    with primary-source support. The picture is not evidence.
 7. If generation or review fails, publish a Sol High text reply instead.
 
+### Commenter-requested image
+
+Use this route whenever an eligible commenter explicitly asks `@axrbarsic` to
+create a picture, photo, illustration, meme, chart, diagram, or infographic.
+
+1. Classify it as `requested-media`, not `satirical-media` and not
+   `local-max`.
+2. Apply the official local `imagegen` skill and built-in image generation
+   tool. Do not open ChatGPT. Do not apply `377` unless Alex explicitly asks.
+3. For a factual chart or infographic, verify the current material claims with
+   primary sources before generation.
+4. Copy the selected output from `$CODEX_HOME/generated_images/` into the exact
+   event evidence directory. Inspect it with `view_image`, then record MIME and
+   SHA-256.
+5. Add a concise contextual text caption and validate it normally.
+6. Begin `waitForEvent("filechooser")` before clicking the exact upload
+   control. Upload only the absolute evidence path with
+   `chooser.setFiles(...)`.
+7. Prove that the visible attachment preview belongs to the same exact composer
+   as the validated caption and Reply button.
+8. Publish through the single writer lane, then run the official verifier with
+   `--require-media`. Require a complete media expansion and at least one
+   attachment of type `photo`.
+9. Preserve the generated image and official media report in durable evidence.
+   A temporary generation, review, or upload failure leaves the event queued;
+   do not publish a text-only substitute.
+
 ### Local Sol Max reply
 
 Inspect the complete context locally, load `poyasnitelnaya-brigada-v2` by
