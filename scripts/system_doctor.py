@@ -168,6 +168,8 @@ def database_integrity(
     *,
     attempts: int = 3,
     retry_delay_seconds: float = 0.1,
+    expected_schema_version: int | None = None,
+    expected_application_id: int | None = None,
 ) -> tuple[bool, dict[str, Any] | None]:
     if attempts < 1:
         raise ValueError("database integrity attempts must be positive")
@@ -189,14 +191,39 @@ def database_integrity(
                 foreign_rows = connection.execute(
                     "PRAGMA foreign_key_check"
                 ).fetchall()
+                schema_version = int(
+                    connection.execute("PRAGMA user_version").fetchone()[0]
+                )
+                application_id = int(
+                    connection.execute("PRAGMA application_id").fetchone()[0]
+                )
                 connection.rollback()
-            healthy = quick_rows == ["ok"] and not foreign_rows
+            schema_current = (
+                expected_schema_version is None
+                or schema_version == expected_schema_version
+            )
+            application_matches = (
+                expected_application_id is None
+                or application_id == expected_application_id
+            )
+            healthy = (
+                quick_rows == ["ok"]
+                and not foreign_rows
+                and schema_current
+                and application_matches
+            )
             if healthy:
                 return True, None
             return False, {
                 "attempts": attempt,
                 "foreign_key_violation_count": len(foreign_rows),
                 "quick_check": quick_rows[:20],
+                "schema_version": schema_version,
+                "expected_schema_version": expected_schema_version,
+                "schema_current": schema_current,
+                "application_id": application_id,
+                "expected_application_id": expected_application_id,
+                "application_matches": application_matches,
             }
         except sqlite3.Error as error:
             message = str(error)

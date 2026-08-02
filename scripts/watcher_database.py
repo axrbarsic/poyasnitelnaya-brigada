@@ -6,16 +6,89 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+from scripts import watcher_constants
+
 
 def connect_database(path: Path) -> sqlite3.Connection:
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA busy_timeout=5000")
-    connection.execute("PRAGMA journal_mode=WAL")
-    connection.execute("PRAGMA foreign_keys=ON")
+    try:
+        connection.row_factory = sqlite3.Row
+        connection.execute("PRAGMA busy_timeout=5000")
+        connection.execute("PRAGMA foreign_keys=ON")
+        _migrate_database(connection)
+    except BaseException:
+        if connection.in_transaction:
+            connection.rollback()
+        connection.close()
+        raise
+    return connection
+
+
+def _database_tables(connection: sqlite3.Connection) -> set[str]:
+    return {
+        str(row[0])
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master "
+            "WHERE type = 'table' AND name NOT LIKE 'sqlite_%'"
+        )
+    }
+
+
+def _require_known_identity(
+    connection: sqlite3.Connection,
+    application_id: int,
+) -> None:
+    if application_id == watcher_constants.DATABASE_APPLICATION_ID:
+        return
+    if application_id != 0:
+        raise RuntimeError(
+            "SQLite file belongs to another application: "
+            f"application_id={application_id}"
+        )
+    tables = _database_tables(connection)
+    legacy_core = {"events", "meta", "poll_runs"}
+    if tables and not legacy_core.issubset(tables):
+        raise RuntimeError(
+            "Unidentified SQLite file lacks the watcher legacy schema"
+        )
+
+
+def _require_wal(connection: sqlite3.Connection) -> None:
+    current = str(
+        connection.execute("PRAGMA journal_mode").fetchone()[0]
+    ).lower()
+    if current == "wal":
+        return
+    enabled = str(
+        connection.execute("PRAGMA journal_mode=WAL").fetchone()[0]
+    ).lower()
+    if enabled != "wal":
+        raise RuntimeError(f"Unable to enable SQLite WAL mode: {enabled}")
+
+
+def _migrate_database(connection: sqlite3.Connection) -> None:
+    application_id = int(
+        connection.execute("PRAGMA application_id").fetchone()[0]
+    )
+    _require_known_identity(connection, application_id)
+    current_version = int(
+        connection.execute("PRAGMA user_version").fetchone()[0]
+    )
+    if current_version > watcher_constants.SCHEMA_VERSION:
+        raise RuntimeError(
+            "Database schema is newer than this runtime: "
+            f"{current_version} > {watcher_constants.SCHEMA_VERSION}"
+        )
+    _require_wal(connection)
+    if current_version == watcher_constants.SCHEMA_VERSION:
+        if application_id != watcher_constants.DATABASE_APPLICATION_ID:
+            raise RuntimeError("Current database schema lacks application ID")
+        return
     connection.executescript(
         """
+        BEGIN IMMEDIATE;
+
         CREATE TABLE IF NOT EXISTS events (
             event_id TEXT PRIMARY KEY,
             author_id TEXT,
@@ -294,5 +367,10 @@ def connect_database(path: Path) -> sqlite3.Connection:
           )
         """
     )
+    connection.execute(
+        f"PRAGMA application_id={watcher_constants.DATABASE_APPLICATION_ID}"
+    )
+    connection.execute(
+        f"PRAGMA user_version={watcher_constants.SCHEMA_VERSION}"
+    )
     connection.commit()
-    return connection

@@ -149,6 +149,8 @@
   },
   "runtime": {
     "database": "var/watcher.sqlite3",
+    "database_schema_version": 13,
+    "database_application_id": 1481463601,
     "wake_file": "var/wake-request.json",
     "keychain_helper": "var/keychain-helper",
     "health_file": "var/health.json",

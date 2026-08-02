@@ -9,7 +9,7 @@ logic is split by durable responsibility:
 
 | Module | Single responsibility |
 | --- | --- |
-| `watcher_database` | Schema creation and SQLite connection lifecycle |
+| `watcher_database` | Versioned schema migration and SQLite connection lifecycle |
 | `watcher_events` | Ingestion, deduplication, eligibility, queue projection |
 | `watcher_polling` | Mentions, conversation tails, budgets, pagination state |
 | `watcher_history` | Append-only conversation history |
@@ -45,6 +45,17 @@ operation follows one order: parse and validate complete input, acquire the
 domain lock, confirm the expected owner or version, perform one durable write,
 then expose a derived result. In particular, session finalization checks an
 existing aggregate for conflicts before handoff replay can mutate SQLite.
+
+SQLite schema changes follow the same single-owner rule. `PRAGMA application_id`
+identifies the watcher file before mutation, and `PRAGMA user_version` stores
+the application schema version in the database header. A new or older database
+is migrated once under `BEGIN IMMEDIATE`; DDL, legacy column repair, historical
+parent-link backfill, application identity and the version bump commit together.
+A normal connection whose version is current performs no DDL or historical
+update. Before the identity is assigned, migration accepts only an empty file
+or a recognizable legacy watcher containing `events`, `meta` and `poll_runs`.
+A foreign, unidentified or newer database fails before journal-mode mutation,
+and system doctor compares both header values with the recovery contract.
 
 `session_janitor`, `resource_guard`, `keychain_bundle`, and `outbound_cycle`
 remain single public modules because they each own one bounded capability.

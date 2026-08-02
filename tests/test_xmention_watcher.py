@@ -3374,7 +3374,7 @@ class WatcherTests(unittest.TestCase):
         )
         self.assertEqual(result["resolved_event_ids"], [event_id])
 
-    def test_database_open_backfills_published_alex_parent_link(self) -> None:
+    def test_schema_migration_backfills_published_alex_parent_link(self) -> None:
         watcher.ingest_response(
             self.config,
             self.connection,
@@ -3430,6 +3430,9 @@ class WatcherTests(unittest.TestCase):
                 WHERE status_id = ?
                 """,
                 (reply_id,),
+            )
+            self.connection.execute(
+                f"PRAGMA user_version={watcher.SCHEMA_VERSION - 1}"
             )
         self.connection.close()
         self.connection = watcher.connect_database(self.config.database)

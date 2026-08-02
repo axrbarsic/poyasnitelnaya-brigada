@@ -6,7 +6,17 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Protocol
+
+
+class DatabaseIntegrityCheck(Protocol):
+    def __call__(
+        self,
+        database: Path,
+        *,
+        expected_schema_version: int | None = None,
+        expected_application_id: int | None = None,
+    ) -> tuple[bool, dict[str, Any] | None]: ...
 
 
 @dataclass(frozen=True)
@@ -22,7 +32,7 @@ class Dependencies:
     tree_digest: Callable[[Path], str]
     git_origin: Callable[[Path], str]
     launchagent_loaded: Callable[[str], tuple[bool, str]]
-    database_integrity: Callable[[Path], tuple[bool, dict[str, Any] | None]]
+    database_integrity: DatabaseIntegrityCheck
     parse_timestamp: Callable[[Any], datetime | None]
     relay_progress_check: Callable[..., Any]
     oldest_queue_event_id: Callable[[list[Any]], str | None]

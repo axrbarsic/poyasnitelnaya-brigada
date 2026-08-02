@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-from scripts import system_doctor
+from scripts import system_doctor, watcher_constants
 
 
 class SystemDoctorTests(unittest.TestCase):
@@ -215,6 +215,24 @@ class SystemDoctorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "unsupported"):
             system_doctor.contract_schema_version({"schema_version": 3})
 
+    def test_production_contract_matches_database_identity(self) -> None:
+        contract_path = (
+            Path(__file__).resolve().parents[1]
+            / "recovery"
+            / "system-contract.json"
+        )
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+        runtime = contract["runtime"]
+
+        self.assertEqual(
+            runtime["database_schema_version"],
+            watcher_constants.SCHEMA_VERSION,
+        )
+        self.assertEqual(
+            runtime["database_application_id"],
+            watcher_constants.DATABASE_APPLICATION_ID,
+        )
+
     def test_database_integrity_retries_transient_lock(self) -> None:
         database = self.root / "var" / "watcher.sqlite3"
         real_connect = sqlite3.connect
@@ -253,6 +271,65 @@ class SystemDoctorTests(unittest.TestCase):
         self.assertEqual(details["attempts"], 1)
         self.assertEqual(details["error_class"], "DatabaseError")
         self.assertFalse(details["transient"])
+
+    def test_database_integrity_rejects_stale_schema_version(self) -> None:
+        database = self.root / "var" / "watcher.sqlite3"
+        connection = sqlite3.connect(database)
+        connection.execute(
+            f"PRAGMA user_version={watcher_constants.SCHEMA_VERSION - 1}"
+        )
+        connection.close()
+
+        healthy, details = system_doctor.database_integrity(
+            database,
+            expected_schema_version=watcher_constants.SCHEMA_VERSION,
+        )
+
+        self.assertFalse(healthy)
+        self.assertFalse(details["schema_current"])
+        self.assertEqual(
+            details["expected_schema_version"],
+            watcher_constants.SCHEMA_VERSION,
+        )
+
+    def test_contract_reports_schema_mismatch_as_migration_failure(self) -> None:
+        self.contract["runtime"]["database_schema_version"] = (
+            watcher_constants.SCHEMA_VERSION
+        )
+        with mock.patch(
+            "scripts.system_doctor.git_origin",
+            return_value="https://example.test/repo.git",
+        ):
+            checks = system_doctor.check_contract(
+                self.root,
+                self.home,
+                self.contract,
+                self.config,
+            )
+
+        database_check = next(
+            check
+            for check in checks
+            if check.identifier == "runtime.database"
+        )
+        self.assertEqual(database_check.status, "fail")
+        self.assertIn("Версия схемы", database_check.summary)
+        self.assertIn("миграции", database_check.repair)
+
+    def test_database_integrity_rejects_foreign_application_id(self) -> None:
+        database = self.root / "var" / "watcher.sqlite3"
+        connection = sqlite3.connect(database)
+        connection.execute("PRAGMA application_id=123456")
+        connection.close()
+
+        healthy, details = system_doctor.database_integrity(
+            database,
+            expected_application_id=watcher_constants.DATABASE_APPLICATION_ID,
+        )
+
+        self.assertFalse(healthy)
+        self.assertFalse(details["application_matches"])
+        self.assertEqual(details["application_id"], 123456)
 
     def test_database_integrity_retries_one_open_failure(self) -> None:
         database = self.root / "var" / "watcher.sqlite3"

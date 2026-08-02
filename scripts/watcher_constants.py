@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """Versioned constants shared by X watcher domains."""
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 13
+DATABASE_APPLICATION_ID = 0x584D5731
 TOKEN_ENV_NAMES = (
     "X_BEARER_TOKEN",
     "X_API_BEARER_TOKEN",

@@ -318,6 +318,40 @@ doctor после завершения показал `39 PASS`, `0 FAIL`, `1 WA
 | Запрещённые U+2013 и U+2014 в изменённых файлах | отсутствуют |
 | Live system doctor | 39 PASS, 0 FAIL, 1 ожидаемый queue-latency WARN |
 
+## Дополнение 2026-08-02: versioned SQLite migration
+
+Повторный строгий review нашёл скрытый источник write-lock: каждый вызов
+`connect_database` заново выполнял весь `CREATE IF NOT EXISTS`, проверял старые
+колонки и запускал исторический backfill. Даже при нулевом результате это
+смешивало обычное подключение с миграцией и увеличивало конкуренцию poll,
+doctor и Browser owner за единственную SQLite writer-линию.
+
+Исправление меняет модель, а не добавляет ещё один retry:
+
+1. `PRAGMA application_id` не позволяет принять чужой SQLite за watcher, а
+   `PRAGMA user_version` хранит точную версию схемы приложения.
+   Нулевой identity принимается только для пустого файла или legacy watcher с
+   ядром `events`, `meta`, `poll_runs`, до изменения journal mode.
+2. Новая или старая база мигрируется ровно один раз под `BEGIN IMMEDIATE`.
+3. DDL, legacy column repair, parent-link backfill и bump версии входят в одну
+   транзакцию. При исключении соединение выполняет rollback и закрывается.
+4. Текущая версия открывается без DDL и исторических UPDATE.
+5. Более новая версия базы останавливает старый runtime до мутаций.
+6. Recovery contract и system doctor проверяют identity и версию независимо
+   от `quick_check` и `foreign_key_check`.
+
+Это следует официальному контракту SQLite: [`application_id` и `user_version`](https://www.sqlite.org/pragma.html)
+предназначены для identity формата и версии приложения, а [`BEGIN IMMEDIATE`](https://www.sqlite.org/lang_transaction.html)
+сразу резервирует единственную write transaction вместо опасного перехода от
+read к write посередине миграции.
+
+| Проверка migration checkpoint | Результат |
+| --- | --- |
+| Полный Python suite | 523 теста, 0 ошибок |
+| Live SQLite header | schema 13, application ID 1481463601, WAL |
+| Canonical layout и skills | complete, установленные копии совпадают |
+| Live system doctor | 39 PASS, 0 FAIL, 1 ожидаемый queue-latency WARN |
+
 ### Устранение instruction drift
 
 После deployment-аудита в активных references `x-twitter-operator` были

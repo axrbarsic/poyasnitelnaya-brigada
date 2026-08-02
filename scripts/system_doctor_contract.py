@@ -42,30 +42,67 @@ def _runtime_database_queue_checks(
             )
         )
     else:
-        healthy, details = deps.database_integrity(database)
+        expected_schema_version = runtime.get("database_schema_version")
+        expected_application_id = runtime.get("database_application_id")
+        healthy, details = deps.database_integrity(
+            database,
+            expected_schema_version=(
+                int(expected_schema_version)
+                if expected_schema_version is not None
+                else None
+            ),
+            expected_application_id=(
+                int(expected_application_id)
+                if expected_application_id is not None
+                else None
+            ),
+        )
         unavailable = bool(
             details and (details.get("transient") or details.get("retryable"))
         )
+        schema_mismatch = bool(
+            details and details.get("schema_current") is False
+        )
+        application_mismatch = bool(
+            details and details.get("application_matches") is False
+        )
         status = "pass" if healthy else "warn" if unavailable else "fail"
+        if healthy:
+            summary = "Live SQLite проходит quick_check и foreign_key_check."
+            repair = "Проверь snapshot и журнал последнего poll."
+        elif application_mismatch:
+            summary = "Live SQLite принадлежит другому приложению."
+            repair = (
+                "Останови runtime и проверь путь database. Не мигрируй и не "
+                "изменяй этот файл."
+            )
+        elif schema_mismatch:
+            summary = "Версия схемы live SQLite не совпадает с runtime."
+            repair = (
+                "Сделай snapshot и запусти штатный watcher один раз для "
+                "миграции. Более новую схему не откатывай."
+            )
+        elif unavailable:
+            summary = (
+                "Live SQLite временно занята или недоступна, повреждение "
+                "не подтверждено."
+            )
+            repair = (
+                "Повтори штатную проверку после завершения активной "
+                "транзакции или восстановления доступа к файлу."
+            )
+        else:
+            summary = "Live SQLite не прошла проверку целостности."
+            repair = (
+                "Останови poll, сделай snapshot повреждённого файла и "
+                "восстанови последний валидный snapshot."
+            )
         checks.append(
             deps.make_check(
                 "runtime.database",
                 status,
-                (
-                    "Live SQLite проходит quick_check и foreign_key_check."
-                    if healthy
-                    else "Live SQLite временно занята или недоступна, "
-                    "повреждение не подтверждено."
-                    if unavailable
-                    else "Live SQLite не прошла проверку целостности."
-                ),
-                (
-                    "Повтори штатную проверку после завершения активной "
-                    "транзакции или восстановления доступа к файлу."
-                    if unavailable
-                    else "Останови poll, сделай snapshot повреждённого файла и "
-                    "восстанови последний валидный snapshot."
-                ),
+                summary,
+                repair,
                 details,
             )
         )
