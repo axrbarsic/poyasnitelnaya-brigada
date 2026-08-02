@@ -1455,6 +1455,53 @@ class SystemDoctorTests(unittest.TestCase):
         "scripts.system_doctor.git_origin",
         return_value="https://example.test/repo.git",
     )
+    def test_inbound_throughput_config_matches_versioned_contract(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        self.contract["runtime"].update(
+            {
+                "inbound_claim_max_events": 3,
+                "inbound_max_parallel_read_tabs": 3,
+            }
+        )
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["autopilot_max_claim_events"] = 3
+        config["autopilot_max_parallel_read_tabs"] = 3
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+        throughput = next(
+            check
+            for check in checks
+            if check.identifier == "config.inbound_throughput"
+        )
+        self.assertEqual(throughput.status, "pass")
+
+        config["autopilot_max_claim_events"] = 1
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+        throughput = next(
+            check
+            for check in checks
+            if check.identifier == "config.inbound_throughput"
+        )
+        self.assertEqual(throughput.status, "fail")
+        self.assertEqual(throughput.details["actual_claim_events"], 1)
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
     def test_malformed_automation_is_a_check_failure_not_doctor_crash(
         self, _git_origin: mock.Mock
     ) -> None:

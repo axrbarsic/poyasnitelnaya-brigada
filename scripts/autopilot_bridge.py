@@ -238,8 +238,10 @@ def max_claim_events(config_path: Path) -> int:
             autopilot_dispatch.DEFAULT_MAX_CLAIM_EVENTS,
         )
     )
-    if value <= 0:
-        raise ValueError("autopilot_max_claim_events must be positive")
+    if not 1 <= value <= 3:
+        raise ValueError(
+            "autopilot_max_claim_events must be between 1 and 3"
+        )
     return value
 
 

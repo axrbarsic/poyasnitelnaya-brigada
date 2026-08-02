@@ -149,6 +149,8 @@
     "dispatch_state_file": "var/app-server-dispatch.json",
     "event_dispatch_state_file": "var/event-dispatch.json",
     "event_dispatch_launchagent_label": "com.axrbarsic.xmention.dispatch",
+    "inbound_claim_max_events": 3,
+    "inbound_max_parallel_read_tabs": 3,
     "autopilot_state_file": "var/autopilot-dispatch.json",
     "owner_rotation_state_file": "var/browser-owner-rotation.json",
     "max_owner_rotation_age_seconds": 900,

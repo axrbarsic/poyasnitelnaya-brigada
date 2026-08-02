@@ -339,6 +339,48 @@ class AutopilotBridgeTests(unittest.TestCase):
             claimed["prompt"],
         )
 
+    def test_configured_claim_batches_three_oldest_events(self) -> None:
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["autopilot_max_claim_events"] = 3
+        config["autopilot_max_parallel_read_tabs"] = 3
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        events = []
+        for offset in range(5):
+            event = dict(self.event())
+            event_id = str(2081050838240211434 + offset)
+            event["event_id"] = event_id
+            event["event_url"] = (
+                f"https://x.com/Timyr316661/status/{event_id}"
+            )
+            event["first_seen_at"] = (
+                f"2026-07-25T16:{19 + offset:02d}:00Z"
+            )
+            events.append(event)
+        self.write_events(list(reversed(events)))
+
+        gated = autopilot_bridge.gate(self.config, lease_seconds=1800)
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        expected = [event["event_id"] for event in events[:3]]
+        self.assertEqual(gated["claim_limit"], 3)
+        self.assertEqual(gated["event_ids"], expected)
+        self.assertEqual(claimed["event_ids"], expected)
+        self.assertIn("CLAIMED_EVENT_COUNT=3", claimed["prompt"])
+        self.assertIn("MAX_PARALLEL_X_READ_TABS=3", claimed["prompt"])
+        self.assertIn(
+            "PARALLEL_TAB_PREFLIGHT=distinct_tab_ids_required",
+            claimed["prompt"],
+        )
+
+    def test_claim_limit_rejects_more_than_three_events(self) -> None:
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["autopilot_max_claim_events"] = 4
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        self.write_events([self.event()])
+
+        with self.assertRaisesRegex(ValueError, "between 1 and 3"):
+            autopilot_bridge.gate(self.config, lease_seconds=1800)
+
     def test_gate_does_not_dispatch_while_owner_is_active(self) -> None:
         self.write_events([self.event()])
         claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)

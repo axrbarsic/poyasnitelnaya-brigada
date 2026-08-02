@@ -69,9 +69,10 @@ If the read-only test fails, do not begin research that assumes later publicatio
 
 Use the smallest stable tab set:
 
-- The production owner claim holds one event and one task-owned X tab. A
-  bounded multi-tab read-only experiment requires an explicit runtime override
-  and never changes the single writer lane.
+- The production owner claim holds at most three oldest events and may use up
+  to three task-owned X tabs for independent read-only inspection. This never
+  changes the single writer lane, and memory or Browser instability requires
+  an immediate fallback to one tab.
 - Keep exactly one writer lane. Never fill composers in two tabs at once, and
   never overlap publication, verification, history import, or resolve.
 - Optional research tabs only when a connector or direct web lookup cannot cover the source.

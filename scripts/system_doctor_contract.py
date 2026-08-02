@@ -126,6 +126,52 @@ def _project_checks(
     return checks
 
 
+def _inbound_throughput_check(
+    config: dict[str, Any],
+    runtime: dict[str, Any],
+    deps: Dependencies,
+) -> Any | None:
+    expected_events = runtime.get("inbound_claim_max_events")
+    expected_tabs = runtime.get("inbound_max_parallel_read_tabs")
+    if expected_events is None and expected_tabs is None:
+        return None
+    try:
+        actual_events = int(config.get("autopilot_max_claim_events", 1))
+        actual_tabs = int(config.get("autopilot_max_parallel_read_tabs", 1))
+        expected_events_value = int(expected_events)
+        expected_tabs_value = int(expected_tabs)
+    except (TypeError, ValueError):
+        actual_events = config.get("autopilot_max_claim_events")
+        actual_tabs = config.get("autopilot_max_parallel_read_tabs")
+        expected_events_value = expected_events
+        expected_tabs_value = expected_tabs
+        matches = False
+    else:
+        matches = (
+            1 <= actual_events <= 3
+            and 1 <= actual_tabs <= 3
+            and actual_events == expected_events_value
+            and actual_tabs == expected_tabs_value
+        )
+    return deps.make_check(
+        "config.inbound_throughput",
+        "pass" if matches else "fail",
+        (
+            "Inbound bounded batch и read-only вкладки соответствуют контракту."
+            if matches
+            else "Inbound throughput откатился от версионного контракта."
+        ),
+        "Восстанови bounded claim и read-only tab limit из контракта, сохраняя "
+        "одну writer-линию.",
+        {
+            "actual_claim_events": actual_events,
+            "expected_claim_events": expected_events_value,
+            "actual_read_tabs": actual_tabs,
+            "expected_read_tabs": expected_tabs_value,
+        },
+    )
+
+
 def _config_checks(
     root: Path,
     contract: dict[str, Any],
@@ -207,6 +253,9 @@ def _config_checks(
                 },
             )
         )
+    throughput = _inbound_throughput_check(config, runtime, deps)
+    if throughput is not None:
+        checks.append(throughput)
     return checks, config
 
 
