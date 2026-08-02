@@ -374,3 +374,44 @@ consumer, а скорость consumer не меняет durable intake. Оно 
 | `py_compile` | все runtime entrypoints прошли |
 | Canonical layout | complete |
 | `git diff --check` и Unicode scan | чисто |
+
+## Дополнение 2026-08-02: provenance и единая durability граница
+
+Живой claim `aeee79d0-1305-4005-a0ba-b30a94932f55` выявил последний ручной
+контракт внутри deterministic committer. После подтверждённой публикации owner
+передал `chain_provenance=short`, хотя существующая SQLite-ветка уже имела
+каноническое значение `pro`. Fail-closed sync правильно не допустил изменения
+истории, но потребовал от owner вручную повторить commit с меткой, которую
+runtime уже знал.
+
+Устранена сама причина, а не сообщение об ошибке:
+
+1. Для существующей ветки `conversation_chains.provenance` теперь является
+   единственным авторитетом. Browser evidence не может переписать его.
+2. Browser может не указывать `chain_provenance`. Значение evidence применяется
+   только для новой, ещё не сохранённой ветки и строго ограничено множеством
+   `short`, `pro`, `mixed`.
+3. Это множество вынесено в общий доменный контракт, поэтому builder и history
+   importer больше не поддерживают расходящиеся списки допустимых значений.
+4. JSON и JSONL evidence теперь используют один `atomic_write_text`: уникальный
+   temporary file, file `fsync`, atomic replace и directory `fsync`.
+
+Живая эксплуатационная проверка перед этим изменением завершила три события:
+
+| Event ID | Проверенный reply |
+| --- | --- |
+| `2083802508934144030` | https://x.com/axrbarsic/status/2083857783959478500 |
+| `2083808485628674188` | https://x.com/axrbarsic/status/2083858815871500756 |
+| `2083809191089541279` | https://x.com/axrbarsic/status/2083859594871194023 |
+
+После освобождения claim система без ручного poll, gate или kick сама взяла
+следующую тройку в claim `7c0596ab-fb22-4ab5-addd-ca5c644ecfda`. Это
+подтверждает self-owned handoff на непустой очереди.
+
+| Проверка текущего checkpoint | Результат |
+| --- | --- |
+| Полный Python suite | 512 тестов, 0 ошибок |
+| `py_compile` | все runtime scripts и composition roots прошли |
+| Canonical layout | complete, установленные skills совпадают с backup |
+| `git diff --check` и Unicode scan | чисто |
+| Live system doctor | 39 PASS, 0 FAIL, 1 ожидаемый queue-latency WARN |

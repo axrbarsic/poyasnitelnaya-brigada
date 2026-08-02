@@ -342,7 +342,10 @@ old version.
   `generation_skill=poyasnitelnaya-brigada-v2`,
   `generation_model=gpt-5.6-sol`, `reasoning_effort=max`, source URLs, target
   URL, exact text hash, and verified reply URL in durable evidence. Keep
-  `provenance=pro` only as the legacy database compatibility marker.
+  turn-level `provenance` as audit metadata. Do not guess or rewrite the
+  chain-level provenance of an existing conversation: the deterministic
+  committer reads that value from SQLite and treats durable history as
+  authoritative.
 - Store every exact X turn in the existing SQLite and JSONL history. Local
   conversation history, not a browser chat, is the canonical continuation
   memory.

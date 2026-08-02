@@ -11,6 +11,7 @@ CONVERSATION_TAIL_SOURCE = "x_api_conversation_tail"
 CONVERSATION_TAIL_SCAN_STATE_KEY = "conversation_tail_scan_state"
 CONVERSATION_TAIL_LAST_ATTEMPT_KEY = "conversation_tail_last_attempt_at"
 INITIAL_AUDIT_EXPIRY_PROVENANCE = "stored_api_auto_expiry_v1"
+CHAIN_PROVENANCE_VALUES = frozenset({"short", "pro", "mixed"})
 TERMINAL_BLOCKER_CODES = frozenset(
     {
         "account_unavailable",

@@ -73,6 +73,27 @@ class JsonContractTests(unittest.TestCase):
                 ["payload.json"],
             )
 
+    def test_atomic_write_text_replaces_exact_utf8_without_temp_residue(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            path = root / "nested" / "history.jsonl"
+
+            json_contract.atomic_write_text(
+                path,
+                '{"message":"Привет"}\n',
+            )
+
+            self.assertEqual(
+                path.read_text(encoding="utf-8"),
+                '{"message":"Привет"}\n',
+            )
+            self.assertEqual(
+                [candidate.name for candidate in path.parent.iterdir()],
+                ["history.jsonl"],
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

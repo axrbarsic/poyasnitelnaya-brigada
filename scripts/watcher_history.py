@@ -104,7 +104,7 @@ def _snapshot_provenance(
             if isinstance(turn, dict) and turn.get("provenance")
         }
         provenance = "pro" if "pro" in turn_provenance else "short"
-    if provenance not in {"short", "pro", "mixed"}:
+    if provenance not in watcher_constants.CHAIN_PROVENANCE_VALUES:
         raise ValueError("History provenance must be short, pro, or mixed")
     return provenance
 
@@ -702,7 +702,7 @@ def _history_provenance_corrections(
             "chain_id",
         )
         provenance = _required_text(record, "corrected_provenance")
-        if provenance not in {"short", "pro", "mixed"}:
+        if provenance not in watcher_constants.CHAIN_PROVENANCE_VALUES:
             raise ValueError(
                 "Corrected chain provenance must be short, pro, or mixed"
             )

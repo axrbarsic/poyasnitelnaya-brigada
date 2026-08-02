@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import sqlite3
 import sys
 import tempfile
@@ -19,7 +18,12 @@ if str(PROJECT_ROOT) not in sys.path:
 import evidence_import
 import xmention_watcher as watcher
 
-from scripts import autopilot_dispatch, build_outbound_history, json_contract
+from scripts import (
+    autopilot_dispatch,
+    build_outbound_history,
+    json_contract,
+    watcher_constants,
+)
 
 
 EVIDENCE_NAME = "evidence.json"
@@ -278,6 +282,37 @@ def _history_record(
     )
 
 
+def _canonical_history_evidence(
+    connection: sqlite3.Connection,
+    evidence: dict[str, Any],
+    *,
+    chain_id: str,
+) -> dict[str, Any]:
+    """Use durable chain provenance instead of Browser-authored metadata."""
+
+    target = _required_object(evidence, "target")
+    supplied = (
+        _optional_text(target, "chain_provenance")
+        or _optional_text(evidence, "chain_provenance")
+        or "pro"
+    )
+    if supplied not in watcher_constants.CHAIN_PROVENANCE_VALUES:
+        raise ValueError("Evidence chain provenance is invalid")
+    row = connection.execute(
+        "SELECT provenance FROM conversation_chains WHERE chain_id = ?",
+        (chain_id,),
+    ).fetchone()
+    canonical = supplied if row is None else str(row["provenance"] or "")
+    if canonical not in watcher_constants.CHAIN_PROVENANCE_VALUES:
+        raise ValueError("Stored chain provenance is invalid")
+    normalized = dict(evidence)
+    normalized_target = dict(target)
+    normalized["target"] = normalized_target
+    normalized["chain_provenance"] = canonical
+    normalized_target["chain_provenance"] = canonical
+    return normalized
+
+
 def _validate_report(
     event_dir: Path,
     report_name: str,
@@ -475,6 +510,11 @@ def _validated_outcome(
     conversation_id = str(event["conversation_id"] or "")
     if _required_text(target, "chain_id") != conversation_id:
         raise ValueError("Evidence chain_id does not match stored conversation")
+    evidence = _canonical_history_evidence(
+        connection,
+        evidence,
+        chain_id=conversation_id,
+    )
     disposition = _disposition(evidence)
     history = _history_record(
         evidence_path,
@@ -680,21 +720,7 @@ def _write_or_confirm(path: Path, record: dict[str, Any]) -> str:
         if path.is_symlink() or path.read_text(encoding="utf-8") != serialized:
             raise ValueError(f"Generated evidence conflicts with {path.name}")
         return "unchanged"
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
-    )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(serialized)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
+    json_contract.atomic_write_text(path, serialized)
     return "created"
 
 
@@ -818,22 +844,10 @@ def _atomic_write_records(
     path: Path,
     records: Sequence[dict[str, Any]],
 ) -> None:
-    descriptor, temporary_name = tempfile.mkstemp(
-        prefix=f".{path.name}.",
-        suffix=".tmp",
-        dir=path.parent,
+    json_contract.atomic_write_text(
+        path,
+        "".join(_canonical_record(record) for record in records),
     )
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            for record in records:
-                handle.write(_canonical_record(record))
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.chmod(temporary, 0o600)
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _status_ids_from_history(record: dict[str, Any]) -> set[str]:

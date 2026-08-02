@@ -154,15 +154,20 @@ an X reply.
     Browser owner for one event. `commit_browser_owner_event.py` validates its
     exact target, local generation profile, reply file, official X report and
     active claim membership. It derives the authorization route from SQLite,
+    canonicalizes existing chain provenance from the durable conversation row,
     generates history and ledger records, imports the exact chain, and durably
-    resolves the event as one idempotent operation. The owner must never write
-    either JSONL file or call history import and resolve separately.
+    resolves the event as one idempotent operation. Browser-authored metadata
+    cannot rewrite an existing chain classification. The owner must never
+    write either JSONL file or call history import and resolve separately.
     `finalize_browser_owner_session.py` is only the claim aggregation boundary.
     After every event is committed, it verifies the active claim set, merges
     generated per-event JSONL atomically, replays the idempotent handoff sync,
     and creates the immutable manifest before `completed` can run. This
     removes the previous dual-write window between evidence, history and the
     resolution ledger.
+    JSON documents and generated JSONL use the same crash-safe text replace
+    primitive: unique temporary file, file `fsync`, atomic replace and parent
+    directory `fsync`.
 19. `autopilot_bridge` enriches each claimed event with compact
     `commenter_memory` keyed by stable X user ID. It contains source-linked
     public turns and exact Alex children from any stored conversation. A deeper

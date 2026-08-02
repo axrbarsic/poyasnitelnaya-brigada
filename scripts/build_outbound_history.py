@@ -5,17 +5,16 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import re
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
 try:
-    from scripts import json_contract
+    from scripts import json_contract, watcher_constants
 except ModuleNotFoundError:
     import json_contract  # type: ignore[no-redef]
+    import watcher_constants  # type: ignore[no-redef]
 
 
 FORBIDDEN = ("\u2013", "\u2014", "\u00a0", "\u200b", "\u200c", "\u200d", "\ufeff")
@@ -151,6 +150,8 @@ def _target_identity(
         or optional_text(evidence, "chain_provenance")
         or "pro"
     )
+    if chain_provenance not in watcher_constants.CHAIN_PROVENANCE_VALUES:
+        raise ValueError("chain provenance must be short, pro, or mixed")
     return TargetIdentity(
         status_id=target_status_id,
         parent_status_id=parent_status_id,
@@ -309,19 +310,7 @@ def write_record(output_path: Path, record: dict[str, Any]) -> str:
         if output_path.read_text(encoding="utf-8") != serialized:
             raise ValueError("existing history output conflicts with evidence")
         return "unchanged"
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        dir=output_path.parent,
-        prefix=f".{output_path.name}.",
-        delete=False,
-    ) as temporary:
-        temporary.write(serialized)
-        temporary.flush()
-        os.fsync(temporary.fileno())
-        temporary_path = Path(temporary.name)
-    os.chmod(temporary_path, 0o600)
-    os.replace(temporary_path, output_path)
+    json_contract.atomic_write_text(output_path, serialized)
     return "created"
 
 

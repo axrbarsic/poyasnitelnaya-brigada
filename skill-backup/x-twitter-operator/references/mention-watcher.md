@@ -182,6 +182,12 @@ explicitly authorizes that web visual bot. Every profile keeps the owner on
 `gpt-5.6-sol` with effort `max`. ChatGPT web is forbidden outside
 `lozhkin_web`.
 
+For an existing conversation, omit `chain_provenance` unless it is needed for
+human-readable evidence. The committer always canonicalizes that field from
+the durable `conversation_chains` row before history import. A supplied value
+is used only when the conversation has no stored chain yet, and it must be one
+of `short`, `pro`, or `mixed`.
+
 Missing history, a mismatched chain, an invalid field, or conflicting evidence
 blocks the commit. Repeating the same commit is idempotent. A publication also
 blocks unless its verified reply URL resolves to an imported Alex turn whose

@@ -52,8 +52,8 @@ def read_object(path: Path) -> dict[str, Any]:
     return payload
 
 
-def atomic_write(path: Path, payload: Any) -> None:
-    """Durably replace one JSON document without exposing a partial file."""
+def atomic_write_text(path: Path, text: str) -> None:
+    """Durably replace one UTF-8 text file without a partial state."""
 
     path.parent.mkdir(parents=True, exist_ok=True)
     descriptor, temporary_name = tempfile.mkstemp(
@@ -64,14 +64,7 @@ def atomic_write(path: Path, payload: Any) -> None:
     temporary = Path(temporary_name)
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
-            json.dump(
-                payload,
-                stream,
-                ensure_ascii=False,
-                indent=2,
-                sort_keys=True,
-            )
-            stream.write("\n")
+            stream.write(text)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -82,3 +75,18 @@ def atomic_write(path: Path, payload: Any) -> None:
             os.close(directory_descriptor)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def atomic_write(path: Path, payload: Any) -> None:
+    """Durably replace one JSON document without exposing a partial file."""
+
+    atomic_write_text(
+        path,
+        json.dumps(
+            payload,
+            ensure_ascii=False,
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n",
+    )

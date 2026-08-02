@@ -100,6 +100,25 @@ class CommitBrowserOwnerEventTests(unittest.TestCase):
             },
         )
 
+    def _insert_chain(self, provenance: str) -> None:
+        now = watcher.isoformat()
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO conversation_chains(
+                    chain_id, root_status_id, provenance,
+                    created_at, updated_at
+                ) VALUES(?, ?, ?, ?, ?)
+                """,
+                (
+                    self.conversation_id,
+                    self.conversation_id,
+                    provenance,
+                    now,
+                    now,
+                ),
+            )
+
     def _target(self) -> dict[str, object]:
         return {
             "status_id": self.event_id,
@@ -243,6 +262,44 @@ class CommitBrowserOwnerEventTests(unittest.TestCase):
             self.config.wake_file.read_text(encoding="utf-8")
         )
         self.assertEqual(wake["pending_count"], 0)
+
+    def test_existing_chain_provenance_is_authoritative(self) -> None:
+        self._insert_chain("pro")
+        evidence = self._published_evidence()
+        evidence["chain_provenance"] = "short"
+        target = evidence["target"]
+        assert isinstance(target, dict)
+        target["chain_provenance"] = "short"
+        self._write_evidence(evidence)
+
+        result = browser_owner_evidence.commit_event(
+            config_path=self.config_path,
+            claim_token=self.claim_token,
+            requested_event_dir=self.event_dir,
+        )
+
+        history = json.loads(
+            (self.event_dir / "conversation-history.jsonl").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(result["status"], "committed")
+        self.assertEqual(history["provenance"], "pro")
+
+    def test_rejects_invalid_chain_provenance_before_sync(self) -> None:
+        evidence = self._published_evidence()
+        evidence["chain_provenance"] = "unknown"
+        self._write_evidence(evidence)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Evidence chain provenance is invalid",
+        ):
+            browser_owner_evidence.commit_event(
+                config_path=self.config_path,
+                claim_token=self.claim_token,
+                requested_event_dir=self.event_dir,
+            )
 
     def test_generated_event_records_finalize_as_one_claim(self) -> None:
         self._write_evidence(self._published_evidence())
