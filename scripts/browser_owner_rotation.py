@@ -520,6 +520,16 @@ def finish(
             "completed_at": isoformat(current),
             "handoff_count": transaction.get("handoff_count"),
         }
+        state["transaction"] = None
+        state["last_failure"] = None
+        state["updated_at"] = isoformat(current)
+        autopilot_dispatch.atomic_write_json(path, state)
+        return {
+            "status": "owner_rotation_completed",
+            "old_thread_id": old_thread_id,
+            "new_thread_id": new_thread_id,
+            "generation": state["generation"],
+        }
 
 
 def _committed_rotation(
@@ -570,16 +580,6 @@ def archive_preflight(
         "old_thread_id": old_thread_id,
         "new_thread_id": new_thread_id,
     }
-        state["transaction"] = None
-        state["last_failure"] = None
-        state["updated_at"] = isoformat(current)
-        autopilot_dispatch.atomic_write_json(path, state)
-        return {
-            "status": "owner_rotation_completed",
-            "old_thread_id": old_thread_id,
-            "new_thread_id": new_thread_id,
-            "generation": state["generation"],
-        }
 
 
 def fail(
