@@ -1455,6 +1455,37 @@ class SystemDoctorTests(unittest.TestCase):
         "scripts.system_doctor.git_origin",
         return_value="https://example.test/repo.git",
     )
+    def test_malformed_automation_is_a_check_failure_not_doctor_crash(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        path = (
+            self.home
+            / ".codex"
+            / "automations"
+            / "relay-a"
+            / "automation.toml"
+        )
+        path.write_text("[unsupported]\nid = \"relay-a\"\n", encoding="utf-8")
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        automation = next(
+            check
+            for check in checks
+            if check.identifier == "automation.active"
+        )
+        self.assertEqual(automation.status, "fail")
+        self.assertIn("ValueError", automation.details["error"])
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
     def test_open_owner_rotation_warns_then_fails_when_stale(
         self, _git_origin: mock.Mock
     ) -> None:
@@ -1568,6 +1599,71 @@ class SystemDoctorTests(unittest.TestCase):
             if check.identifier == "runtime.dispatch_health"
         )
         self.assertEqual(dispatch.status, "fail")
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_launchagent_runtime_uses_installed_interpreter(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        entrypoint = self.root / "entrypoint.py"
+        entrypoint.write_text(
+            "import argparse\nargparse.ArgumentParser().parse_args()\n",
+            encoding="utf-8",
+        )
+        installed = self.home / "Library" / "LaunchAgents" / "agent.plist"
+        installed.write_bytes(
+            plistlib.dumps(
+                {
+                    "Label": "agent",
+                    "ProgramArguments": [
+                        "/usr/bin/python3",
+                        str(entrypoint),
+                    ],
+                }
+            )
+        )
+        self.contract["launch_agent_programs"] = {
+            "agent": "entrypoint.py"
+        }
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+
+        runtime = next(
+            check
+            for check in checks
+            if check.identifier == "launchagent.runtime_compatibility"
+        )
+        self.assertEqual(runtime.status, "pass")
+        self.assertEqual(runtime.details["probed_labels"], ["agent"])
+
+        entrypoint.write_text(
+            "import dependency_that_does_not_exist\n",
+            encoding="utf-8",
+        )
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+        runtime = next(
+            check
+            for check in checks
+            if check.identifier == "launchagent.runtime_compatibility"
+        )
+        self.assertEqual(runtime.status, "fail")
+        self.assertEqual(runtime.details["failures"][0]["label"], "agent")
+        self.assertNotEqual(
+            runtime.details["failures"][0]["returncode"],
+            0,
+        )
 
     @mock.patch(
         "scripts.system_doctor.git_origin",

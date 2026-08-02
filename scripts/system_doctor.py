@@ -10,7 +10,6 @@ import os
 import sqlite3
 import subprocess
 import time
-import tomllib
 from contextlib import closing
 from dataclasses import asdict
 from datetime import datetime, timezone
@@ -19,6 +18,7 @@ from typing import Any, Iterable
 
 try:
     from scripts import (
+        automation_toml,
         codex_thread_state,
         keychain_bundle,
         personality_policy,
@@ -26,6 +26,7 @@ try:
         system_doctor_runtime,
     )
 except ModuleNotFoundError:
+    import automation_toml  # type: ignore[no-redef]
     import codex_thread_state  # type: ignore[no-redef]
     import keychain_bundle  # type: ignore[no-redef]
     import personality_policy  # type: ignore[no-redef]
@@ -85,7 +86,7 @@ def resolve_home_path(home: Path, value: str) -> Path:
 
 
 def parse_simple_toml(path: Path) -> dict[str, Any]:
-    payload = tomllib.loads(path.read_text(encoding="utf-8"))
+    payload = automation_toml.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"TOML root must be a table: {path}")
     return payload

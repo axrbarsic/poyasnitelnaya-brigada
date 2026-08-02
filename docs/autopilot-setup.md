@@ -173,6 +173,14 @@ Install:
 - `com.axrbarsic.xmention.dispatch.plist`
 - `com.axrbarsic.xmention.codex-update.plist`
 
+The installed plists use the stable macOS `/usr/bin/python3` runtime, which is
+Python 3.9 on the current host. Runtime code must therefore remain importable
+on Python 3.9 even when development tests use a newer interpreter.
+`system_doctor` runs an exact `--help` import probe for every installed Python
+entrypoint with the interpreter recorded in its plist. A missing stdlib or
+third-party dependency is a deployment FAIL before it can silently stop queue
+delivery.
+
 Do not create a five-minute Codex automation for X. Every standalone scheduled
 run creates a separate task and may leave helper processes attached to the
 long-lived Codex Desktop runtime. Pause the old automation, prove the new

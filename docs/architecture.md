@@ -386,6 +386,10 @@ contradiction claim, or factual conclusion.
 - A process lock prevents overlapping pollers from racing the cursor.
 - Repeated pagination tokens and excessive page counts fail closed.
 - Background output is discarded so LaunchAgent logs cannot grow without bound.
+- Every Python LaunchAgent has a doctor-owned import probe executed by the
+  exact interpreter recorded in its plist. The current deployment baseline is
+  macOS `/usr/bin/python3` 3.9, so newer development Python cannot conceal an
+  unavailable runtime module.
 - The watchdog runs independently, so a dead poller cannot conceal its death.
 - Long silence is a review signal, not evidence that X has no new replies.
 - LaunchAgents are loaded only after live shadow output matches a manual

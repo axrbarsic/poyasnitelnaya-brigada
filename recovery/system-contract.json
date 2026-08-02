@@ -21,6 +21,7 @@
     "scripts/finalize_browser_owner_session.py",
     "scripts/autopilot_emulator.py",
     "scripts/autopilot_state_model.py",
+    "scripts/automation_toml.py",
     "scripts/autopilot_supervisor.py",
     "scripts/autopilot_supervisor_incidents.py",
     "scripts/autopilot_supervisor_routes.py",

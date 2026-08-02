@@ -3,16 +3,17 @@
 
 from __future__ import annotations
 
-import tomllib
 from pathlib import Path
 from typing import Any
 
+try:
+    from scripts import automation_toml
+except ModuleNotFoundError:
+    import automation_toml  # type: ignore[no-redef]
+
 
 def parse_automation(path: Path) -> dict[str, Any]:
-    payload = tomllib.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"automation TOML must be a table: {path}")
-    return payload
+    return automation_toml.loads(path.read_text(encoding="utf-8"))
 
 
 def archived_active_heartbeat_targets(home: Path) -> list[dict[str, str]]:
@@ -25,7 +26,7 @@ def archived_active_heartbeat_targets(home: Path) -> list[dict[str, str]]:
     for automation_path in sorted(automations.glob("*/automation.toml")):
         try:
             payload = parse_automation(automation_path)
-        except OSError:
+        except (OSError, ValueError):
             continue
         if payload.get("kind") != "heartbeat":
             continue

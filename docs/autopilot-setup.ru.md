@@ -185,6 +185,14 @@ python3 scripts/render_launchd.py \
 - `com.axrbarsic.xmention.dispatch.plist`
 - `com.axrbarsic.xmention.codex-update.plist`
 
+Установленные plist используют стабильный macOS `/usr/bin/python3`, на текущем
+хосте это Python 3.9. Поэтому runtime-код обязан импортироваться на Python 3.9,
+даже если разработческие тесты выполняются новым интерпретатором.
+`system_doctor` запускает точный `--help` import-probe каждого установленного
+Python entrypoint тем интерпретатором, который записан в его plist. Отсутствие
+stdlib или сторонней зависимости становится deployment FAIL до того, как оно
+сможет незаметно остановить доставку очереди.
+
 Не создавайте пятиминутную Codex automation для X. Каждый standalone
 scheduled run создает отдельную задачу и может оставлять helper-процессы в
 долгоживущем Codex Desktop runtime. Старую automation нужно сначала поставить

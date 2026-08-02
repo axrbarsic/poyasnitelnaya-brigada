@@ -350,7 +350,19 @@ def _automation_checks(
                 )
             )
             continue
-        actual = deps.parse_simple_toml(path)
+        try:
+            actual = deps.parse_simple_toml(path)
+        except (OSError, ValueError) as error:
+            checks.append(
+                deps.make_check(
+                    f"automation.{name}",
+                    "fail",
+                    f"Automation {automation_id} нельзя безопасно прочитать.",
+                    "Восстанови automation через официальный automation_update.",
+                    {"error": f"{type(error).__name__}: {error}"[-500:]},
+                )
+            )
+            continue
         mismatches = {
             key: {"actual": actual.get(key), "expected": value}
             for key, value in expected.items()
@@ -409,12 +421,86 @@ def _automation_checks(
     return checks
 
 
+def _launchagent_runtime_command(arguments: Any) -> list[str] | None:
+    if not isinstance(arguments, list) or len(arguments) < 2:
+        return None
+    interpreter = str(arguments[0])
+    entrypoint = str(arguments[1])
+    if not Path(interpreter).name.startswith("python"):
+        return None
+    if not entrypoint.endswith(".py"):
+        return None
+    return [interpreter, entrypoint, "--help"]
+
+
+def _launchagent_runtime_failures(
+    commands: list[tuple[str, list[str]]],
+) -> list[dict[str, Any]]:
+    failures: list[dict[str, Any]] = []
+    for label, command in commands:
+        try:
+            completed = subprocess.run(
+                command,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        except (OSError, subprocess.SubprocessError) as error:
+            failures.append(
+                {
+                    "label": label,
+                    "command": command,
+                    "error": f"{type(error).__name__}: {error}"[-500:],
+                }
+            )
+            continue
+        if completed.returncode == 0:
+            continue
+        detail = completed.stderr.strip() or completed.stdout.strip()
+        failures.append(
+            {
+                "label": label,
+                "command": command,
+                "returncode": completed.returncode,
+                "output": detail[-1000:],
+            }
+        )
+    return failures
+
+
+def _launchagent_runtime_check(
+    commands: list[tuple[str, list[str]]],
+    deps: Dependencies,
+) -> Any | None:
+    if not commands:
+        return None
+    failures = _launchagent_runtime_failures(commands)
+    return deps.make_check(
+        "launchagent.runtime_compatibility",
+        "pass" if not failures else "fail",
+        (
+            "LaunchAgent entrypoints импортируются штатным Python."
+            if not failures
+            else "Штатный Python не может загрузить часть LaunchAgent."
+        ),
+        "Исправь зависимости под штатный интерпретатор и повтори "
+        "адресный --help smoke-test.",
+        (
+            {"failures": failures}
+            if failures
+            else {"probed_labels": [label for label, _ in commands]}
+        ),
+    )
+
+
 def _launchagent_checks(
     home: Path,
     contract: dict[str, Any],
     deps: Dependencies,
 ) -> list[Any]:
     checks: list[Any] = []
+    runtime_commands: list[tuple[str, list[str]]] = []
     expected_programs = contract.get("launch_agent_programs", {})
     for label in contract.get("launch_agents", []):
         installed = home / "Library" / "LaunchAgents" / f"{label}.plist"
@@ -443,6 +529,9 @@ def _launchagent_checks(
             )
         )
         installed_ok = payload.get("Label") == label and program_ok
+        runtime_command = _launchagent_runtime_command(arguments)
+        if installed_ok and runtime_command is not None:
+            runtime_commands.append((label, runtime_command))
         checks.append(
             deps.make_check(
                 f"launchagent.{label}",
@@ -481,6 +570,9 @@ def _launchagent_checks(
                     {"launchctl": detail} if not loaded and detail else None,
                 )
             )
+    runtime_check = _launchagent_runtime_check(runtime_commands, deps)
+    if runtime_check is not None:
+        checks.append(runtime_check)
     return checks
 
 
