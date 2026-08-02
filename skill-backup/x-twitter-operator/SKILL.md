@@ -417,8 +417,18 @@ Treat each reply or multi-part reply thread as one transaction:
 4. Fill the composer.
 5. Read and validate the actual composer value.
 6. Confirm the target and account once more.
-7. Click the exact reply control once.
-8. Verify that the composer cleared and the new reply appears in the thread or account search.
+7. Bind the publish control to the filled visible composer through their
+   nearest shared DOM container. Never use page-global
+   `tweetButtonInline.first()` or `.last()` without evidence that it belongs to
+   that composer. Click the paired control once.
+8. Wait at least three seconds, then verify that the composer cleared and the
+   exact new reply appears in the thread or account search. If publication is
+   proven absent, no new Alex child exists, and the composer still exactly
+   matches the source, allow one Enter activation on the same paired button.
+   Never use a keyboard submit shortcut while focus is in the composer. If the
+   composer changed or duplicated, replace only that task-owned tab, refill
+   from the exact file, and repeat the full checks. After one unverified fresh
+   tab attempt, leave the event unresolved with durable evidence.
 9. For a multi-part payload, open the verified reply URL, publish the next
    exact part as its child, and repeat until the complete chain is verified.
 10. Record every part index, exact text hash, status ID, parent status ID, and

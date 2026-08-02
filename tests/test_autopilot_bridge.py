@@ -74,6 +74,18 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertIn("MAX_PARALLEL_X_READ_TABS=1", result["prompt"])
         self.assertIn("Не готовь весь пакет целиком", result["prompt"])
         self.assertIn("Никогда не держи заполненный composer", result["prompt"])
+        self.assertIn(
+            "Запрещено выбирать page-global `tweetButtonInline.first()`",
+            result["prompt"],
+        )
+        self.assertIn(
+            "ровно одна клавиатурная активация Enter",
+            result["prompt"],
+        )
+        self.assertIn(
+            "Никогда не отправляй shortcut из самого поля",
+            result["prompt"],
+        )
         self.assertNotIn("Жди готовый ответ до", result["prompt"])
 
     def test_claim_exposes_auditable_resolution_recovery(self) -> None:
