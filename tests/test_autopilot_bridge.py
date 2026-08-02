@@ -601,7 +601,15 @@ class AutopilotBridgeTests(unittest.TestCase):
 
         self.assertTrue(result["dispatch"])
         self.assertIn(self.event()["event_id"], result["prompt"])
-        self.assertIn("tracked_conversation_reply=true", result["prompt"])
+        self.assertIn(
+            "Не выбирай и не записывай handoff route вручную",
+            result["prompt"],
+        )
+        self.assertIn(
+            "scripts/commit_browser_owner_event.py",
+            result["prompt"],
+        )
+        self.assertNotIn("tracked_conversation_reply=true", result["prompt"])
         self.assertIn(
             "Следующий X API poll выполняет LaunchAgent",
             result["prompt"],

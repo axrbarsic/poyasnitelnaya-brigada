@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from collections import deque
@@ -68,6 +71,31 @@ class FakeClient:
 
 
 class AppServerDispatchTests(unittest.TestCase):
+    def test_direct_script_entrypoint_loads_without_pythonpath(self) -> None:
+        project_root = Path(__file__).resolve().parents[1]
+        environment = dict(os.environ)
+        environment.pop("PYTHONPATH", None)
+        with tempfile.TemporaryDirectory() as temporary:
+            completed = subprocess.run(
+                [
+                    sys.executable,
+                    str(project_root / "scripts/app_server_dispatch.py"),
+                    "--help",
+                ],
+                cwd=temporary,
+                env=environment,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+
+        self.assertEqual(completed.returncode, 0, completed.stderr)
+        self.assertIn(
+            "Wake Codex Desktop for the pinned Browser owner",
+            completed.stdout,
+        )
+
     def test_desktop_launch_fails_closed_for_ambiguous_new_pids(
         self,
     ) -> None:

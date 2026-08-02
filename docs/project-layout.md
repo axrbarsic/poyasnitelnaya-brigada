@@ -28,11 +28,19 @@ canonical directory and does not require a second project under
 `Documents/Codex`. New screenshots, ledgers, payloads, and other evidence must
 be stored below `var/evidence/browser-owner/<session-id>/`.
 
-No manual aggregation step is required after durable per-event work.
+For each claimed event, the Browser owner writes only
+`<EVENT_ID>/evidence.json` plus the exact files referenced by that record.
+`commit_browser_owner_event.py` validates that terminal record, derives both
+generated JSONL records and the authorized handoff route, imports the exact
+history, and durably resolves the event. Manual JSONL construction, direct
+history import, and a separate resolve are forbidden.
+
+After all events report `status=committed`,
 `finalize_browser_owner_session.py` verifies that all event directories match
-the active claim, atomically builds the two aggregate JSONL files, invokes the
-idempotent `browser-handoff-sync`, and requires a verified `manifest.json`.
-An incomplete or inconsistent set fails closed before claim completion.
+the active claim, atomically builds the two aggregate JSONL files from those
+generated records, invokes the idempotent `browser-handoff-sync`, and requires
+a verified `manifest.json`. An incomplete or inconsistent set fails closed
+before claim completion.
 
 Import legacy evidence without modifying its source:
 

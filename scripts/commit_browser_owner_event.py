@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Finalize one Browser-owner evidence session with one deterministic command."""
+"""Commit one Browser-owner event outcome from canonical evidence.json."""
 
 from __future__ import annotations
 
@@ -17,25 +17,23 @@ if str(PROJECT_ROOT) not in sys.path:
 from scripts import browser_owner_evidence
 
 
-HISTORY_NAME = browser_owner_evidence.HISTORY_NAME
-LEDGER_NAME = browser_owner_evidence.LEDGER_NAME
-AGGREGATE_NAMES = browser_owner_evidence.AGGREGATE_NAMES
-finalize_session = browser_owner_evidence.finalize_session
-
-
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", type=Path, default=Path("config.json"))
-    parser.add_argument("--session-dir", type=Path, required=True)
+    parser.add_argument("--claim-token", required=True)
+    parser.add_argument("--event-dir", type=Path, required=True)
+    parser.add_argument("--max", dest="maximum", type=int, default=4000)
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     arguments = build_parser().parse_args(argv)
     try:
-        result = finalize_session(
+        result = browser_owner_evidence.commit_event(
             config_path=arguments.config,
-            requested_session_dir=arguments.session_dir,
+            claim_token=arguments.claim_token,
+            requested_event_dir=arguments.event_dir,
+            maximum_length=arguments.maximum,
         )
     except (OSError, ValueError, json.JSONDecodeError) as error:
         print(

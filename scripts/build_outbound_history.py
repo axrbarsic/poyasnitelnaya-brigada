@@ -99,9 +99,12 @@ def reply_exact_text(
     reply: dict[str, Any],
     *,
     maximum_length: int,
+    enforce_publication_constraints: bool = True,
 ) -> str:
     filename = required_text(reply, "file")
     text = read_exact_file(resolve_evidence_file(evidence_path, filename))
+    if not enforce_publication_constraints:
+        return text
     forbidden = [character for character in FORBIDDEN if character in text]
     if forbidden:
         raise ValueError("reply contains forbidden Unicode characters")
@@ -123,6 +126,23 @@ def build_record(
     evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
     if not isinstance(evidence, dict):
         raise ValueError("evidence root must be an object")
+    return build_record_from_payload(
+        evidence_path,
+        evidence,
+        maximum_length=maximum_length,
+        enforce_reply_constraints=True,
+    )
+
+
+def build_record_from_payload(
+    evidence_path: Path,
+    evidence: dict[str, Any],
+    *,
+    maximum_length: int = 4000,
+    enforce_reply_constraints: bool = True,
+) -> dict[str, Any]:
+    """Build history from an already parsed evidence object."""
+
     target = evidence.get("target")
     reply = evidence.get("reply")
     if not isinstance(target, dict):
@@ -210,6 +230,7 @@ def build_record(
             evidence_path,
             reply,
             maximum_length=maximum_length,
+            enforce_publication_constraints=enforce_reply_constraints,
         ),
         "posted_at": optional_text(reply, "posted_at"),
         "provenance": optional_text(reply, "provenance") or "pro",

@@ -95,20 +95,19 @@ an X reply.
 17. New API events preserve expanded attachment metadata and alt text. Missing
     media metadata still requires live Browser inspection and is never treated
     as proof that no media exists.
-18. `browser-handoff-sync` imports exact Browser history and applies only
-    already confirmed Sol dispositions. It cannot draft, classify, or publish,
-    and it fails closed on missing history or mismatched chain metadata. A
-    publication must include both the inspected user turn and the exact
-    verified Alex turn linked to that user event. When the handoff files are
-    inside the canonical Browser evidence tree, the same command atomically
-    creates and verifies the evidence manifest after durable resolution.
-    Every handoff proves exactly one authorization route: a direct reply to
-    Alex, a reply in a conversation with a stored Alex turn, or an explicit
-    `@axrbarsic` mention returned by the authenticated mentions endpoint.
-    Multi-event claims use `finalize_browser_owner_session.py` as the single
-    deterministic commit boundary. It verifies the active claim set, merges
-    per-event JSONL atomically, reuses the idempotent sync, and creates the
-    immutable manifest before `completed` can run.
+18. `evidence.json` is the only semantic terminal record written by the
+    Browser owner for one event. `commit_browser_owner_event.py` validates its
+    exact target, local generation profile, reply file, official X report and
+    active claim membership. It derives the authorization route from SQLite,
+    generates history and ledger records, imports the exact chain, and durably
+    resolves the event as one idempotent operation. The owner must never write
+    either JSONL file or call history import and resolve separately.
+    `finalize_browser_owner_session.py` is only the claim aggregation boundary.
+    After every event is committed, it verifies the active claim set, merges
+    generated per-event JSONL atomically, replays the idempotent handoff sync,
+    and creates the immutable manifest before `completed` can run. This
+    removes the previous dual-write window between evidence, history and the
+    resolution ledger.
 19. `autopilot_bridge` enriches each claimed event with compact
     `commenter_memory` keyed by stable X user ID. It contains source-linked
     public turns and exact Alex children from any stored conversation. A deeper

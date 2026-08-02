@@ -329,6 +329,18 @@ old version.
 - Store every exact X turn in the existing SQLite and JSONL history. Local
   conversation history, not a browser chat, is the canonical continuation
   memory.
+- For an autopilot claim, write one terminal `evidence.json` per event and run
+  `scripts/commit_browser_owner_event.py` immediately. That committer derives
+  the route, event history, ledger and durable resolution. Never construct the
+  generated JSONL files or call history import and resolve separately. After
+  every event reports `status=committed`, run
+  `scripts/finalize_browser_owner_session.py` once for the claim and require a
+  complete manifest before `completed`.
+- The terminal target must exactly match the stored API text, author ID,
+  parent status ID and conversation ID. A `local_sol_max` outcome names
+  `poyasnitelnaya-brigada-v2`; a `sol_short` outcome names no skill. ChatGPT
+  web is forbidden except for an explicitly authorized `lozhkin_web` visual
+  route.
 
 Read [references/local-sol-max-explainer-contract.md](references/local-sol-max-explainer-contract.md)
 before using the local skill.

@@ -28,11 +28,18 @@ x-mention-watcher/
 Новые screenshots, ledgers, payloads и другие evidence должны сохраняться под
 `var/evidence/browser-owner/<session-id>/`.
 
-После durable работы с отдельными событиями ручная агрегация не требуется.
-`finalize_browser_owner_session.py` проверяет точное совпадение каталогов
-событий с активным claim, атомарно собирает два общих JSONL, вызывает
-идемпотентный `browser-handoff-sync` и требует проверенный `manifest.json`.
-Неполный или несогласованный набор блокирует завершение claim.
+Для каждого claimed event Browser owner создает только
+`<EVENT_ID>/evidence.json` и точные файлы, на которые ссылается эта запись.
+`commit_browser_owner_event.py` проверяет terminal record, детерминированно
+строит оба JSONL и разрешенный handoff route, импортирует точную историю и
+durably resolve событие. Ручное создание JSONL, отдельный history import и
+прямой resolve запрещены.
+
+После `status=committed` для всех событий
+`finalize_browser_owner_session.py` проверяет точное совпадение каталогов с
+активным claim, атомарно собирает два общих JSONL из уже созданных записей,
+вызывает идемпотентный `browser-handoff-sync` и требует проверенный
+`manifest.json`. Неполный или несогласованный набор блокирует завершение claim.
 
 Старые evidence переносятся без изменения источника:
 

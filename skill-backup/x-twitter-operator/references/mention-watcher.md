@@ -67,9 +67,9 @@ python3 xmention_watcher.py --config config.json initial-audit-expire \
   --hours 12 --as-of 2026-07-25T10:00:00Z --dry-run
 python3 xmention_watcher.py --config config.json initial-audit-expire \
   --hours 12 --as-of 2026-07-25T10:00:00Z
-python3 xmention_watcher.py --config config.json browser-handoff-sync \
-  --history-file var/evidence/browser-owner/SESSION_ID/conversation-history.jsonl \
-  --ledger-file var/evidence/browser-owner/SESSION_ID/run-ledger.jsonl
+python3 scripts/commit_browser_owner_event.py --config config.json \
+  --claim-token CLAIM_TOKEN \
+  --event-dir var/evidence/browser-owner/CLAIM_TOKEN/EVENT_ID
 python3 scripts/finalize_browser_owner_session.py --config config.json \
   --session-dir var/evidence/browser-owner/CLAIM_TOKEN
 python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \
@@ -155,12 +155,12 @@ The broad `stance` field accepts only `supportive`, `opposing`, `neutral`, or
 narrows or corrects Alex's claim, use broad `neutral` unless the complete chain
 clearly supports another stable class.
 
-For a large audit, the Browser owner may append a structured
-`initial_audit_disposition` after the exact event turn. Root may then use
-`browser-handoff-sync` instead of manually repeating each `resolve`. The
-sync command only transfers Sol's durable decision. It does not inspect,
-classify, draft, or publish. Every handoff must contain exactly one proven
-route:
+For a claimed event, the Browser owner writes one structured terminal
+`evidence.json`. It does not choose a route or write JSONL. The deterministic
+`commit_browser_owner_event.py` command validates the record, derives exactly
+one route from the stored event, generates both event JSONL files, imports the
+exact history, and applies the durable resolution. The generated handoff
+contains exactly one proven route:
 
 - `direct_reply_to_axrbarsic=true`; or
 - `tracked_conversation_reply=true`; or
@@ -173,23 +173,34 @@ route:
   evidence, media meaning when applicable, and verified `reply_url` for a
   publication.
 
-Missing history, a mismatched chain, an invalid field, or conflicting
-unresolved handoffs blocks synchronization. Repeated synchronization is
-idempotent. A publication also blocks unless its verified reply URL resolves to
-an imported Alex turn whose parent is the inspected event.
+The target in `evidence.json` must match the stored API event by exact text,
+author ID, parent status ID and conversation ID. A published
+`generation_profile=local_sol_max` must name
+`generation_skill=poyasnitelnaya-brigada-v2`; `sol_short` names no skill;
+`satirical_377` names skill `377`; and `lozhkin_web` is valid only after Alex
+explicitly authorizes that web visual bot. Every profile keeps the owner on
+`gpt-5.6-sol` with effort `max`. ChatGPT web is forbidden outside
+`lozhkin_web`.
+
+Missing history, a mismatched chain, an invalid field, or conflicting evidence
+blocks the commit. Repeating the same commit is idempotent. A publication also
+blocks unless its verified reply URL resolves to an imported Alex turn whose
+parent is the inspected event. Do not call `browser-handoff-sync`, history
+import, or resolve directly in the Browser-owner workflow.
 
 For canonical runtime evidence, the same successful sync must also return a
 complete `evidence_manifest`. It atomically creates and self-audits
 `manifest.json` only after every handoff in that evidence directory is durably
 resolved. Do not create runtime manifests by hand.
 
-For a multi-event autopilot claim, write each event's two JSONL files below
-`var/evidence/browser-owner/CLAIM_TOKEN/EVENT_ID/`. Before `completed`, run
-`finalize_browser_owner_session.py` exactly once for the claim directory. It
-validates that the event directories exactly match the active claim, builds
-the two stable aggregate JSONL files atomically, runs the idempotent handoff
-sync, and requires a complete immutable manifest. Do not rediscover this flow
-from source code or assemble the aggregate files manually.
+For a multi-event autopilot claim, write each event's `evidence.json` below
+`var/evidence/browser-owner/CLAIM_TOKEN/EVENT_ID/` and immediately run the
+event committer. Continue only after `status=committed`. Before `completed`,
+run `finalize_browser_owner_session.py` exactly once for the claim directory.
+It validates that the event directories exactly match the active claim,
+builds the two stable aggregate JSONL files atomically from generated records,
+runs the idempotent handoff sync, and requires a complete immutable manifest.
+Do not rediscover this flow from source code or assemble JSONL manually.
 
 When live X shows that Alex already answered an event before the current audit,
 record the audit disposition as `skip` with `reply_url=null`,

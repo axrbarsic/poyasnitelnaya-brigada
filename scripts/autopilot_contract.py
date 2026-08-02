@@ -54,7 +54,8 @@ composer: он может изменить текст. Если composer изм�
 Сначала сделай минимальную live-классификацию claimed events. Затем закрывай их
 по одному полной транзакцией, сначала already-answered и short, затем local-max;
 внутри одного класса бери старейший first_seen_at. После каждой публикации или
-доказанного already-answered немедленно сохрани history и durable resolve.
+доказанного already-answered немедленно зафиксируй один terminal outcome
+штатным committer из evidence-раздела ниже.
 Не готовь весь пакет целиком перед первой публикацией. Если Browser замедлился,
 потерял вкладку или выросло давление памяти, закрой лишние task-owned вкладки и
 продолжай с одной, не освобождая unresolved event.
@@ -148,9 +149,9 @@ resolution.
 защищенные признаки или выдуманные действия автора. Если безопасная картинка
 не получилась, опубликуй Sol text reply, не skip.
 
-В durable handoff укажи ровно один подтвержденный маршрут:
-direct_reply_to_axrbarsic=true, tracked_conversation_reply=true либо
-mention_reply_to_axrbarsic=true.
+Не выбирай и не записывай handoff route вручную. Штатный committer выводит
+ровно один разрешенный маршрут из durable SQLite event и повторно проверяет его
+перед resolution.
 
 Публикуй без дополнительного одобрения только релевантные ответы в рамках
 ранее разрешенного X workflow. Не ставь лайки, не делай репосты, подписки,
@@ -160,8 +161,8 @@ mention_reply_to_axrbarsic=true.
 <REPLY_STATUS_ID> --parent-status-id <TARGET_STATUS_ID> --file <reply-file>
 --strip-one-final-newline --max 4000`. Продолжай только при `valid=true`:
 восстановленный официальный `note_tweet` обязан byte-for-byte совпасть с
-validated source. Сохрани JSON-отчет проверки, полную историю в watcher и
-durable resolve. Соблюдай MAX_PARALLEL_X_READ_TABS и немедленно переходи на
+validated source. Сохрани JSON-отчет проверки. Соблюдай
+MAX_PARALLEL_X_READ_TABS и немедленно переходи на
 одну X-вкладку при Browser instability или повышенном memory pressure. Вкладку
 ChatGPT открывай только для
 явно разрешённого satirical-media route отдельного визуального бота. Для
@@ -172,9 +173,33 @@ ChatGPT открывай только для
 disposition и verified reply URL.
 
 Evidence каждого claimed event сохраняй в отдельном каталоге
-`var/evidence/browser-owner/<CLAIM_TOKEN>/<EVENT_ID>/`. После terminal
-результата для всех event IDs текущего claim, но строго до `completed`, выполни
-ровно одну команду:
+`var/evidence/browser-owner/<CLAIM_TOKEN>/<EVENT_ID>/`. Единственный вручную
+создаваемый terminal record события называется `evidence.json`. Он обязан иметь
+`schema_version=1`, точный `session_id=<CLAIM_TOKEN>`, точный target и одно из
+трех состояний: `published_verified`, `already_answered_verified` либо
+`terminal_blocker_verified`. Published outcome содержит generation, reply,
+resolution, verification и успешный официальный API report. Already-answered
+содержит existing_reply, resolution, duplicate_verification и verification.
+Blocked содержит terminal blocker и verification. Target обязан содержать
+точные status_id, author_id, parent_status_id, chain_id и exact text из
+сохраненного API event. `verification.verified_at` должен быть timezone-aware.
+Для published outcome укажи generation_profile: `local_sol_max` с
+generation_skill=`poyasnitelnaya-brigada-v2`, `sol_short` без skill,
+`satirical_377` со skill=`377` либо явно разрешенный `lozhkin_web` со
+skill=`lozhkin`. Все профили выполняет owner gpt-5.6-sol с effort=max;
+ChatGPT web допустим только для `lozhkin_web`. Сразу после проверки одного
+события выполни:
+`python3 scripts/commit_browser_owner_event.py --config config.json
+--claim-token <CLAIM_TOKEN> --event-dir
+var/evidence/browser-owner/<CLAIM_TOKEN>/<EVENT_ID>`.
+Команда сама детерминированно строит event history и ledger, проверяет exact
+source и API report, выводит handoff route из SQLite, импортирует историю и
+durably resolve событие. Не создавай `conversation-history.jsonl` или
+`run-ledger.jsonl` вручную, не вызывай прямой history import или resolve и не
+переходи к следующему событию без `status=committed`.
+
+После committed результата для всех event IDs текущего claim, но строго до
+`completed`, выполни ровно одну команду:
 `python3 scripts/finalize_browser_owner_session.py --config config.json
 --session-dir var/evidence/browser-owner/<CLAIM_TOKEN>`.
 Это единственная штатная точка агрегации event JSONL, повторного idempotent
