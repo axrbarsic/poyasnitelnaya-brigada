@@ -459,6 +459,8 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertIn("create_thread", prompt)
         self.assertIn("owner_rotation_marker", prompt)
         self.assertIn("list_threads", prompt)
+        self.assertIn("limit=50", prompt)
+        self.assertNotIn("limit=100", prompt)
         self.assertIn("automation_update", prompt)
         self.assertIn("set_thread_archived", prompt)
         self.assertIn("system_doctor.py", prompt)
