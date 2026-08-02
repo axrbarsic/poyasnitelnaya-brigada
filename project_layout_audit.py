@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from scripts.json_contract import read_object
+
 
 REQUIRED_PATHS = (
     ".codex/config.toml",
@@ -35,8 +37,12 @@ REQUIRED_PATHS = (
     "memory_snapshot.py",
     "readiness_audit.py",
     "scripts/autopilot_bridge.py",
+    "scripts/autopilot_continuation.py",
     "scripts/autopilot_contract.py",
     "scripts/autopilot_dispatch.py",
+    "scripts/inbound_policy.py",
+    "scripts/json_contract.py",
+    "scripts/launchagent_runtime.py",
     "scripts/app_server_dispatch.py",
     "scripts/app_server_desktop.py",
     "scripts/app_server_external.py",
@@ -45,7 +51,10 @@ REQUIRED_PATHS = (
     "scripts/autopilot_supervisor_routes.py",
     "scripts/system_doctor.py",
     "scripts/system_doctor_contract.py",
+    "scripts/system_doctor_deployment.py",
+    "scripts/system_doctor_foundation.py",
     "scripts/system_doctor_runtime.py",
+    "scripts/system_doctor_types.py",
     "scripts/browser_owner_evidence.py",
     "scripts/browser_handoff_sync.py",
     "scripts/build_outbound_history.py",
@@ -67,6 +76,9 @@ REQUIRED_PATHS = (
     "tests/test_app_server_dispatch.py",
     "tests/test_codex_cli_updater.py",
     "tests/test_local_explainer_skill.py",
+    "tests/test_inbound_policy.py",
+    "tests/test_json_contract.py",
+    "tests/test_launchagent_runtime.py",
     "tests/test_outbound_cycle.py",
     "tests/test_poyasnitelnaya_brigada_v2.py",
     "tests/fixtures/poyasnitelnaya_brigada_v2_cases.json",
@@ -133,7 +145,7 @@ def audit_layout(
     browser_owner_cwd: str | None = None
     browser_owner_cwd_ok = False
     try:
-        config = json.loads(resolved_config.read_text(encoding="utf-8"))
+        config = read_object(resolved_config)
         browser_owner_cwd = str(
             resolve_path(
                 resolved_config,

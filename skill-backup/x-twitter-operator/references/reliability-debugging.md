@@ -28,7 +28,8 @@ Check each layer in order:
 7. Luna called `send_message_to_thread` directly and the pinned Sol owner
    received the follow-up.
 8. The pinned owner claimed the event exactly once.
-9. The production claim contains exactly one oldest pending event.
+9. The production claim contains at most the configured bounded oldest-first
+   batch, currently three events.
 10. Browser preflight used `@axrbarsic` and opened the exact live thread.
 11. The response route, duplicate checks and fact check completed.
 12. X contains one verified direct Alex child.
@@ -43,9 +44,10 @@ An event is operationally missed when it is detected but exceeds the expected
 response time without a verified direct reply. Measure both
 `first_seen_at -> claimed_at` and `claimed_at -> verified publication`. A live
 lease proves ownership, not completion. For a convoy failure, keep one writer,
-claim one oldest event, use one X tab and commit that event end-to-end before
-claiming the next one. This shortens the lease-held transaction and prevents a
-slow target from retaining two unrelated events.
+classify the bounded batch first, process already-answered and short events
+before local-max work, and commit every event immediately. If Browser or memory
+pressure appears, close extra read-only tabs and continue with one. A retryable
+failure releases only unresolved events after preserving every prior commit.
 
 If the gate is ready but the owner never wakes, inspect the Luna trace. A direct
 dynamic-tool call discovered through `tool_search` can remain pending inside a

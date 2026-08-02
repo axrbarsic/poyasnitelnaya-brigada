@@ -8,9 +8,10 @@ from pathlib import Path
 from typing import Any, Sequence
 
 try:
-    from scripts import autopilot_dispatch, personality_policy
+    from scripts import autopilot_dispatch, inbound_policy, personality_policy
 except ModuleNotFoundError:
     import autopilot_dispatch  # type: ignore[no-redef]
+    import inbound_policy  # type: ignore[no-redef]
     import personality_policy  # type: ignore[no-redef]
 
 
@@ -25,12 +26,10 @@ Sol Max. Используй skills x-twitter-operator и
 встроенный Browser.
 
 Поле MAX_PARALLEL_X_READ_TABS ниже задаёт предел task-owned X-вкладок для
-одного claim. Штатный production claim содержит одно событие и использует одну
-X-вкладку. Это сохраняет короткую атомарную транзакцию и не удерживает другие
-события за долгим Browser turn. Значение больше единицы допустимо только для
-явного диагностического эксперимента с несколькими независимыми событиями.
-Тогда открой их точные ветки в разных вкладках одним Browser preflight-шагом,
-проверь разные tab ID и навсегда привяжи каждую вкладку к одному event ID.
+одного bounded claim. Значение уже ограничено числом claimed events,
+настроенным максимумом и текущим resource profile. При значении больше единицы
+открой точные ветки в разных вкладках одним Browser preflight-шагом, проверь
+разные tab ID и навсегда привяжи каждую вкладку к одному event ID.
 Composer, нажатие Reply, официальная проверка, history import и resolve всегда
 остаются одной последовательной полосой. Никогда не держи заполненный composer
 сразу в двух вкладках и никогда не выполняй две публикации одновременно.
@@ -240,8 +239,13 @@ def resolve_path(config_path: Path, value: str) -> Path:
     return (config_path.resolve().parent / candidate).resolve()
 
 
-def load_workspace(config_path: Path) -> Path:
-    config = autopilot_dispatch.read_json(config_path)
+def load_workspace(
+    config_path: Path,
+    *,
+    config: dict[str, Any] | None = None,
+) -> Path:
+    if config is None:
+        config = autopilot_dispatch.read_json(config_path)
     canonical_root = config_path.resolve().parent
     browser_owner_cwd = resolve_path(
         config_path,
@@ -264,15 +268,21 @@ def build_prompt(
     *,
     config_path: Path,
     browser_owner_cwd: Path,
+    config: dict[str, Any] | None = None,
+    policy: inbound_policy.InboundPolicy | None = None,
+    resource_guard: dict[str, Any] | None = None,
 ) -> str:
-    config = autopilot_dispatch.read_json(config_path)
-    max_parallel_read_tabs = int(
-        config.get("autopilot_max_parallel_read_tabs", 1)
+    if not events:
+        raise ValueError("Cannot build an owner prompt without events")
+    if config is None:
+        config = autopilot_dispatch.read_json(config_path)
+    if policy is None:
+        policy = inbound_policy.InboundPolicy.from_config(config)
+    resource_mode = str((resource_guard or {}).get("mode", "")).strip()
+    effective_read_tabs = policy.effective_read_tabs(
+        len(events),
+        resource_mode=resource_mode or None,
     )
-    if not 1 <= max_parallel_read_tabs <= 3:
-        raise ValueError(
-            "autopilot_max_parallel_read_tabs must be between 1 and 3"
-        )
     policy_value = str(config.get("personality_policy_file", "")).strip()
     policy_path = (
         resolve_path(config_path, policy_value)
@@ -310,11 +320,14 @@ def build_prompt(
         f"WATCHER_CONFIG={config_path.resolve()}\n"
         f"BROWSER_OWNER_WORKSPACE={browser_owner_cwd.resolve()}\n"
         f"CLAIMED_EVENT_COUNT={len(events)}\n"
-        f"MAX_PARALLEL_X_READ_TABS={min(len(events), max_parallel_read_tabs)}\n"
+        "CONFIGURED_MAX_PARALLEL_X_READ_TABS="
+        f"{policy.parallel_read_tabs}\n"
+        f"RESOURCE_MODE={resource_mode or 'unavailable'}\n"
+        f"MAX_PARALLEL_X_READ_TABS={effective_read_tabs}\n"
         "PARALLEL_TAB_PREFLIGHT="
         + (
             "single_tab_expected\n"
-            if min(len(events), max_parallel_read_tabs) == 1
+            if effective_read_tabs == 1
             else "distinct_tab_ids_required\n"
         )
         + "DUPLICATE_SEARCH_POLICY=live_target_plus_ledger_first\n"

@@ -15,11 +15,13 @@ try:
         automation_target_health,
         autopilot_dispatch,
         codex_thread_state,
+        json_contract,
     )
 except ModuleNotFoundError:
     import automation_target_health  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
     import codex_thread_state  # type: ignore[no-redef]
+    import json_contract  # type: ignore[no-redef]
 
 
 OPEN_PHASES = {"prepared", "thread_created", "committed"}
@@ -47,10 +49,7 @@ def isoformat(value: datetime | None = None) -> str:
 def read_json(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"JSON object required: {path}")
-    return payload
+    return json_contract.read_object(path)
 
 
 def resolve_path(config_path: Path, value: str) -> Path:

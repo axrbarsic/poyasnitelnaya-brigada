@@ -20,6 +20,7 @@ try:
     from scripts import (
         automation_toml,
         codex_thread_state,
+        json_contract,
         keychain_bundle,
         personality_policy,
         system_doctor_contract,
@@ -28,6 +29,7 @@ try:
 except ModuleNotFoundError:
     import automation_toml  # type: ignore[no-redef]
     import codex_thread_state  # type: ignore[no-redef]
+    import json_contract  # type: ignore[no-redef]
     import keychain_bundle  # type: ignore[no-redef]
     import personality_policy  # type: ignore[no-redef]
     import system_doctor_contract  # type: ignore[no-redef]
@@ -70,7 +72,7 @@ Check = system_doctor_runtime.Check
 
 
 def read_json(path: Path) -> Any:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json_contract.read(path)
 
 
 def resolve_project_path(root: Path, value: str) -> Path:

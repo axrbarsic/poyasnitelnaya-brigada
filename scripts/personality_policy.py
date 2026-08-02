@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+try:
+    from scripts import json_contract
+except ModuleNotFoundError:
+    import json_contract  # type: ignore[no-redef]
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_POLICY = PROJECT_ROOT / "personality" / "policy.json"
@@ -22,7 +27,7 @@ VALID_SCOPES = {"global", "topic", "conversation", "author"}
 
 def read_json(path: Path, *, missing: Any = None) -> Any:
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
+        return json_contract.read(path)
     except FileNotFoundError:
         if missing is not None:
             return missing

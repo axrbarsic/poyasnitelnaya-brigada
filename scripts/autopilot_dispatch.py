@@ -17,9 +17,14 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterator
 
+try:
+    from scripts import inbound_policy, json_contract
+except ModuleNotFoundError:
+    import inbound_policy  # type: ignore[no-redef]
+    import json_contract  # type: ignore[no-redef]
 
 STATE_VERSION = 1
-DEFAULT_MAX_CLAIM_EVENTS = 1
+DEFAULT_MAX_CLAIM_EVENTS = inbound_policy.DEFAULT_MAX_CLAIM_EVENTS
 X_STATUS_PATH = re.compile(
     r"^/(?:[A-Za-z0-9_]{1,15}|i/web)/status/([0-9]{1,19})$"
 )
@@ -40,10 +45,7 @@ def parse_time(value: str | None) -> datetime | None:
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"Expected JSON object in {path}")
-    return payload
+    return json_contract.read_object(path)
 
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
@@ -212,8 +214,11 @@ def select_claim_events(
 ) -> list[dict[str, Any]]:
     """Select one bounded oldest-first claim without mutating the queue."""
 
-    if max_events <= 0:
-        raise ValueError("max claim events must be positive")
+    if not 1 <= max_events <= inbound_policy.MAX_SUPPORTED_CLAIM_EVENTS:
+        raise ValueError(
+            "max claim events must be between 1 and "
+            f"{inbound_policy.MAX_SUPPORTED_CLAIM_EVENTS}"
+        )
     latest = datetime.max.replace(tzinfo=timezone.utc)
 
     def priority(event: dict[str, Any]) -> tuple[datetime, int]:
@@ -424,7 +429,7 @@ def claim(
     state_file: Path,
     *,
     lease_seconds: int,
-    max_events: int | None = None,
+    max_events: int = DEFAULT_MAX_CLAIM_EVENTS,
     now: datetime | None = None,
     runtime_id: str | None = None,
 ) -> dict[str, Any]:
@@ -433,11 +438,7 @@ def claim(
     current_time = now or utc_now()
     with locked_state(state_file):
         pending_events = load_wake_events(wake_file)
-        events = (
-            select_claim_events(pending_events, max_events=max_events)
-            if max_events is not None
-            else pending_events
-        )
+        events = select_claim_events(pending_events, max_events=max_events)
         state = load_state(state_file)
         state_events = state["events"]
         owner = state.get("owner")

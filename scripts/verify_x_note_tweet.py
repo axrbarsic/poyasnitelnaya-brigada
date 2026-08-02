@@ -17,6 +17,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import xmention_watcher  # noqa: E402
+from scripts import json_contract  # noqa: E402
 
 
 FORBIDDEN = ("\u2013", "\u2014", "\u00a0", "\u200b", "\u200c", "\u200d", "\ufeff")
@@ -236,7 +237,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     else:
         if args.status_id:
             raise ValueError("--status-id is only valid with --config")
-        response = json.loads(args.response_json.read_text(encoding="utf-8"))
+        response = json_contract.read(args.response_json)
     source_text = read_source(
         args.file,
         strip_one_final_newline=args.strip_one_final_newline,

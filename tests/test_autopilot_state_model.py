@@ -90,6 +90,19 @@ class AutopilotStateModelTests(unittest.TestCase):
         self.assertEqual(first_failures, [])
         self.assertEqual(first.queued, set())
 
+    def test_trace_claim_is_bounded_to_three_events(self) -> None:
+        state = autopilot_state_model.TraceState()
+        state.queued = {f"event-{value}" for value in range(1, 7)}
+
+        state.apply("reserve")
+        state.apply("claim")
+
+        self.assertEqual(
+            state.claimed,
+            {"event-1", "event-2", "event-3"},
+        )
+        self.assertEqual(state.failures(), [])
+
 
 if __name__ == "__main__":
     unittest.main()

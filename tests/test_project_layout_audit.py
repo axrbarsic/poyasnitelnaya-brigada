@@ -155,3 +155,30 @@ class ProjectLayoutAuditTests(unittest.TestCase):
                 ),
                 result["errors"],
             )
+
+    def test_rejects_duplicate_config_keys(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            root = self.make_root(base)
+            config = root / "config.json"
+            config.write_text(
+                '{"browser_owner_cwd":".","browser_owner_cwd":"/tmp"}',
+                encoding="utf-8",
+            )
+
+            result = project_layout_audit.audit_layout(
+                root=root,
+                config_path=config,
+                installed_skill=None,
+                installed_generation_skill=None,
+                installed_generation_skill_v2=None,
+                require_installed_skill=False,
+            )
+
+            self.assertFalse(result["complete"])
+            self.assertTrue(
+                any(
+                    error.startswith("config_error:Duplicate JSON key")
+                    for error in result["errors"]
+                )
+            )

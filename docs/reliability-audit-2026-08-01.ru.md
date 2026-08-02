@@ -239,3 +239,81 @@ DOM, console, network и performance diagnostics.
 декларативная SQLite schema, argparse DSL, SQL projection или сгруппированный
 doctor contract, а не смешанные мутации. Механически дробить их ради числа
 строк означало бы скрыть контракт и ухудшить проверяемость.
+
+## Дополнение 2026-08-02: bounded batch и безопасный SQLite runtime
+
+Новый живой canary обработал три старейших события одним claim. Три ветки
+читались независимо, но composer, публикация, официальная проверка, history
+import и durable resolve проходили последовательно. Все три события получили
+отдельные проверенные reply URL и вошли в один неизменяемый manifest. Это
+подтвердило полезность bounded batch без создания нескольких writer.
+
+Рефакторинг закрепляет этот результат в одном источнике политики:
+
+| Граница | Новый контракт |
+| --- | --- |
+| Claim | Низкоуровневый вызов по умолчанию берёт ровно одно событие и никогда не может неявно поглотить всю очередь |
+| Batch | Настроенный предел находится между 1 и 3, превышение останавливает запуск до Browser |
+| Read-only вкладки | Предел равен минимуму из размера claim, конфигурации и resource mode: efficiency 1, balanced 2, performance 3 |
+| Writer | Всегда один composer и одна последовательная публикационная транзакция |
+| JSON | Duplicate key во вложенном или верхнем объекте приводит к явному отказу, тихая подмена значения запрещена |
+| Doctor | Foundation, deployment и runtime checks разделены по разным модулям |
+| LaunchAgent runtime | Все пять процессов получают один явно настроенный Python и проверяются до установки |
+
+Выбор архитектуры соответствует первичным источникам:
+
+- [Microsoft Queue-Based Load Leveling](https://learn.microsoft.com/en-us/azure/architecture/patterns/queue-based-load-leveling) рекомендует durable очередь как буфер, ограничение скорости consumers, контроль глубины очереди и идемпотентную обработку повторной доставки.
+- [Microsoft Sequential Convoy](https://learn.microsoft.com/en-us/azure/architecture/patterns/sequential-convoy) сохраняет FIFO внутри связанной группы, но допускает параллельность независимых групп. В проекте X thread является такой группой, а writer остаётся последовательным.
+- [Microsoft Competing Consumers](https://learn.microsoft.com/en-us/azure/architecture/patterns/competing-consumers) прямо предупреждает о потере порядка при нескольких consumers и требует идемпотентности. Поэтому несколько Browser writer не создаются.
+- [AWS Making retries safe with idempotent APIs](https://aws.amazon.com/builders-library/making-retries-safe-with-idempotent-APIs/) рекомендует уникальный caller request ID и атомарную фиксацию token вместе с мутацией. Эту роль выполняют event ID и claim token.
+
+Отдельно устранён риск уровня хранилища. Официальная документация
+[SQLite WAL](https://sqlite.org/wal.html) указывает, что редкая WAL-reset race
+затрагивает версии до 3.51.2 включительно при нескольких процессах, которые
+одновременно пишут или запускают checkpoint. Исправление присутствует в
+3.51.3 и новее. Штатный `/usr/bin/python3` на машине использовал SQLite 3.51.0,
+а установленный Homebrew Python использует SQLite 3.53.3. Поэтому шаблоны
+LaunchAgent больше не зашивают системный Python: renderer и doctor требуют
+явный executable, Python 3.10.0 или новее и SQLite 3.51.3 или новее до
+deployment. Python 3.10 является честным минимумом, потому что runtime-модули
+используют синтаксис union types `X | None`.
+
+[Документация SQLite transactions](https://www.sqlite.org/lang_transaction.html)
+также фиксирует фундаментальное ограничение: параллельных readers может быть
+несколько, но write transaction одновременно только одна. Это совпадает с
+нашей моделью: read-only подготовка масштабируется, durable writer остаётся
+одним.
+
+`browser_owner_evidence.py` и `watcher_history.py` после review оставлены
+цельными намеренно. Первый является одной commit/finalize границей для
+публикации, второй одной append-only границей для history import, migration и
+export. Их механическое дробление создало бы приватные межмодульные связи внутри
+одной транзакции. Вместо этого внешние JSON и JSONL входы получили общий строгий
+decoder, а смешанные doctor и continuation обязанности вынесены в независимые
+модули.
+
+### Финальная приёмка checkpoint
+
+Второй живой bounded canary подтвердил не только успешную публикацию, но и
+корректные terminal blockers. Claim `fe9da250-71b8-4300-83c0-915f291b8184`
+получил три старейших события и завершил каждое отдельно:
+
+| Event ID | Durable outcome | Проверяемое доказательство |
+| --- | --- | --- |
+| `2083795468400681061` | `published` | [reply 2083833307276472727](https://x.com/axrbarsic/status/2083833307276472727), exact body и parent подтверждены X API |
+| `2083795334912749577` | `blocked:reply_restricted` | live X не показал composer и сообщил, что отвечать могут только выбранные аккаунты |
+| `2083795159913726357` | `blocked:target_unavailable` | точный status отсутствует и в live X, и в официальном X API |
+
+Все три события имеют `delivery_state=acknowledged`, отдельный evidence-каталог,
+history и ledger. Task-owned вкладка закрыта до завершения claim. Независимый
+doctor после завершения показал `39 PASS`, `0 FAIL`, `1 WARN`; предупреждение
+относилось к следующей уже ожидающей входящей пачке, а не к завершённому claim.
+
+| Финальная проверка | Результат |
+| --- | --- |
+| Полный Python suite | 512 тестов, 0 ошибок |
+| `py_compile` | все runtime scripts и composition roots прошли |
+| Canonical layout | complete, обязательные файлы на месте, три установленных skill совпадают с backup |
+| `git diff --check` | чисто |
+| Запрещённые U+2013 и U+2014 в изменённых файлах | отсутствуют |
+| Live system doctor | 39 PASS, 0 FAIL, 1 ожидаемый queue-latency WARN |

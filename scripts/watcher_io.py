@@ -7,6 +7,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from scripts import json_contract
+
 
 def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -19,4 +21,4 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
 
 
 def read_json(path: Path) -> dict[str, Any]:
-    return json.loads(path.read_text(encoding="utf-8"))
+    return json_contract.read_object(path)

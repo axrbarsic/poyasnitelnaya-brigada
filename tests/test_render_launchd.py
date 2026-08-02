@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import plistlib
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -24,6 +25,7 @@ class RenderLaunchdTests(unittest.TestCase):
                         "session_janitor_minimum_age_seconds": 60,
                         "app_server_dispatch_interval_seconds": 45,
                         "wake_file": "var/wake-request.json",
+                        "launchagent_python_executable": sys.executable,
                     }
                 ),
                 encoding="utf-8",
@@ -66,6 +68,12 @@ class RenderLaunchdTests(unittest.TestCase):
                 watchdog_arguments[1],
             )
             self.assertEqual(watchdog_arguments[-1], "run")
+            for path in rendered:
+                launchagent = plistlib.loads(path.read_bytes())
+                self.assertEqual(
+                    launchagent["ProgramArguments"][0],
+                    sys.executable,
+                )
 
     def test_janitor_minimum_age_rejects_unsafe_value(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -75,6 +83,7 @@ class RenderLaunchdTests(unittest.TestCase):
                 json.dumps(
                     {
                         "session_janitor_minimum_age_seconds": 59,
+                        "launchagent_python_executable": sys.executable,
                     }
                 ),
                 encoding="utf-8",

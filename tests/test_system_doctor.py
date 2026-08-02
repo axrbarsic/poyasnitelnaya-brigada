@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import plistlib
 import sqlite3
+import sys
 import tempfile
 import unittest
 from contextlib import closing
@@ -1665,7 +1666,7 @@ class SystemDoctorTests(unittest.TestCase):
                 {
                     "Label": "agent",
                     "ProgramArguments": [
-                        "/usr/bin/python3",
+                        sys.executable,
                         str(entrypoint),
                     ],
                 }

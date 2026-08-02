@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from scripts import (
+    json_contract,
     watcher_chatgpt,
     watcher_constants,
     watcher_time,
@@ -29,15 +30,21 @@ def _history_records(path: Path) -> list[dict[str, Any]]:
     if not text.strip():
         return []
     try:
-        payload = json.loads(text)
+        payload = json_contract.loads(text, source=str(path))
     except json.JSONDecodeError:
         records: list[dict[str, Any]] = []
         for line_number, line in enumerate(text.splitlines(), start=1):
             if not line.strip():
                 continue
             try:
-                record = json.loads(line)
-            except json.JSONDecodeError as error:
+                record = json_contract.loads(
+                    line,
+                    source=f"{path}:{line_number}",
+                )
+            except (
+                json.JSONDecodeError,
+                json_contract.DuplicateKeyError,
+            ) as error:
                 raise ValueError(
                     f"Invalid JSONL at line {line_number}"
                 ) from error
@@ -713,8 +720,11 @@ def _flat_history_media(source_record: dict[str, Any]) -> list[Any]:
     media = source_record.get("media_json", [])
     if isinstance(media, str):
         try:
-            media = json.loads(media)
-        except json.JSONDecodeError as error:
+            media = json_contract.loads(
+                media,
+                source="flat history media_json",
+            )
+        except ValueError as error:
             raise ValueError(
                 "Flat history turn media_json must be valid JSON"
             ) from error

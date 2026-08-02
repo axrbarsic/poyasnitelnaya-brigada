@@ -381,6 +381,48 @@ class AutopilotBridgeTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "between 1 and 3"):
             autopilot_bridge.gate(self.config, lease_seconds=1800)
 
+    def test_efficiency_mode_caps_three_event_claim_to_one_read_tab(
+        self,
+    ) -> None:
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["autopilot_max_claim_events"] = 3
+        config["autopilot_max_parallel_read_tabs"] = 3
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        events = []
+        for offset in range(3):
+            event = dict(self.event())
+            event_id = str(2081050838240211434 + offset)
+            event["event_id"] = event_id
+            event["event_url"] = f"https://x.com/a/status/{event_id}"
+            event["first_seen_at"] = f"2026-07-25T16:2{offset}:00Z"
+            events.append(event)
+        self.write_events(events)
+
+        with mock.patch(
+            "scripts.autopilot_bridge.resource_guard.check",
+            return_value={
+                "enabled": True,
+                "available": True,
+                "defer": False,
+                "reasons": [],
+                "mode": "efficiency",
+            },
+        ):
+            claimed = autopilot_bridge.claim(
+                self.config,
+                lease_seconds=1800,
+            )
+
+        self.assertEqual(claimed["event_ids"], [
+            event["event_id"] for event in events
+        ])
+        self.assertIn(
+            "CONFIGURED_MAX_PARALLEL_X_READ_TABS=3",
+            claimed["prompt"],
+        )
+        self.assertIn("RESOURCE_MODE=efficiency", claimed["prompt"])
+        self.assertIn("MAX_PARALLEL_X_READ_TABS=1", claimed["prompt"])
+
     def test_gate_does_not_dispatch_while_owner_is_active(self) -> None:
         self.write_events([self.event()])
         claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)

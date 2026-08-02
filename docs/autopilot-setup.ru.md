@@ -185,13 +185,12 @@ python3 scripts/render_launchd.py \
 - `com.axrbarsic.xmention.dispatch.plist`
 - `com.axrbarsic.xmention.codex-update.plist`
 
-Установленные plist используют стабильный macOS `/usr/bin/python3`, на текущем
-хосте это Python 3.9. Поэтому runtime-код обязан импортироваться на Python 3.9,
-даже если разработческие тесты выполняются новым интерпретатором.
-`system_doctor` запускает точный `--help` import-probe каждого установленного
-Python entrypoint тем интерпретатором, который записан в его plist. Отсутствие
-stdlib или сторонней зависимости становится deployment FAIL до того, как оно
-сможет незаметно остановить доставку очереди.
+Renderer берет абсолютный `launchagent_python_executable` из локального
+config. На текущем хосте Alex это стабильная ссылка Homebrew
+`/opt/homebrew/bin/python3`. Рендеринг запрещен, если интерпретатор отсутствует
+либо версии Python или SQLite ниже настроенного минимума. Текущий порог SQLite:
+3.51.3. `system_doctor` повторяет точный `--help` import-probe каждого
+entrypoint и проверяет, что все plist используют один безопасный runtime.
 
 Не создавайте пятиминутную Codex automation для X. Каждый standalone
 scheduled run создает отдельную задачу и может оставлять helper-процессы в

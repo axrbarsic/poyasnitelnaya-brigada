@@ -8,6 +8,11 @@ from itertools import product
 from random import Random
 from typing import Any, Iterable
 
+try:
+    from scripts import inbound_policy
+except ModuleNotFoundError:
+    import inbound_policy  # type: ignore[no-redef]
+
 
 X_DELIVERY_FAILURES = frozenset(
     {
@@ -217,7 +222,13 @@ class TraceState:
             self.reservation = False
         elif action == "claim":
             if self.reservation and not self.claimed:
-                self.claimed = set(self.queued)
+                oldest = sorted(
+                    self.queued,
+                    key=lambda value: int(value.rsplit("-", 1)[-1]),
+                )
+                self.claimed = set(
+                    oldest[: inbound_policy.MAX_SUPPORTED_CLAIM_EVENTS]
+                )
                 self.reservation = False
         elif action == "publish":
             unresolved = sorted(self.claimed - self.resolved)
@@ -271,6 +282,8 @@ class TraceState:
             failures.append("claim_lost_event")
         if self.reservation and self.claimed:
             failures.append("reservation_and_owner_overlap")
+        if len(self.claimed) > inbound_policy.MAX_SUPPORTED_CLAIM_EVENTS:
+            failures.append("claim_exceeds_bounded_policy")
         if any(count > 1 for count in self.publication_counts.values()):
             failures.append("duplicate_publication")
         return failures

@@ -4,9 +4,14 @@
 from __future__ import annotations
 
 import argparse
-import json
 import plistlib
 from pathlib import Path
+
+try:
+    from scripts import json_contract, launchagent_runtime
+except ModuleNotFoundError:
+    import json_contract  # type: ignore[no-redef]
+    import launchagent_runtime  # type: ignore[no-redef]
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -22,7 +27,25 @@ TEMPLATES = (
 
 def render(config_path: Path, output_dir: Path) -> list[Path]:
     config = config_path.expanduser().resolve()
-    config_payload = json.loads(config.read_text(encoding="utf-8"))
+    config_payload = json_contract.read_object(config)
+    python_executable = launchagent_runtime.configured_executable(
+        config_payload
+    )
+    launchagent_runtime.require_safe(
+        python_executable,
+        minimum_python=str(
+            config_payload.get(
+                "launchagent_minimum_python_version",
+                launchagent_runtime.DEFAULT_MINIMUM_PYTHON,
+            )
+        ),
+        minimum_sqlite=str(
+            config_payload.get(
+                "launchagent_minimum_sqlite_version",
+                launchagent_runtime.DEFAULT_MINIMUM_SQLITE,
+            )
+        ),
+    )
     poll_interval = int(config_payload.get("poll_interval_seconds", 300))
     watchdog_interval = int(
         config_payload.get("watchdog_interval_seconds", 60)
@@ -65,6 +88,10 @@ def render(config_path: Path, output_dir: Path) -> list[Path]:
     for name in TEMPLATES:
         template = TEMPLATE_DIR / f"{name}.example"
         text = template.read_text(encoding="utf-8")
+        text = text.replace(
+            "REPLACE_PYTHON_PATH",
+            str(python_executable),
+        )
         text = text.replace("REPLACE_PROJECT_DIR", str(PROJECT_ROOT))
         text = text.replace("REPLACE_CONFIG_PATH", str(config))
         text = text.replace("REPLACE_WAKE_PATH", str(wake_path))

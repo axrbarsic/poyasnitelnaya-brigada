@@ -18,9 +18,10 @@ from pathlib import Path
 from typing import Any, TextIO
 
 try:
-    from scripts import autopilot_dispatch, outbound_cycle
+    from scripts import autopilot_dispatch, json_contract, outbound_cycle
 except ModuleNotFoundError:
     import autopilot_dispatch  # type: ignore[no-redef]
+    import json_contract  # type: ignore[no-redef]
     import outbound_cycle  # type: ignore[no-redef]
 
 
@@ -71,8 +72,11 @@ def send(stream: TextIO, request_id: int, method: str, params: dict[str, Any]) -
 def receive(stream: TextIO, request_id: int) -> dict[str, Any]:
     for line in stream:
         try:
-            payload = json.loads(line)
-        except json.JSONDecodeError:
+            payload = json_contract.loads(
+                line,
+                source="Codex app-server response",
+            )
+        except (json.JSONDecodeError, json_contract.DuplicateKeyError):
             continue
         if payload.get("id") != request_id:
             continue

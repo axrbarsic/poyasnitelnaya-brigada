@@ -12,6 +12,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Sequence
 
+try:
+    from scripts import json_contract
+except ModuleNotFoundError:
+    import json_contract  # type: ignore[no-redef]
+
 
 FORBIDDEN = ("\u2013", "\u2014", "\u00a0", "\u200b", "\u200c", "\u200d", "\ufeff")
 HANDLE_PATTERN = re.compile(r"[A-Za-z0-9_]{1,15}")
@@ -239,7 +244,7 @@ def build_record(
     *,
     maximum_length: int = 4000,
 ) -> dict[str, Any]:
-    evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
+    evidence = json_contract.read(evidence_path)
     if not isinstance(evidence, dict):
         raise ValueError("evidence root must be an object")
     return build_record_from_payload(

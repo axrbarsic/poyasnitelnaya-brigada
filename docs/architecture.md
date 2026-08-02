@@ -387,9 +387,9 @@ contradiction claim, or factual conclusion.
 - Repeated pagination tokens and excessive page counts fail closed.
 - Background output is discarded so LaunchAgent logs cannot grow without bound.
 - Every Python LaunchAgent has a doctor-owned import probe executed by the
-  exact interpreter recorded in its plist. The current deployment baseline is
-  macOS `/usr/bin/python3` 3.9, so newer development Python cannot conceal an
-  unavailable runtime module.
+  exact interpreter recorded in its plist. All plists must use the configured
+  stable Homebrew symlink, and doctor also enforces the minimum Python and
+  SQLite versions so an obsolete WAL implementation cannot remain hidden.
 - The watchdog runs independently, so a dead poller cannot conceal its death.
 - Long silence is a review signal, not evidence that X has no new replies.
 - LaunchAgents are loaded only after live shadow output matches a manual
@@ -417,9 +417,9 @@ systems:
   keeps an in-flight message hidden during processing, renews long work and
   returns unfinished work for retry after lease expiry.
 
-This project applies those ideas locally: immutable X event IDs, one
-production event per lease, renewable ownership, idempotent durable commit and
-acknowledgment only after verified publication.
+This project applies those ideas locally: immutable X event IDs, one bounded
+oldest-first batch per renewable lease, one writer lane, immediate idempotent
+commit per event and acknowledgment only after verified publication.
 
 ## Verification model
 

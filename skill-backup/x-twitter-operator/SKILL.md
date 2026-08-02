@@ -102,9 +102,11 @@ performance automatically. The profile controls whether Browser work may
 start, never the required quality of Sol reasoning or fact checking:
 
 - idle dispatcher checks own zero Browser tabs and use no model;
-- a production claim contains exactly one oldest pending event;
-- short and Local Sol Max work use one X tab and complete one durable
-  transaction before the next claim;
+- a production claim contains at most the configured bounded oldest-first
+  event count, currently three;
+- the resource profile caps simultaneous read-only X tabs before preflight;
+  every composer, publication, verification and commit remains one ordered
+  transaction before the next event in the claim;
 - Local Sol Max work generates locally through `poyasnitelnaya-brigada-v2` in
   the Sol Max owner turn;
 - `initial-audit-next --conversations 1`, never routine `status --full`;
@@ -417,10 +419,10 @@ without supplying target IDs.
 - In normal unattended idle, supervisor-owned Desktop is closed and Luna does
   not run. If Alex intentionally keeps Desktop open, the heartbeat still
   performs its small scheduled gate, but it never wakes Sol for an empty queue.
-- Keep zero Browser tabs while idle and one task-owned X tab during a
-  production claim. Finish the event end-to-end before the next claim. A
-  larger read-only tab set is a temporary diagnostic override, not the normal
-  backlog strategy.
+- Keep zero Browser tabs while idle. During a production claim, obey the
+  deterministic `MAX_PARALLEL_X_READ_TABS` cap and fall back to one tab as soon
+  as Browser or memory pressure appears. Finish each event end-to-end before
+  using the single writer lane for the next event.
 - Close all task-owned tabs and finish normally. The model-free session
   janitor archives the task after its minimum age. `notLoaded` alone is not
   proof that a live owner died.

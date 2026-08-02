@@ -173,13 +173,13 @@ Install:
 - `com.axrbarsic.xmention.dispatch.plist`
 - `com.axrbarsic.xmention.codex-update.plist`
 
-The installed plists use the stable macOS `/usr/bin/python3` runtime, which is
-Python 3.9 on the current host. Runtime code must therefore remain importable
-on Python 3.9 even when development tests use a newer interpreter.
-`system_doctor` runs an exact `--help` import probe for every installed Python
-entrypoint with the interpreter recorded in its plist. A missing stdlib or
-third-party dependency is a deployment FAIL before it can silently stop queue
-delivery.
+The renderer uses the absolute `launchagent_python_executable` from local
+config. On Alex's current host this is the stable Homebrew symlink
+`/opt/homebrew/bin/python3`. Rendering fails if the interpreter is missing or
+if its Python or SQLite version is below the configured minimum. The current
+SQLite floor is 3.51.3. `system_doctor` repeats the exact `--help` import probe
+for every installed entrypoint and verifies that all plists use the same safe
+runtime.
 
 Do not create a five-minute Codex automation for X. Every standalone scheduled
 run creates a separate task and may leave helper processes attached to the

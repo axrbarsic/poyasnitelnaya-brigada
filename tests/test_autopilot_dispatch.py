@@ -124,12 +124,42 @@ class AutopilotDispatchTests(unittest.TestCase):
     def test_bounded_claim_rejects_nonpositive_limit(self) -> None:
         self.write_events([self.event()])
 
-        with self.assertRaisesRegex(ValueError, "must be positive"):
+        with self.assertRaisesRegex(ValueError, "between 1 and 3"):
             autopilot_dispatch.claim(
                 self.wake_file,
                 self.state_file,
                 lease_seconds=1800,
                 max_events=0,
+            )
+
+    def test_default_claim_never_absorbs_entire_queue(self) -> None:
+        events = [
+            self.event(str(2080998938828501439 + offset))
+            for offset in range(5)
+        ]
+        self.write_events(events)
+
+        result = autopilot_dispatch.claim(
+            self.wake_file,
+            self.state_file,
+            lease_seconds=1800,
+        )
+
+        self.assertEqual(result["claimed_count"], 1)
+        self.assertEqual(
+            [event["id"] for event in result["events"]],
+            [events[0]["event_id"]],
+        )
+
+    def test_claim_rejects_more_than_supported_batch(self) -> None:
+        self.write_events([self.event()])
+
+        with self.assertRaisesRegex(ValueError, "between 1 and 3"):
+            autopilot_dispatch.claim(
+                self.wake_file,
+                self.state_file,
+                lease_seconds=1800,
+                max_events=4,
             )
 
     def test_new_event_waits_for_active_global_owner(self) -> None:

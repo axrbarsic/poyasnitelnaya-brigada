@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sqlite3
 import sys
 import uuid
@@ -15,19 +14,23 @@ from typing import Any
 
 try:
     from scripts import (
+        autopilot_continuation,
         autopilot_contract,
         autopilot_dispatch,
         browser_owner_evidence,
         browser_owner_claim,
         event_dispatch,
+        inbound_policy,
         resource_guard,
     )
 except ModuleNotFoundError:
+    import autopilot_continuation  # type: ignore[no-redef]
     import autopilot_contract  # type: ignore[no-redef]
     import autopilot_dispatch  # type: ignore[no-redef]
     import browser_owner_evidence  # type: ignore[no-redef]
     import browser_owner_claim  # type: ignore[no-redef]
     import event_dispatch  # type: ignore[no-redef]
+    import inbound_policy  # type: ignore[no-redef]
     import resource_guard  # type: ignore[no-redef]
 
 try:
@@ -36,170 +39,9 @@ except ModuleNotFoundError:
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     import xmention_watcher as watcher  # type: ignore[no-redef]
 
-LOCAL_MAX_TURN_PROVENANCE = {
-    "pro",
-    "local_sol_max_and_live_x_dom",
-    "poyasnitelnaya_brigada_local_sol_max",
-    "poyasnitelnaya_brigada_local_sol_max_and_live_x_dom",
-}
-SOURCE_URL_PATTERN = re.compile(r"https?://[^\s]+")
-
-
-def replied_to_status_id(payload: dict[str, Any]) -> str | None:
-    references = payload.get("referenced_tweets") or []
-    if not isinstance(references, list):
-        return None
-    for reference in references:
-        if not isinstance(reference, dict):
-            continue
-        if reference.get("type") != "replied_to":
-            continue
-        status_id = str(reference.get("id", "")).strip()
-        if status_id.isdigit():
-            return status_id
-    return None
-
-
-def _manual_parent_reference(
-    connection: sqlite3.Connection,
-    event_id: str,
-    *,
-    configured_user_id: str,
-) -> tuple[str, bool] | None:
-    event = connection.execute(
-        """
-        SELECT in_reply_to_user_id, payload_json
-        FROM events
-        WHERE event_id = ?
-        """,
-        (event_id,),
-    ).fetchone()
-    if event is None:
-        return None
-    try:
-        payload = json.loads(str(event["payload_json"]))
-    except (json.JSONDecodeError, TypeError):
-        return None
-    if not isinstance(payload, dict):
-        return None
-    parent_status_id = replied_to_status_id(payload)
-    if parent_status_id is None:
-        return None
-    is_direct_reply = (
-        bool(configured_user_id)
-        and str(event["in_reply_to_user_id"] or "") == configured_user_id
-    )
-    return parent_status_id, is_direct_reply
-
-
-def _missing_parent_profile(parent_status_id: str) -> dict[str, Any]:
-    return {
-        "parent_status_id": parent_status_id,
-        "parent_history_status": "missing_exact_alex_parent",
-        "parent_origin_provenance": "unknown",
-        "origin_proven": False,
-        "recommended_route": "pending_exact_parent_restore",
-        "required_action": "restore_exact_live_x_parent_then_classify_adaptively",
-        "chatgpt_web_allowed": False,
-    }
-
-
-def _content_profile(exact_text: str) -> tuple[dict[str, Any], bool]:
-    paragraphs = [
-        value.strip()
-        for value in re.split(r"\n\s*\n", exact_text)
-        if value.strip()
-    ]
-    source_url_count = len(SOURCE_URL_PATTERN.findall(exact_text))
-    substantive = (
-        len(exact_text) >= 500
-        or len(paragraphs) >= 3
-        or source_url_count >= 1
-    )
-    return (
-        {
-            "code_points": len(exact_text),
-            "paragraph_count": len(paragraphs),
-            "source_url_count": source_url_count,
-            "substantive": substantive,
-        },
-        substantive,
-    )
-
-
-def _continuation_basis(
-    *,
-    proven_local_max: bool,
-    substantive: bool,
-) -> str:
-    if proven_local_max:
-        return "proven_local_max_origin"
-    if substantive:
-        return "adaptive_manual_parent_content"
-    return "concise_manual_parent_content"
-
-
-def _exact_parent_profile(
-    parent_status_id: str,
-    parent: sqlite3.Row,
-) -> dict[str, Any]:
-    exact_text = str(parent["exact_text"] or "")
-    provenance = str(parent["provenance"] or "").strip()
-    content_profile, substantive = _content_profile(exact_text)
-    proven_local_max = provenance in LOCAL_MAX_TURN_PROVENANCE
-    adaptive_local_max = proven_local_max or substantive
-    return {
-        "parent_status_id": parent_status_id,
-        "parent_history_status": "exact_alex_parent",
-        "parent_origin_provenance": provenance or "manual_unknown",
-        "origin_proven": bool(provenance),
-        "content_profile": content_profile,
-        "adaptive_local_max": adaptive_local_max,
-        "recommended_route": "local-max" if adaptive_local_max else "short",
-        "continuation_basis": _continuation_basis(
-            proven_local_max=proven_local_max,
-            substantive=substantive,
-        ),
-        "required_action": (
-            "use_complete_local_history_and_poyasnitelnaya_brigada"
-            if adaptive_local_max
-            else "use_complete_local_history_and_sol_short"
-        ),
-        "chatgpt_web_allowed": False,
-    }
-
-
-def manual_parent_continuation_profile(
-    connection: sqlite3.Connection,
-    event_id: str,
-    *,
-    configured_user_id: str,
-) -> dict[str, Any] | None:
-    """Classify how to continue an exact Alex parent without guessing origin."""
-
-    reference = _manual_parent_reference(
-        connection,
-        event_id,
-        configured_user_id=configured_user_id,
-    )
-    if reference is None:
-        return None
-    parent_status_id, is_direct_reply = reference
-    parent = connection.execute(
-        """
-        SELECT actor, exact_text, provenance
-        FROM conversation_turns
-        WHERE status_id = ?
-        """,
-        (parent_status_id,),
-    ).fetchone()
-    if parent is None:
-        if not is_direct_reply:
-            return None
-        return _missing_parent_profile(parent_status_id)
-    if str(parent["actor"]) != "alex":
-        return None
-    return _exact_parent_profile(parent_status_id, parent)
+manual_parent_continuation_profile = (
+    autopilot_continuation.manual_parent_continuation_profile
+)
 
 
 def resolve_path(config_path: Path, value: str) -> Path:
@@ -228,21 +70,6 @@ def handoff_reservation_path(config_path: Path) -> Path:
             )
         ),
     )
-
-
-def max_claim_events(config_path: Path) -> int:
-    config = autopilot_dispatch.read_json(config_path)
-    value = int(
-        config.get(
-            "autopilot_max_claim_events",
-            autopilot_dispatch.DEFAULT_MAX_CLAIM_EVENTS,
-        )
-    )
-    if not 1 <= value <= 3:
-        raise ValueError(
-            "autopilot_max_claim_events must be between 1 and 3"
-        )
-    return value
 
 
 def active_supervisor_owner(
@@ -625,6 +452,8 @@ def _enrich_claim_events(
 def _finalize_claim(
     config_path: Path,
     browser_owner_cwd: Path,
+    config: dict[str, Any],
+    policy: inbound_policy.InboundPolicy,
     result: dict[str, Any],
     events: list[dict[str, Any]],
     guard: dict[str, Any],
@@ -640,6 +469,9 @@ def _finalize_claim(
         events,
         config_path=config_path,
         browser_owner_cwd=browser_owner_cwd,
+        config=config,
+        policy=policy,
+        resource_guard=guard,
     )
     write_health(
         config_path,
@@ -658,7 +490,12 @@ def _finalize_claim(
 
 
 def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
-    browser_owner_cwd = autopilot_contract.load_workspace(config_path)
+    config = autopilot_dispatch.read_json(config_path)
+    policy = inbound_policy.InboundPolicy.from_config(config)
+    browser_owner_cwd = autopilot_contract.load_workspace(
+        config_path,
+        config=config,
+    )
     wake_file, state_file = autopilot_dispatch.load_paths(config_path)
     guard = resource_guard.check(config_path)
     if guard.get("defer"):
@@ -667,7 +504,7 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         wake_file,
         state_file,
         lease_seconds=lease_seconds,
-        max_events=max_claim_events(config_path),
+        max_events=policy.claim_events,
         runtime_id=resource_guard.codex_runtime_id(),
     )
     if not result["dispatch"]:
@@ -681,6 +518,8 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
     return _finalize_claim(
         config_path,
         browser_owner_cwd,
+        config,
+        policy,
         result,
         events,
         guard,
@@ -688,13 +527,15 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
 
 
 def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
-    autopilot_contract.load_workspace(config_path)
+    config = autopilot_dispatch.read_json(config_path)
+    policy = inbound_policy.InboundPolicy.from_config(config)
+    autopilot_contract.load_workspace(config_path, config=config)
     wake_file, state_file = autopilot_dispatch.load_paths(config_path)
     pending_events = autopilot_dispatch.load_wake_events(wake_file)
     pending_event_ids = [str(event["id"]) for event in pending_events]
     selected_events = autopilot_dispatch.select_claim_events(
         pending_events,
-        max_events=max_claim_events(config_path),
+        max_events=policy.claim_events,
     )
     selected_event_ids = [str(event["id"]) for event in selected_events]
     queue = autopilot_dispatch.status(
@@ -746,7 +587,7 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         "pending_count": len(pending_event_ids),
         "event_ids": selected_event_ids,
         "queued_event_ids": pending_event_ids,
-        "claim_limit": max_claim_events(config_path),
+        "claim_limit": policy.claim_events,
         "resource_guard": guard,
     }
 

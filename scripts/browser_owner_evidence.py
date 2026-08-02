@@ -19,7 +19,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import evidence_import
 import xmention_watcher as watcher
 
-from scripts import autopilot_dispatch, build_outbound_history
+from scripts import autopilot_dispatch, build_outbound_history, json_contract
 
 
 EVIDENCE_NAME = "evidence.json"
@@ -49,10 +49,7 @@ def _evidence_root(config: watcher.Config) -> Path:
 def _read_object(path: Path) -> dict[str, Any]:
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"Required evidence file is not regular: {path}")
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(payload, dict):
-        raise ValueError(f"Evidence JSON must be an object: {path}")
-    return payload
+    return json_contract.read_object(path)
 
 
 def _required_object(payload: dict[str, Any], name: str) -> dict[str, Any]:
@@ -148,8 +145,11 @@ def _event_row(
 
 def _event_payload(event: sqlite3.Row) -> dict[str, Any]:
     try:
-        payload = json.loads(str(event["payload_json"] or ""))
-    except json.JSONDecodeError as error:
+        payload = json_contract.loads(
+            str(event["payload_json"] or ""),
+            source=f"event {event['event_id']} payload_json",
+        )
+    except ValueError as error:
         raise ValueError("Stored event payload is not valid JSON") from error
     if not isinstance(payload, dict):
         raise ValueError("Stored event payload must be an object")
@@ -795,8 +795,11 @@ def _read_jsonl(path: Path) -> list[dict[str, Any]]:
         if not line.strip():
             continue
         try:
-            record = json.loads(line)
-        except json.JSONDecodeError as error:
+            record = json_contract.loads(
+                line,
+                source=f"{path}:{line_number}",
+            )
+        except (json.JSONDecodeError, json_contract.DuplicateKeyError) as error:
             raise ValueError(
                 f"Invalid JSONL in {path} at line {line_number}"
             ) from error

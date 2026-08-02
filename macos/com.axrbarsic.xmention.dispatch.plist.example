@@ -6,7 +6,7 @@
     <string>com.axrbarsic.xmention.dispatch</string>
     <key>ProgramArguments</key>
     <array>
-        <string>/usr/bin/python3</string>
+        <string>REPLACE_PYTHON_PATH</string>
         <string>REPLACE_PROJECT_DIR/scripts/app_server_dispatch.py</string>
         <string>--config</string>
         <string>REPLACE_CONFIG_PATH</string>
