@@ -23,8 +23,8 @@ Codex automation is therefore retired.
    executes the matching claim in the same task.
 5. An adjacent heartbeat cannot hand off the same queue again.
 6. The Browser owner claims atomically and remains the sole owner.
-7. A bounded claim uses at most three task-owned X tabs for independent
-   read-only inspection.
+7. A production claim uses one task-owned X tab for one oldest event. The
+   multi-tab path remains a bounded diagnostic override only.
 8. Short and local-max share one ordered composer and publication lane. The
    local explainer opens no ChatGPT tab.
 9. Every task-owned tab closes on a terminal outcome.

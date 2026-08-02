@@ -25,14 +25,12 @@ Sol Max. Используй skills x-twitter-operator и
 встроенный Browser.
 
 Поле MAX_PARALLEL_X_READ_TABS ниже задаёт предел task-owned X-вкладок для
-одного claim. Если claim содержит несколько независимых событий, сразу открой
-их точные ветки в отдельных вкладках, но не больше указанного предела. При
-MAX_PARALLEL_X_READ_TABS=3 и трёх claimed events используй три вкладки для
-одновременной загрузки, чтения контекста, media и сбора target-local
-источников. Создай все три вкладки одним Browser preflight-шагом, проверь три
-разных tab ID и только затем переходи к чтению. Запрещено открывать второй или
-третий target через `goto` первой вкладки. Каждая вкладка навсегда привязана к
-одному event ID до её закрытия.
+одного claim. Штатный production claim содержит одно событие и использует одну
+X-вкладку. Это сохраняет короткую атомарную транзакцию и не удерживает другие
+события за долгим Browser turn. Значение больше единицы допустимо только для
+явного диагностического эксперимента с несколькими независимыми событиями.
+Тогда открой их точные ветки в разных вкладках одним Browser preflight-шагом,
+проверь разные tab ID и навсегда привяжи каждую вкладку к одному event ID.
 Composer, нажатие Reply, официальная проверка, history import и resolve всегда
 остаются одной последовательной полосой. Никогда не держи заполненный composer
 сразу в двух вкладках и никогда не выполняй две публикации одновременно.
@@ -251,7 +249,7 @@ def build_prompt(
 ) -> str:
     config = autopilot_dispatch.read_json(config_path)
     max_parallel_read_tabs = int(
-        config.get("autopilot_max_parallel_read_tabs", 3)
+        config.get("autopilot_max_parallel_read_tabs", 1)
     )
     if not 1 <= max_parallel_read_tabs <= 3:
         raise ValueError(
@@ -295,7 +293,12 @@ def build_prompt(
         f"BROWSER_OWNER_WORKSPACE={browser_owner_cwd.resolve()}\n"
         f"CLAIMED_EVENT_COUNT={len(events)}\n"
         f"MAX_PARALLEL_X_READ_TABS={min(len(events), max_parallel_read_tabs)}\n"
-        "PARALLEL_TAB_PREFLIGHT=distinct_tab_ids_required\n"
-        f"PERSONALITY_POLICY_JSON:\n{personality_payload}\n"
-        f"EVENTS_JSON:\n{payload}\n"
+        "PARALLEL_TAB_PREFLIGHT="
+        + (
+            "single_tab_expected\n"
+            if min(len(events), max_parallel_read_tabs) == 1
+            else "distinct_tab_ids_required\n"
+        )
+        + f"PERSONALITY_POLICY_JSON:\n{personality_payload}\n"
+        + f"EVENTS_JSON:\n{payload}\n"
     )

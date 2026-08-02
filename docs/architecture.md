@@ -296,11 +296,10 @@ contradiction claim, or factual conclusion.
   Queue snapshots and watcher replacements share a separate wake-file lock.
   A live lease prevents duplicate Browser-owner runs. Failure before durable
   resolution removes the claim token for an immediate retry.
-- Each owner claim selects at most three oldest pending events. One Browser
-  owner may inspect those independent targets in up to three task-owned X tabs,
-  but composer, publication, verification, history import and resolve remain a
-  single ordered writer lane. Each event reaches a durable terminal result
-  before the next publication starts.
+- Each production owner claim selects one oldest pending event and uses one
+  task-owned X tab. Composer, publication, verification, history import and
+  resolve form one short ordered transaction. The multi-event capability is
+  retained only for an explicit bounded diagnostic override.
 - Resolved events disappear from the wake file and are pruned from dispatcher
   state. An unresolved event becomes eligible again after the lease expires,
   so a crashed Browser-owner turn cannot strand the queue forever.

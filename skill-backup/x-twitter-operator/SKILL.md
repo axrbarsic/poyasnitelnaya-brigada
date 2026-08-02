@@ -69,8 +69,9 @@ If the read-only test fails, do not begin research that assumes later publicatio
 
 Use the smallest stable tab set:
 
-- One Browser owner may hold up to three task-owned X tabs for independent
-  read-only target inspection. Bind every tab to one immutable event ID.
+- The production owner claim holds one event and one task-owned X tab. A
+  bounded multi-tab read-only experiment requires an explicit runtime override
+  and never changes the single writer lane.
 - Keep exactly one writer lane. Never fill composers in two tabs at once, and
   never overlap publication, verification, history import, or resolve.
 - Optional research tabs only when a connector or direct web lookup cannot cover the source.
@@ -100,9 +101,9 @@ performance automatically. The profile controls whether Browser work may
 start, never the required quality of Sol reasoning or fact checking:
 
 - idle dispatcher checks own zero Browser tabs and use no model;
-- a bounded claim contains at most three oldest pending events;
-- short and Local Sol Max work may inspect up to three independent X targets
-  in parallel, then publishes and resolves them one at a time;
+- a production claim contains exactly one oldest pending event;
+- short and Local Sol Max work use one X tab and complete one durable
+  transaction before the next claim;
 - Local Sol Max work generates locally through `poyasnitelnaya-brigada-v2` in
   the Sol Max owner turn;
 - `initial-audit-next --conversations 1`, never routine `status --full`;
@@ -404,11 +405,10 @@ without supplying target IDs.
 - In normal unattended idle, supervisor-owned Desktop is closed and Luna does
   not run. If Alex intentionally keeps Desktop open, the heartbeat still
   performs its small scheduled gate, but it never wakes Sol for an empty queue.
-- Keep zero Browser tabs while idle and at most three task-owned X tabs during
-  a bounded claim. Fall back to one tab on Browser instability or memory
-  pressure. Classify the bounded claim, then finish each event end-to-end
-  before the next publication. Process already-answered and short events before
-  local-max events, oldest-first inside one class.
+- Keep zero Browser tabs while idle and one task-owned X tab during a
+  production claim. Finish the event end-to-end before the next claim. A
+  larger read-only tab set is a temporary diagnostic override, not the normal
+  backlog strategy.
 - Close all task-owned tabs and finish normally. The model-free session
   janitor archives the task after its minimum age. `notLoaded` alone is not
   proof that a live owner died.

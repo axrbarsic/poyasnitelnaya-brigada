@@ -19,7 +19,7 @@ from typing import Any, Iterator
 
 
 STATE_VERSION = 1
-DEFAULT_MAX_CLAIM_EVENTS = 3
+DEFAULT_MAX_CLAIM_EVENTS = 1
 X_STATUS_PATH = re.compile(
     r"^/(?:[A-Za-z0-9_]{1,15}|i/web)/status/([0-9]{1,19})$"
 )

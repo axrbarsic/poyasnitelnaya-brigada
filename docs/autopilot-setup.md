@@ -205,8 +205,8 @@ count as a stalled relay.
 ## Memory and quality contracts
 
 - Idle: zero model tokens, zero Browser tabs, zero new tasks.
-- A bounded inbound claim: at most three oldest events and up to three
-  task-owned X tabs for independent read-only inspection.
+- A production inbound claim: one oldest event and one task-owned X tab. The
+  multi-event path remains available only as an explicit diagnostic override.
 - Short and local-max: one ordered composer/publication lane, immediate durable
   resolution after each event, and zero ChatGPT tabs for local-max.
 - Only Sol makes publication decisions. The local-max route always requires

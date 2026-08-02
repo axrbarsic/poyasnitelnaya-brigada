@@ -291,7 +291,7 @@ class AutopilotBridgeTests(unittest.TestCase):
             (self.root / "var" / "autopilot-dispatch.json").exists()
         )
 
-    def test_gate_and_claim_bound_batch_to_three_oldest_events(self) -> None:
+    def test_gate_and_claim_default_to_one_oldest_event(self) -> None:
         events = []
         for offset in range(5):
             event = dict(self.event())
@@ -309,29 +309,17 @@ class AutopilotBridgeTests(unittest.TestCase):
         gated = autopilot_bridge.gate(self.config, lease_seconds=1800)
         claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
 
-        expected = [event["event_id"] for event in events[:3]]
+        expected = [events[0]["event_id"]]
         self.assertEqual(gated["pending_count"], 5)
         self.assertEqual(gated["event_ids"], expected)
         self.assertEqual(gated["queued_event_ids"], [
             event["event_id"] for event in reversed(events)
         ])
-        self.assertEqual(gated["claim_limit"], 3)
+        self.assertEqual(gated["claim_limit"], 1)
         self.assertEqual(claimed["event_ids"], expected)
-        self.assertIn("MAX_PARALLEL_X_READ_TABS=3", claimed["prompt"])
+        self.assertIn("MAX_PARALLEL_X_READ_TABS=1", claimed["prompt"])
         self.assertIn(
-            "используй три вкладки для\nодновременной загрузки",
-            claimed["prompt"],
-        )
-        self.assertIn(
-            "проверь три\nразных tab ID",
-            claimed["prompt"],
-        )
-        self.assertIn(
-            "Запрещено открывать второй или\nтретий target через `goto`",
-            claimed["prompt"],
-        )
-        self.assertIn(
-            "PARALLEL_TAB_PREFLIGHT=distinct_tab_ids_required",
+            "PARALLEL_TAB_PREFLIGHT=single_tab_expected",
             claimed["prompt"],
         )
         self.assertNotIn(

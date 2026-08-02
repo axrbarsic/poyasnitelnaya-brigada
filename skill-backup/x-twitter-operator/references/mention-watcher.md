@@ -339,13 +339,12 @@ authority for queued eligible replies.
    SQLite and the append-only ledger.
 10. Mark the claim `started`, execute the returned prompt in the same Sol turn,
    and remove the lease only if work fails before durable resolution.
-11. Claim at most three oldest pending events. One Browser owner may inspect
-    them in up to three task-owned X tabs, each bound to one immutable event
-    ID. Composer, publication, verification, history import and resolve remain
-    one ordered writer lane. Finish each event end-to-end before the next
-    publication and fall back to one tab on Browser instability or memory
-    pressure. A local Sol Max route uses the local explainer skill and opens no
-    ChatGPT tab.
+11. Claim exactly one oldest pending event in production. The Browser owner
+    uses one task-owned X tab and completes composer, publication,
+    verification, history import and resolve before the next claim. Keep the
+    existing multi-event capability only for an explicit bounded diagnostic
+    experiment. A local Sol Max route uses the local explainer skill and opens
+    no ChatGPT tab.
 12. Never let the watcher, dispatcher, or relay publish. Sol must perform
     live context inspection, fact checking, duplicate prevention, routing,
     composer validation, publication, URL verification, history storage, and
