@@ -287,6 +287,15 @@ class BrowserOwnerRotationTests(unittest.TestCase):
             now=self.now,
         )
 
+        preflight = browser_owner_rotation.archive_preflight(
+            self.config,
+            self.root / "contract.json",
+            rotation_token="token",
+        )
+        self.assertEqual(preflight["status"], "owner_rotation_archive_ready")
+        self.assertEqual(preflight["old_thread_id"], "old-owner")
+        self.assertEqual(preflight["new_thread_id"], "new-owner")
+
         with self.assertRaisesRegex(ValueError, "not archived"):
             browser_owner_rotation.finish(
                 self.config,
@@ -306,6 +315,19 @@ class BrowserOwnerRotationTests(unittest.TestCase):
         state = browser_owner_rotation.load_state(self.root / "rotation.json")
         self.assertIsNone(state["transaction"])
         self.assertEqual(state["generation"], 1)
+
+    @mock.patch("scripts.browser_owner_rotation.uuid.uuid4", return_value="token")
+    def test_archive_preflight_rejects_uncommitted_rotation(
+        self, _uuid: mock.Mock
+    ) -> None:
+        self.reserve()
+
+        with self.assertRaisesRegex(ValueError, "committed"):
+            browser_owner_rotation.archive_preflight(
+                self.config,
+                self.root / "contract.json",
+                rotation_token="token",
+            )
 
     @mock.patch("scripts.browser_owner_rotation.uuid.uuid4", return_value="token")
     def test_failure_before_recording_preserves_recovery_marker(

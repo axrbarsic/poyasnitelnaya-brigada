@@ -204,10 +204,12 @@ an X reply.
     discovery through the Codex task list. Before commit, the replacement's
     title, model, reasoning effort, working directory, and archive state are
     checked against the read-only Codex thread registry. Before the old task is
-    archived, the full doctor must report zero failures. Static task IDs do not
-    belong in the Git contract; doctor resolves the live role through config,
-    verifies that the heartbeat targets the same task, and reports a stale open
-    rotation as a failure.
+    archived, a narrow deterministic preflight rechecks the committed runtime
+    pointer, replacement settings, and exact heartbeat target. This avoids a
+    circular dependency on queue-latency checks that cannot recover until the
+    rotation closes. Static task IDs do not belong in the Git contract; doctor
+    resolves the live role through config, verifies that the heartbeat targets
+    the same task, and reports a stale open rotation as a failure.
 
 Each event resolution can preserve stance, confidence, media meaning, and
 multiple evidence notes. This prevents a media-only reply from disappearing

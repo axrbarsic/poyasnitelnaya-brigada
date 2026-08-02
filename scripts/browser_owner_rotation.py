@@ -503,14 +503,13 @@ def finish(
     path = rotation_state_path(config_path, config)
     with autopilot_dispatch.locked_state(path):
         state = load_state(path)
-        transaction = _require_transaction(state, rotation_token)
-        if transaction.get("phase") != "committed":
-            raise ValueError("rotation must be committed before finish")
-        old_thread_id = str(transaction["old_thread_id"])
-        new_thread_id = str(transaction["new_thread_id"])
-        if _current_owner(config) != new_thread_id:
-            raise ValueError("config does not point to the new owner")
-        _validate_relay(root, config, contract, new_thread_id)
+        transaction, old_thread_id, new_thread_id = _committed_rotation(
+            state,
+            rotation_token,
+            config=config,
+            contract=contract,
+            root=root,
+        )
         if not _old_owner_is_archived(config, old_thread_id):
             raise ValueError("old owner is not archived yet")
         state["generation"] = int(state.get("generation", 0)) + 1
@@ -521,6 +520,56 @@ def finish(
             "completed_at": isoformat(current),
             "handoff_count": transaction.get("handoff_count"),
         }
+
+
+def _committed_rotation(
+    state: dict[str, Any],
+    rotation_token: str,
+    *,
+    config: dict[str, Any],
+    contract: dict[str, Any],
+    root: Path,
+) -> tuple[dict[str, Any], str, str]:
+    transaction = _require_transaction(state, rotation_token)
+    if transaction.get("phase") != "committed":
+        raise ValueError("rotation must be committed before archive")
+    old_thread_id = str(transaction["old_thread_id"])
+    new_thread_id = str(transaction["new_thread_id"])
+    if _current_owner(config) != new_thread_id:
+        raise ValueError("config does not point to the new owner")
+    _validate_new_owner(config, contract, new_thread_id)
+    _validate_relay(root, config, contract, new_thread_id)
+    return transaction, old_thread_id, new_thread_id
+
+
+def archive_preflight(
+    config_path: Path,
+    contract_path: Path,
+    *,
+    rotation_token: str,
+) -> dict[str, Any]:
+    """Prove the replacement is canonical before archiving the old owner."""
+
+    config_path = config_path.expanduser().resolve()
+    contract = read_json(contract_path.expanduser().resolve())
+    root = Path(str(contract["canonical_root"])).expanduser().resolve()
+    config = read_json(config_path)
+    path = rotation_state_path(config_path, config)
+    with autopilot_dispatch.locked_state(path):
+        state = load_state(path)
+        _, old_thread_id, new_thread_id = _committed_rotation(
+            state,
+            rotation_token,
+            config=config,
+            contract=contract,
+            root=root,
+        )
+    return {
+        "status": "owner_rotation_archive_ready",
+        "rotation_token": rotation_token,
+        "old_thread_id": old_thread_id,
+        "new_thread_id": new_thread_id,
+    }
         state["transaction"] = None
         state["last_failure"] = None
         state["updated_at"] = isoformat(current)
@@ -596,6 +645,8 @@ def build_parser() -> argparse.ArgumentParser:
     created.add_argument("--thread-id", required=True)
     committed = commands.add_parser("commit")
     committed.add_argument("--rotation-token", required=True)
+    preflight = commands.add_parser("archive-preflight")
+    preflight.add_argument("--rotation-token", required=True)
     finished = commands.add_parser("finished")
     finished.add_argument("--rotation-token", required=True)
     failed = commands.add_parser("failed")
@@ -616,6 +667,12 @@ def main() -> int:
         )
     elif arguments.command == "commit":
         result = commit(
+            arguments.config,
+            arguments.contract,
+            rotation_token=arguments.rotation_token,
+        )
+    elif arguments.command == "archive-preflight":
+        result = archive_preflight(
             arguments.config,
             arguments.contract,
             rotation_token=arguments.rotation_token,
