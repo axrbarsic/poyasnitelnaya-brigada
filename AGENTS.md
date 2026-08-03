@@ -15,6 +15,9 @@
 
 ## Browser and publication
 
+- Use `gpt-5.6-luna` with reasoning effort `max` as the project default for
+  bounded repository work. Keep deterministic queue and validation mechanics
+  in Python. Use Terra Medium only for bounded read-only research.
 - Use the installed `x-twitter-operator` skill for every X or ChatGPT Browser
   operation.
 - Keep the Browser owner on `gpt-5.6-sol` with reasoning effort `max`.
@@ -52,6 +55,13 @@
   blocker, publication or lost history. The queue snapshot is scanned once,
   ordinary replies finish first, then the mode returns to normal FIFO
   automatically. Events arriving after the snapshot wait for normal FIFO.
+- The same runtime file may temporarily set `mode=author-focus` only after an
+  explicit Alex instruction. Start it with `autopilot_bridge.py
+  start-author-focus --author-id <IMMUTABLE_X_USER_ID>`. The dispatcher claims
+  only queued events whose exact stored numeric author ID is selected. Every
+  other event remains queued and unresolved, without skip, blocker, deletion
+  or catch-up mutation. Stop it with `autopilot_bridge.py stop-author-focus` to
+  restore normal FIFO. Never derive this mode from a display name or handle.
 - If the resource guard defers a run, leave every event unresolved and close
   the scheduled task without Browser work.
 - Use deterministic scripts for queue state, exact IDs, duplicate checks,
@@ -97,10 +107,17 @@
   the inbound queue.
 - Treat helper results as evidence. Sol performs the final live-context
   decision and publication transaction.
-- Every visual publication must preserve the generated image file and SHA-256,
-  prove the populated composer attachment before clicking Reply, and use the
-  official X API with expanded media to prove that the exact published reply
-  contains a `photo` attachment.
+- For `local_sol_max_visual`, create exactly one vertical infographic. Compress
+  the complete chronology, contradictions, and supporting evidence into one
+  mobile-readable canvas instead of a card series. The canvas may carry roughly
+  4-5 times the semantic detail of one former card, but its hierarchy, primary
+  labels, numbering, and arrows must remain legible at phone width. Use more
+  than one image only when Alex gives a newer explicit instruction for that
+  exact target.
+- Every visual publication must preserve every generated image file and
+  SHA-256, prove the exact populated composer attachment count before clicking
+  Reply, and use the official X API with expanded media to prove the same
+  ordered number of unique `photo` attachments in the published reply.
 
 ## Lightpanda public read-only route
 

@@ -20,7 +20,10 @@ except ModuleNotFoundError:
 STATE_VERSION = 2
 NORMAL_MODE = "normal"
 SIMPLE_WAVE_MODE = "simple-wave"
-SUPPORTED_MODES = frozenset({NORMAL_MODE, SIMPLE_WAVE_MODE})
+AUTHOR_FOCUS_MODE = "author-focus"
+SUPPORTED_MODES = frozenset(
+    {NORMAL_MODE, SIMPLE_WAVE_MODE, AUTHOR_FOCUS_MODE}
+)
 SUPPORTED_ROUTES = frozenset(
     {
         "short",
@@ -64,6 +67,13 @@ def _event_id(value: Any) -> str:
     if not event_id.isdigit() or len(event_id) > 19:
         raise ValueError("event id must be numeric")
     return event_id
+
+
+def _author_id(value: Any) -> str:
+    author_id = str(value).strip()
+    if not author_id.isdigit() or len(author_id) > 19:
+        raise ValueError("author id must be numeric")
+    return author_id
 
 
 def _route(value: Any) -> str:
@@ -114,7 +124,21 @@ def validate_state(payload: dict[str, Any]) -> dict[str, Any]:
             raise ValueError("simple wave event IDs must be unique")
         result["simple_wave_event_ids"] = wave_ids
     elif raw_wave_ids not in (None, []):
-        raise ValueError("normal mode must not retain simple wave event IDs")
+        raise ValueError(
+            "non-simple-wave mode must not retain simple wave event IDs"
+        )
+    raw_focus_ids = payload.get("focus_author_ids")
+    if mode == AUTHOR_FOCUS_MODE:
+        if not isinstance(raw_focus_ids, list) or not raw_focus_ids:
+            raise ValueError("author focus IDs must be a non-empty array")
+        focus_ids = [_author_id(value) for value in raw_focus_ids]
+        if len(focus_ids) != len(set(focus_ids)):
+            raise ValueError("author focus IDs must be unique")
+        result["focus_author_ids"] = focus_ids
+    elif raw_focus_ids not in (None, []):
+        raise ValueError(
+            "non-author-focus mode must not retain author focus IDs"
+        )
     for key in ("updated_at", "updated_by"):
         value = payload.get(key)
         if value is not None:
@@ -146,13 +170,35 @@ def locked_state(path: Path) -> Iterator[None]:
 
 def selection_sets(
     state: dict[str, Any],
-    pending_event_ids: Iterable[str],
+    pending_events: Iterable[Any],
 ) -> tuple[frozenset[str], frozenset[str]]:
-    """Return one-wave ordinary priority IDs and temporarily excluded IDs."""
+    """Return temporary priority IDs and excluded IDs for the active mode."""
 
-    pending = {_event_id(value) for value in pending_event_ids}
+    pending: set[str] = set()
+    author_by_event: dict[str, str | None] = {}
+    for value in pending_events:
+        if isinstance(value, dict):
+            event_id = _event_id(value.get("id", value.get("event_id")))
+            raw_author_id = value.get("author_id")
+            author_by_event[event_id] = (
+                _author_id(raw_author_id)
+                if raw_author_id is not None
+                else None
+            )
+        else:
+            event_id = _event_id(value)
+            author_by_event[event_id] = None
+        pending.add(event_id)
     if state["mode"] == NORMAL_MODE:
         return frozenset(), frozenset()
+    if state["mode"] == AUTHOR_FOCUS_MODE:
+        focus = set(state["focus_author_ids"])
+        priority = {
+            event_id
+            for event_id, author_id in author_by_event.items()
+            if author_id in focus
+        }
+        return frozenset(priority), frozenset(pending - priority)
     routes = state["routes"]
     wave = set(state["simple_wave_event_ids"])
     priority = {
@@ -180,6 +226,7 @@ def set_mode(
     updated_at: str,
     updated_by: str,
     pending_event_ids: Iterable[str] = (),
+    focus_author_ids: Iterable[str] = (),
 ) -> dict[str, Any]:
     with locked_state(path):
         state = load(path)
@@ -192,6 +239,16 @@ def set_mode(
             )
         else:
             state.pop("simple_wave_event_ids", None)
+        if selected_mode == AUTHOR_FOCUS_MODE:
+            focus_ids = sorted(
+                {_author_id(value) for value in focus_author_ids},
+                key=int,
+            )
+            if not focus_ids:
+                raise ValueError("author focus requires at least one author ID")
+            state["focus_author_ids"] = focus_ids
+        else:
+            state.pop("focus_author_ids", None)
         state["updated_at"] = updated_at
         state["updated_by"] = updated_by
         write(path, state)
@@ -275,6 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--updated-at", required=True)
     mode.add_argument("--updated-by", default="Alex")
     mode.add_argument("--event-id", action="append", default=[])
+    mode.add_argument("--author-id", action="append", default=[])
     return parser
 
 
@@ -289,6 +347,7 @@ def main(argv: list[str] | None = None) -> int:
             updated_at=arguments.updated_at,
             updated_by=arguments.updated_by,
             pending_event_ids=arguments.event_id,
+            focus_author_ids=arguments.author_id,
         )
     json.dump(result, sys.stdout, ensure_ascii=False, sort_keys=True)
     sys.stdout.write("\n")

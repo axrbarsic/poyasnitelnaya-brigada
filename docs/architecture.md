@@ -204,23 +204,35 @@ an X reply.
     public turns and exact Alex children from any stored conversation. A deeper
     `commenter-history` query can search all retained years without adding the
     full archive to every Sol prompt.
-20. `x_archive_import.py` stages Alex's historical public posts and replies
+20. The same claim includes `author_dossier`, a derived navigation view over
+    the existing SQLite source of truth. It combines a small recent sample with
+    separately ranked context-relevant records, exact status URLs and compact
+    conversation summaries. Its labels and retrieval scores are not evidence.
+    Sol must open the exact source-linked record before quoting it or asserting
+    a contradiction. This keeps per-author continuity without cloning a second
+    knowledge bank or dumping the full history into every prompt.
+21. `var/inbound-route-control.json` can hold an explicit temporary
+    `author-focus` mode keyed only by immutable numeric X user IDs. The queue
+    selector exposes matching events to the one owner and excludes all others
+    from claims while preserving them unresolved. Stopping the mode restores
+    normal FIFO without rewriting events or resolutions.
+22. `x_archive_import.py` stages Alex's historical public posts and replies
     from an official X archive. It validates the archive account against the
     configured numeric X user ID, ignores direct-message members, and rejects
     append-only conflicts. Archive replies are exposed separately from exact
     incoming interaction history because the archive does not contain a
     complete copy of other users' turns.
-21. `candidate_corpus.py` stores externally collected public posts in a
+23. `candidate_corpus.py` stores externally collected public posts in a
     quarantined index keyed by stable X user ID. It exposes at most three
     compact search hints per event. Unverified hints have
     `usable_as_evidence=false`; only an append-only live X or official API
     verification can promote the exact observed record.
-22. Conversation tail search is not broad discovery. It watches only recent
+24. Conversation tail search is not broad discovery. It watches only recent
     chains already containing an exact Alex turn, excludes Alex's own posts,
     applies a bounded first lookback, and reuses immutable event ID
     deduplication. X bills read endpoints per returned resource and normally
     deduplicates the same resource within one UTC day.
-23. Scheduled outbound reuses the existing one-minute self-owned `x-relay`; standalone
+25. Scheduled outbound reuses the existing one-minute self-owned `x-relay`; standalone
     cron `x-15` remains paused. After repair and inbound routing, the relay may
     atomically reserve one outbound attempt for the current 10-minute window
     only when the inbound queue is exactly empty and both writer leases are
@@ -228,7 +240,7 @@ an X reply.
     after generation, and immediately before publication. Any single inbound
     event releases the outbound claim through `pause-slot`. Skipped windows do
     not accumulate catch-up debt and are never replayed later.
-24. The Browser owner is a bounded worker, not a permanent conversation. After
+26. The Browser owner is a bounded worker, not a permanent conversation. After
     `autopilot_owner_rotation_after_runs` completed runs, the next heartbeat
     reserves a durable rotation transaction. One clean local Sol Max task is
     created, the existing `x-relay` heartbeat is retargeted through the official
@@ -246,6 +258,15 @@ an X reply.
     rotation closes. Static task IDs do not belong in the Git contract; doctor
     resolves the live role through config, verifies that the heartbeat targets
     the same task, and reports a stale open rotation as a failure.
+27. Model routing is explicit and versioned. The project default is Luna Max
+    for bounded repository work. Deterministic queue, lease, duplicate, length
+    and timestamp operations stay in Python. The authenticated Browser owner
+    and final reply author remain Sol Max. Terra Medium is reserved for bounded
+    read-only research. Codex does not currently provide a reliable temporary
+    model override scoped to one skill inside an already running turn, so the
+    system never pretends that a Luna owner silently became Sol for v2 text.
+    The three-run owner rotation bounds context growth while preserving one
+    unarchived owner and one writer lane.
 
 Each event resolution can preserve stance, confidence, media meaning, and
 multiple evidence notes. This prevents a media-only reply from disappearing

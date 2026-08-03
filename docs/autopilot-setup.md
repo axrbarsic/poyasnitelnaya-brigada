@@ -77,7 +77,7 @@ Create ignored `config.json` from the example and set:
   "browser_owner_cwd": ".",
   "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
   "codex_project_id": "CODEX_PROJECT_ID",
-  "autopilot_owner_rotation_after_runs": 20,
+  "autopilot_owner_rotation_after_runs": 3,
   "autopilot_owner_rotation_state_file": "var/browser-owner-rotation.json",
   "desktop_relay_mode": "in_app_heartbeat",
   "desktop_auto_quit_after_work": true,
@@ -233,6 +233,15 @@ visible as WARN throughout the handoff and does not reset on repeated kicks.
 - No helper model transports work, analyzes X content, or drafts responses.
   The self-owned Sol Max task reads the deterministic route and executes it.
 - The resource guard pauses Browser work without deleting queued events.
+- An explicit temporary author focus is set with
+  `python3 scripts/autopilot_bridge.py --config config.json
+  start-author-focus --author-id <IMMUTABLE_X_USER_ID>`. Only matching events
+  enter claims. Every other event stays queued and unresolved. Restore normal
+  FIFO with `stop-author-focus`; never select an author by handle or display
+  name.
+- Each claim carries compact recent `commenter_memory` plus a context-aware
+  `author_dossier`. The dossier is source-linked navigation only. Exact public
+  records must be reopened before quotation or contradiction claims.
 - Renderer limits use 256 MiB RSS equivalents, while the raw process count and
   total renderer RSS remain visible. Cached lightweight renderer processes do
   not block Browser work merely because a Codex release creates more of them.

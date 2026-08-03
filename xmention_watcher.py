@@ -141,6 +141,28 @@ def commenter_history_for_event(
     )
 
 
+AUTHOR_DOSSIER_CONTRACT = watcher_memory.AUTHOR_DOSSIER_CONTRACT
+
+
+def author_dossier_for_event(
+    connection: sqlite3.Connection,
+    event_id: str,
+    *,
+    limit: int,
+    query_text: str | None = None,
+    include_recent: bool = True,
+    excluded_status_ids: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    return watcher_memory.author_dossier_for_event(
+        connection,
+        event_id,
+        limit=limit,
+        query_text=query_text,
+        include_recent=include_recent,
+        excluded_status_ids=excluded_status_ids,
+    )
+
+
 refresh_wake_file = watcher_events.refresh_wake_file
 
 
@@ -876,6 +898,26 @@ def _handle_commenter_history(
     return 0
 
 
+def _handle_author_dossier(
+    args: argparse.Namespace,
+    config: Config,
+    connection: sqlite3.Connection,
+) -> int:
+    del config
+    try:
+        print_json(
+            author_dossier_for_event(
+                connection,
+                args.event_id,
+                limit=args.limit,
+                query_text=args.query,
+            )
+        )
+    except (KeyError, ValueError) as error:
+        return _blocked_result(error, status="not_found")
+    return 0
+
+
 def _handle_ack(
     args: argparse.Namespace,
     config: Config,
@@ -992,6 +1034,7 @@ def _database_command_handlers() -> dict[str, Callable[..., int]]:
         "history-show": _handle_history_show,
         "memory-audit": _handle_memory_audit,
         "commenter-history": _handle_commenter_history,
+        "author-dossier": _handle_author_dossier,
         "ack": _handle_ack,
         "resolve": _handle_resolve,
         "revise-resolution": _handle_revise_resolution,

@@ -348,6 +348,7 @@ def _validate_generation(evidence: dict[str, Any]) -> str:
     web_used = generation.get("chatgpt_web_used")
     allowed_profiles = {
         "local_sol_max",
+        "local_sol_max_visual",
         "sol_short",
         "short_sol_max",
         "satirical_377",
@@ -360,13 +361,20 @@ def _validate_generation(evidence: dict[str, Any]) -> str:
         raise ValueError("Published outcome must use gpt-5.6-sol")
     if _required_text(generation, "reasoning_effort") != "max":
         raise ValueError("Published outcome must use reasoning_effort=max")
-    if profile == "local_sol_max":
+    if profile in {"local_sol_max", "local_sol_max_visual"}:
         if skill != "poyasnitelnaya-brigada-v2":
             raise ValueError(
-                "local_sol_max must use poyasnitelnaya-brigada-v2"
+                "Local Sol Max outcomes must use poyasnitelnaya-brigada-v2"
             )
         if web_used is not False:
-            raise ValueError("local_sol_max must not use ChatGPT web")
+            raise ValueError("Local Sol Max outcomes must not use ChatGPT web")
+        if (
+            profile == "local_sol_max_visual"
+            and generation.get("visual_skill") != "imagegen"
+        ):
+            raise ValueError(
+                "local_sol_max_visual must use visual_skill=imagegen"
+            )
     elif profile in {"sol_short", "short_sol_max"}:
         if skill is not None:
             raise ValueError(
@@ -404,36 +412,114 @@ def _validate_generated_media(
     *,
     profile: str,
     report: dict[str, Any],
-) -> Path | None:
+) -> list[Path]:
     media_profiles = {
+        "local_sol_max_visual",
         "satirical_377",
         "commenter_requested_image",
         "lozhkin_web",
     }
     if profile not in media_profiles:
-        return None
+        return []
     generation = _required_object(evidence, "generation")
-    media_path = _evidence_file(
-        event_dir,
-        _required_text(generation, "media_file"),
-    )
-    if media_path.stat().st_size <= 0:
-        raise ValueError("Generated media file is empty")
-    actual_sha = hashlib.sha256(media_path.read_bytes()).hexdigest()
-    if _required_text(generation, "media_sha256") != actual_sha:
-        raise ValueError("Generated media SHA-256 does not match")
-    actual_mime = _image_mime_type(media_path)
-    if _required_text(generation, "media_mime_type") != actual_mime:
-        raise ValueError("Generated media MIME type does not match")
+    raw_media_files = generation.get("media_files")
+    if profile == "local_sol_max_visual" and raw_media_files is None:
+        raise ValueError(
+            "local_sol_max_visual must use generation.media_files"
+        )
+    if raw_media_files is None:
+        media_records = [
+            {
+                "file": _required_text(generation, "media_file"),
+                "sha256": _required_text(generation, "media_sha256"),
+                "mime_type": _required_text(generation, "media_mime_type"),
+            }
+        ]
+    else:
+        if not isinstance(raw_media_files, list):
+            raise ValueError("generation.media_files must be an array")
+        if not 1 <= len(raw_media_files) <= 4:
+            raise ValueError("generation.media_files must contain 1 to 4 items")
+        if not all(isinstance(item, dict) for item in raw_media_files):
+            raise ValueError("generation.media_files items must be objects")
+        media_records = raw_media_files
+
+    media_paths: list[Path] = []
+    seen_paths: set[Path] = set()
+    for index, item in enumerate(media_records, start=1):
+        assert isinstance(item, dict)
+        try:
+            file_name = _required_text(item, "file")
+            expected_sha = _required_text(item, "sha256")
+            expected_mime = _required_text(item, "mime_type")
+        except ValueError as error:
+            raise ValueError(
+                f"Invalid generated media item {index}: {error}"
+            ) from error
+        media_path = _evidence_file(event_dir, file_name)
+        if media_path in seen_paths:
+            raise ValueError("generation.media_files contains a duplicate file")
+        seen_paths.add(media_path)
+        if media_path.stat().st_size <= 0:
+            raise ValueError(f"Generated media file {index} is empty")
+        actual_sha = hashlib.sha256(media_path.read_bytes()).hexdigest()
+        if expected_sha != actual_sha:
+            raise ValueError(
+                f"Generated media SHA-256 does not match for item {index}"
+            )
+        actual_mime = _image_mime_type(media_path)
+        if expected_mime != actual_mime:
+            raise ValueError(
+                f"Generated media MIME type does not match for item {index}"
+            )
+        media_paths.append(media_path)
+
     if generation.get("composer_attachment_verified") is not True:
         raise ValueError("Composer attachment was not verified")
+    if raw_media_files is not None:
+        if generation.get("composer_attachment_count") != len(media_paths):
+            raise ValueError(
+                "Composer attachment count does not match generated media"
+            )
     published_media = report.get("published_media")
     if not isinstance(published_media, list) or not published_media:
         raise ValueError("Official X report lacks published media records")
+    if not all(isinstance(item, dict) for item in published_media):
+        raise ValueError("Official X media records must be objects")
+    if len(published_media) != len(media_paths):
+        raise ValueError(
+            "Official X media count does not match generated media count"
+        )
+    if int(report.get("media_count") or 0) != len(media_paths):
+        raise ValueError(
+            "Official X media_count does not match generated media count"
+        )
+    if any(item.get("type") != "photo" for item in published_media):
+        raise ValueError("Every generated media attachment must be a photo")
+    published_media_keys = [
+        str(item.get("media_key") or "") for item in published_media
+    ]
+    if any(not value for value in published_media_keys):
+        raise ValueError("Official X media record lacks media_key")
+    if len(set(published_media_keys)) != len(published_media_keys):
+        raise ValueError("Official X media records contain duplicate media_key")
+    if raw_media_files is not None:
+        for index, (local_item, published_item) in enumerate(
+            zip(media_records, published_media, strict=True),
+            start=1,
+        ):
+            assert isinstance(local_item, dict)
+            if _required_text(
+                local_item,
+                "published_media_key",
+            ) != str(published_item.get("media_key") or ""):
+                raise ValueError(
+                    f"Published media key does not match local item {index}"
+                )
     reply = _required_object(evidence, "reply")
     if reply.get("media") != published_media:
         raise ValueError("Reply media does not match official X report")
-    return media_path
+    return media_paths
 
 
 def _validated_published_reply(
@@ -477,6 +563,7 @@ def _published_fields(
 ) -> tuple[dict[str, Any], list[Path]]:
     profile = _validate_generation(evidence)
     require_media = profile in {
+        "local_sol_max_visual",
         "satirical_377",
         "commenter_requested_image",
         "lozhkin_web",
@@ -500,7 +587,7 @@ def _published_fields(
         exact_text=exact_text,
         require_media=require_media,
     )
-    media_path = _validate_generated_media(
+    media_paths = _validate_generated_media(
         event_dir,
         evidence,
         profile=profile,
@@ -517,7 +604,7 @@ def _published_fields(
         },
         [
             report_path,
-            *([media_path] if media_path is not None else []),
+            *media_paths,
         ],
     )
 

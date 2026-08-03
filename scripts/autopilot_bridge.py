@@ -92,7 +92,7 @@ def route_selection(
     )
     priority_ids, excluded_ids = inbound_route_control.selection_sets(
         state,
-        pending_ids,
+        pending_events,
     )
     return state, priority_ids, excluded_ids
 
@@ -445,7 +445,32 @@ def _enriched_claim_event(
         )
     except (KeyError, ValueError):
         memory = _fallback_commenter_memory(event_id)
-    enriched = {**event, "commenter_memory": memory}
+    recent_status_ids = frozenset(
+        str(record["status_id"])
+        for record in memory.get("interactions", [])
+    )
+    try:
+        dossier = watcher.author_dossier_for_event(
+            connection,
+            event_id,
+            limit=watcher_config.commenter_memory_limit,
+            query_text=None,
+            include_recent=False,
+            excluded_status_ids=recent_status_ids,
+        )
+    except (KeyError, ValueError):
+        dossier = {
+            "event_id": event_id,
+            "identity_kind": "unavailable",
+            "dossier_contract": watcher.AUTHOR_DOSSIER_CONTRACT,
+            "conversation_summaries": [],
+            "relevant_interactions": [],
+        }
+    enriched = {
+        **event,
+        "commenter_memory": memory,
+        "author_dossier": dossier,
+    }
     parent_profile = manual_parent_continuation_profile(
         connection,
         event_id,
@@ -1008,6 +1033,45 @@ def start_simple_wave(config_path: Path) -> dict[str, Any]:
     }
 
 
+def start_author_focus(
+    config_path: Path,
+    author_ids: list[str],
+) -> dict[str, Any]:
+    """Temporarily claim only events from immutable selected author IDs."""
+
+    config = autopilot_dispatch.read_json(config_path)
+    path = route_control_path(config_path, config)
+    state = inbound_route_control.set_mode(
+        path,
+        mode=inbound_route_control.AUTHOR_FOCUS_MODE,
+        updated_at=autopilot_dispatch.isoformat(),
+        updated_by="Alex",
+        focus_author_ids=author_ids,
+    )
+    return {
+        "status": "author_focus_started",
+        "mode": state["mode"],
+        "focus_author_ids": state["focus_author_ids"],
+    }
+
+
+def stop_author_focus(config_path: Path) -> dict[str, Any]:
+    """Restore normal FIFO without rewriting or resolving queued events."""
+
+    config = autopilot_dispatch.read_json(config_path)
+    path = route_control_path(config_path, config)
+    state = inbound_route_control.set_mode(
+        path,
+        mode=inbound_route_control.NORMAL_MODE,
+        updated_at=autopilot_dispatch.isoformat(),
+        updated_by="Alex",
+    )
+    return {
+        "status": "author_focus_stopped",
+        "mode": state["mode"],
+    }
+
+
 def mark_failed(
     config_path: Path,
     claim_token: str,
@@ -1054,6 +1118,9 @@ def build_parser() -> argparse.ArgumentParser:
         choices=sorted(inbound_route_control.SUPPORTED_ROUTES),
     )
     subparsers.add_parser("start-simple-wave")
+    author_focus = subparsers.add_parser("start-author-focus")
+    author_focus.add_argument("--author-id", action="append", required=True)
+    subparsers.add_parser("stop-author-focus")
     completed = subparsers.add_parser("completed")
     completed.add_argument("--claim-token", required=True)
     completed.add_argument("--warning")
@@ -1106,6 +1173,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif arguments.command == "start-simple-wave":
         result = start_simple_wave(arguments.config)
+    elif arguments.command == "start-author-focus":
+        result = start_author_focus(
+            arguments.config,
+            arguments.author_id,
+        )
+    elif arguments.command == "stop-author-focus":
+        result = stop_author_focus(arguments.config)
     elif arguments.command == "completed":
         result = mark_completed(
             arguments.config,

@@ -2035,6 +2035,48 @@ class WatcherTests(unittest.TestCase):
             "https://x.com/axrbarsic/status/3002",
         )
 
+    def test_author_dossier_combines_recency_and_context_relevance(self) -> None:
+        self.insert_direct_event(
+            event_id="3001",
+            created_at="2020-01-02T03:04:05Z",
+            conversation_id="3000",
+            parent_status_id="2999",
+            text="Договор НАТО требует назвать точную статью и правило вывода",
+        )
+        self.insert_direct_event(
+            event_id="4001",
+            created_at="2026-07-25T19:00:00Z",
+            conversation_id="4000",
+            parent_status_id="3999",
+            text="Совсем другая реплика про котов и погоду",
+        )
+        self.insert_direct_event(
+            event_id="5001",
+            created_at="2026-07-25T20:00:00Z",
+            conversation_id="5000",
+            parent_status_id="4999",
+            text="Какое правило связывает НАТО и договор с этим выводом",
+        )
+
+        result = watcher.author_dossier_for_event(
+            self.connection,
+            "5001",
+            limit=1,
+        )
+
+        self.assertEqual(result["identity_kind"], "x_user_id")
+        self.assertEqual(result["total_prior_interactions"], 2)
+        self.assertEqual(
+            result["recent_interactions"][0]["status_id"],
+            "4001",
+        )
+        self.assertEqual(
+            result["relevant_interactions"][0]["status_id"],
+            "3001",
+        )
+        self.assertEqual(len(result["conversation_summaries"]), 2)
+        self.assertIn("navigation", result["dossier_contract"])
+
     def test_mandatory_response_requires_terminal_blocker_code(self) -> None:
         watcher.ingest_response(
             self.config,

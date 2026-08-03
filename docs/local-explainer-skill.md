@@ -27,6 +27,29 @@ changes. It never treats a qualification as a contradiction or silence as a
 concession. Versioned cases live in
 `tests/fixtures/poyasnitelnaya_brigada_v2_cases.json`.
 
+## Argumentation contract basis
+
+V2 does not depend on one magic prompt. Its structure combines established
+approaches:
+
+- the staged argument, evidence, and rebuttal architecture of Project Debater:
+  <https://www.nature.com/articles/s41586-021-03215-w>;
+- argumentation schemes and critical questions for explicit burden tracking:
+  <https://informallogica.ca/index.php/informal_logic/article/view/485>;
+- ChangeMyView findings that effective replies address a vulnerable part of
+  the actual reasoning: <https://aclanthology.org/N18-1010/>;
+- the public correction structure in the Debunking Handbook 2020:
+  <https://skepticalscience.com/docs/DebunkingHandbook2020.pdf>.
+- context-aware retrieval of relevant history instead of a static profile:
+  <https://aclanthology.org/2026.findings-acl.858/>.
+
+These sources motivate `neutral_question`, `burden_ledger`, and
+`inference_bridge`. Loaded binary framing is separated from an unstated
+consequence, while a self-awarded victory must identify a concrete error.
+Naive multi-agent debate is not treated as a truth source because false
+consensus can amplify across rounds: <https://arxiv.org/abs/2509.05396>.
+Behavior is judged through versioned replay cases, not one impressive reply.
+
 ## Input
 
 The Browser owner restores the exact target and relevant chain from X, SQLite,
@@ -74,6 +97,24 @@ python3 scripts/verify_x_note_tweet.py \
 ```
 
 Only `valid=true` permits durable completion.
+
+### Visual supplement for V2
+
+When Alex explicitly asks to strengthen a complete V2 reply with images, the
+owner uses the `local_sol_max_visual` profile. The self-contained text still
+comes from `poyasnitelnaya-brigada-v2`, while local `imagegen` creates exactly
+one vertical infographic. It compresses the complete chronology,
+contradictions, and evidence into one mobile-readable canvas instead of a card
+series. The canvas may carry roughly 4-5 times the semantic detail of one old
+card, but its hierarchy and primary labels must remain legible at phone width.
+The visual never replaces facts, sources, or the reply.
+
+Durable evidence stores one `generation.media_files` object with its local
+file, SHA-256, MIME type, and official `published_media_key`. The owner proves
+`composer_attachment_count=1` before clicking. After publication, the official
+X API must return the same unique `photo` attachment. Any mismatch leaves the
+event unresolved and forbids another click until the live thread is checked
+again. Historical evidence with up to four cards remains valid.
 
 After a verified publication, build the exact two-turn local history from the
 same evidence object and import it into the watcher database:

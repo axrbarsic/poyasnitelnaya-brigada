@@ -95,6 +95,38 @@ class InboundRouteControlTests(unittest.TestCase):
         self.assertEqual(priority, frozenset())
         self.assertEqual(excluded, frozenset())
 
+    def test_author_focus_excludes_other_authors_without_resolving_them(
+        self,
+    ) -> None:
+        inbound_route_control.set_mode(
+            self.state,
+            mode="author-focus",
+            updated_at="2026-08-03T20:00:00Z",
+            updated_by="Alex",
+            focus_author_ids=["902"],
+        )
+
+        priority, excluded = inbound_route_control.selection_sets(
+            inbound_route_control.load(self.state),
+            [
+                {"id": "101", "author_id": "901"},
+                {"id": "102", "author_id": "902"},
+                {"id": "103", "author_id": None},
+            ],
+        )
+
+        self.assertEqual(priority, frozenset({"102"}))
+        self.assertEqual(excluded, frozenset({"101", "103"}))
+
+        restored = inbound_route_control.set_mode(
+            self.state,
+            mode="normal",
+            updated_at="2026-08-03T20:01:00Z",
+            updated_by="Alex",
+        )
+        self.assertNotIn("focus_author_ids", restored)
+        self.assertEqual(restored["mode"], "normal")
+
     def test_route_cannot_be_reclassified_silently(self) -> None:
         inbound_route_control.record_route(
             self.state,

@@ -110,6 +110,52 @@ class AutopilotBridgeTests(unittest.TestCase):
             {first["event_id"], second["event_id"]},
         )
 
+    def test_author_focus_claims_only_selected_author(self) -> None:
+        payload = json.loads(self.config.read_text(encoding="utf-8"))
+        payload["autopilot_max_claim_events"] = 3
+        self.config.write_text(json.dumps(payload), encoding="utf-8")
+        other = self.event()
+        focus = self.event()
+        focus["event_id"] = "2081050838240211435"
+        focus["event_url"] = (
+            "https://x.com/focus/status/2081050838240211435"
+        )
+        focus["author_id"] = "902"
+        self.write_events([other, focus])
+
+        started = autopilot_bridge.start_author_focus(
+            self.config,
+            ["902"],
+        )
+        gated = autopilot_bridge.gate(self.config, lease_seconds=1800)
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        self.assertEqual(started["mode"], "author-focus")
+        self.assertEqual(gated["event_ids"], [focus["event_id"]])
+        self.assertEqual(claimed["event_ids"], [focus["event_id"]])
+
+    def test_author_focus_pauses_queue_when_selected_author_is_absent(
+        self,
+    ) -> None:
+        other = self.event()
+        self.write_events([other])
+        autopilot_bridge.start_author_focus(self.config, ["902"])
+
+        gated = autopilot_bridge.gate(self.config, lease_seconds=1800)
+
+        self.assertFalse(gated["dispatch"])
+        self.assertEqual(gated["status"], "route_paused")
+        self.assertEqual(gated["paused_event_ids"], [other["event_id"]])
+        self.assertEqual(gated["queued_event_ids"], [other["event_id"]])
+
+        stopped = autopilot_bridge.stop_author_focus(self.config)
+        resumed = autopilot_bridge.gate(self.config, lease_seconds=1800)
+
+        self.assertEqual(stopped["status"], "author_focus_stopped")
+        self.assertTrue(resumed["dispatch"])
+        self.assertEqual(resumed["event_ids"], [other["event_id"]])
+        self.assertEqual(resumed["inbound_route_mode"], "normal")
+
     def test_simple_only_gate_prioritizes_known_short_and_skips_local_max(
         self,
     ) -> None:
@@ -727,8 +773,10 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertIn("list_threads", prompt)
         self.assertIn("limit=50", prompt)
         self.assertIn("canonical_root", prompt)
-        self.assertIn("cwd дословно равен", prompt)
-        self.assertIn("old_thread_id никогда не считай заменой", prompt)
+        self.assertIn("cwd дословно равный", prompt)
+        self.assertIn("Никогда не используй совпадение только по cwd", prompt)
+        self.assertIn("Команда created сама проверяет model", prompt)
+        self.assertNotIn("строгий fallback", prompt)
         self.assertNotIn("limit=100", prompt)
         self.assertIn("automation_update", prompt)
         self.assertIn("set_thread_archived", prompt)
@@ -908,12 +956,23 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertIn("Content-based skip запрещен", result["prompt"])
         self.assertIn("`satirical-media`", result["prompt"])
         self.assertIn("`requested-media`", result["prompt"])
+        self.assertIn("generation_profile=`local_sol_max_visual`", result["prompt"])
+        self.assertIn("создаёт ровно одну", result["prompt"])
+        self.assertIn("вертикальную инфографику", result["prompt"])
+        self.assertIn("примерно в 4-5 раз", result["prompt"])
+        self.assertIn("не разбивай материал на серию", result["prompt"])
+        self.assertIn("`composer_attachment_count=1`", result["prompt"])
         self.assertIn("skill `imagegen`", result["prompt"])
         self.assertIn("--require-media", result["prompt"])
         self.assertIn("локальный skill `377`", result["prompt"])
         self.assertIn("`Ложкин`", result["prompt"])
         self.assertIn("`commenter_memory`", result["prompt"])
         self.assertIn('"commenter_memory":', result["prompt"])
+        self.assertIn("`author_dossier`", result["prompt"])
+        self.assertIn('"author_dossier":', result["prompt"])
+        self.assertIn("author-dossier EVENT_ID --limit N", result["prompt"])
+        self.assertIn("`INBOUND_ROUTE_MODE=author-focus`", result["prompt"])
+        self.assertIn("immutable numeric X user ID", result["prompt"])
         self.assertIn("Выбери short, local-max", result["prompt"])
         self.assertIn(
             "не означает модель ChatGPT Pro",
@@ -1031,7 +1090,10 @@ class AutopilotBridgeTests(unittest.TestCase):
 
         self.assertIn('"identity_kind":"x_user_id"', result["prompt"])
         self.assertIn("Prior exact public claim", result["prompt"])
+        self.assertEqual(result["prompt"].count("Prior exact public claim"), 1)
         self.assertIn("Prior exact Alex reply", result["prompt"])
+        self.assertIn('"author_dossier":', result["prompt"])
+        self.assertIn('"total_prior_interactions":1', result["prompt"])
 
     def test_manual_parent_is_stored_and_live_chain_is_required(self) -> None:
         watcher_config = watcher.load_config(self.config)

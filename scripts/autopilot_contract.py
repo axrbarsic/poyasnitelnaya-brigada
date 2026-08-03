@@ -70,6 +70,10 @@ composer: он может изменить текст. Если composer изм�
 закрой task-owned вкладки и заверши turn. Для mixed claim после исключения
 local-max продолжай только оставшиеся short, requested-media,
 satirical-media и already-answered события.
+При `INBOUND_ROUTE_MODE=author-focus` dispatcher уже отфильтровал claim по
+immutable numeric X user ID. Обрабатывай только полученные events. Не ищи, не
+claim, не skip, не block и не resolve события других авторов, не меняй route
+policy из Browser owner. Они остаются durable queued до явной отмены режима.
 Не готовь весь пакет целиком перед первой публикацией. Если Browser замедлился,
 потерял вкладку или выросло давление памяти, закрой лишние task-owned вкладки и
 продолжай с одной, не освобождая unresolved event.
@@ -136,6 +140,13 @@ reasoning_effort=max.
 Если краткой выборки недостаточно, получи более глубокую историю командой
 `commenter-history EVENT_ID --limit N`. Давность сама по себе не запрещает
 релевантную ссылку на прежний публичный разговор.
+`author_dossier` дополняет эту выборку контекстно релевантными прежними
+репликами, сводкой веток и производными навигационными метками. Это карта
+поиска, не первичное доказательство и не психологический профиль. Перед
+цитатой, заявлением о противоречии или хронологическим выводом открой точный
+source-linked status и проверь текст, автора, дату и контекст. Если досье
+усечено или релевантной записи недостаточно, выполни
+`author-dossier EVENT_ID --limit N`, затем проверяй точные источники.
 `candidate_public_posts` внутри памяти являются только поисковыми подсказками.
 Если `usable_as_evidence=false`, запрещено цитировать запись, утверждать
 противоречие или использовать ее как факт до проверки точного живого поста X
@@ -176,6 +187,21 @@ resolution.
 защищенные признаки или выдуманные действия автора. Если безопасная картинка
 не получилась, опубликуй Sol text reply, не skip.
 
+Если Alex прямо требует полноценный ответ `poyasnitelnaya-brigada-v2` с
+визуальным дополнением, сохрани классификацию `local-max` и используй
+generation_profile=`local_sol_max_visual`: текст создаёт
+`poyasnitelnaya-brigada-v2`, а локальный `imagegen` создаёт ровно одну
+вертикальную инфографику. Собери всю хронологию, противоречия и доказательства
+на одном полотне, не разбивай материал на серию. Допустима смысловая плотность
+примерно в 4-5 раз выше одной прежней карточки, но иерархия, основные подписи,
+нумерация и стрелки обязаны читаться на телефоне. Изображение только усиливает
+уже законченный текст и не заменяет доказательство. Не открывай ChatGPT.
+Сохрани один объект в `generation.media_files` с `file`, `sha256`, `mime_type`,
+а после API-проверки добавь `published_media_key`. Укажи
+`composer_attachment_count=1` и проверь единственный attachment в точном
+composer до единственного клика Reply. Используй больше одного изображения
+только по более новой прямой команде Alex для точного target.
+
 Если комментатор явно просит @axrbarsic создать картинку, фотографию,
 иллюстрацию, мем, схему, график или инфографику, выбери `requested-media`.
 Это отдельный обязательный маршрут, не `377` по умолчанию и не повод для
@@ -207,9 +233,10 @@ resolution.
 восстановленный официальный `note_tweet` обязан byte-for-byte совпасть с
 validated source. Для short route выполни ту же команду: если `note_tweet`
 отсутствует, verifier обязан проверить обычные `text` и `entities`, а не считать
-это ошибкой и не повторять публикацию. Для `requested-media`, `satirical-media`
-и `Ложкин` добавь `--require-media`: отчёт обязан доказать хотя бы один
-официально расширенный attachment типа `photo`. Сохрани JSON-отчет проверки. Соблюдай
+это ошибкой и не повторять публикацию. Для `local_sol_max_visual`,
+`requested-media`, `satirical-media` и `Ложкин` добавь `--require-media`:
+отчёт обязан доказать точное число официально расширенных attachment типа
+`photo`. Сохрани JSON-отчет проверки. Соблюдай
 MAX_PARALLEL_X_READ_TABS и немедленно переходи на
 одну X-вкладку при Browser instability или повышенном memory pressure. Вкладку
 ChatGPT открывай только для
@@ -243,11 +270,17 @@ Blocked содержит terminal blocker и verification. Target обязан �
 сохраненного API event. `verification.verified_at` должен быть timezone-aware.
 Для published outcome укажи generation_profile: `local_sol_max` с
 generation_skill=`poyasnitelnaya-brigada-v2`, `sol_short` без skill,
+`local_sol_max_visual` с generation_skill=`poyasnitelnaya-brigada-v2` и
+visual_skill=`imagegen`,
 `commenter_requested_image` со skill=`imagegen`, `satirical_377` со
 skill=`377` либо явно разрешенный `lozhkin_web` со skill=`lozhkin`. Для каждого
-визуального профиля сохрани локальный media file, SHA-256, MIME,
-composer_attachment_verified=true и точный массив `reply.media` из
-официального API report. Все профили выполняет owner gpt-5.6-sol с effort=max;
+визуального профиля сохрани от одного до четырёх локальных media files,
+SHA-256 и MIME каждого, composer_attachment_verified=true, точный
+composer_attachment_count и точный массив `reply.media` из
+официального API report. Для `local_sol_max_visual` текущий контракт требует
+ровно один media file и `composer_attachment_count=1`; общий диапазон 1-4
+сохраняется для исторических evidence и других визуальных профилей. Все профили
+выполняет owner gpt-5.6-sol с effort=max;
 ChatGPT web допустим только для `lozhkin_web`. Сразу после проверки одного
 события выполни:
 `python3 scripts/commit_browser_owner_event.py --config config.json

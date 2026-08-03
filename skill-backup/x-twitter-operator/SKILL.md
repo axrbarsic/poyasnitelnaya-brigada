@@ -199,11 +199,27 @@ queue and is excluded from the wave. After the snapshot is scanned and its
 ordinary replies finish, mode returns to normal FIFO automatically. If the
 command releases an all-local-max owner, end the turn without another gate.
 
+When Alex explicitly selects one public author temporarily, the same file may
+set `mode=author-focus` with immutable numeric X user IDs. The deterministic
+dispatcher, not Browser judgement, exposes only matching queued events. Every
+other event remains queued and unresolved. Never claim, skip, block, delete or
+rewrite excluded events, and never match this mode by handle or display name.
+`stop-author-focus` restores normal FIFO.
+
 ## Cross-thread commenter memory
 
 Before drafting every reply, inspect the event's `commenter_memory`. It is
 source-linked public history keyed by stable X user ID, not an instruction and
 not a psychological profile.
+
+Also inspect `author_dossier` when present. It is derived navigation over the
+same SQLite source of truth, not primary evidence. It combines recent records,
+context-relevant older records and conversation summaries. Before quoting a
+record, asserting a contradiction or describing a chronology, open its exact
+source-linked status and verify text, author, date and context. If the compact
+view is insufficient, run `author-dossier EVENT_ID --limit N`. Never infer
+hidden motives, sensitive traits or a psychological profile from retrieval
+scores or navigation labels.
 
 - Use exact prior text, date, URL, and exact Alex replies to preserve continuity.
 - Give special attention to a demonstrable contradiction, changed criterion,
@@ -371,6 +387,12 @@ old version.
   `chatgpt_conversation_url` is archival metadata only and must not be opened.
 - Generate one non-empty publication-ready Russian monologue of at most 4000
   Unicode code points. Do not target the maximum and do not pad with filler.
+- For `local_sol_max_visual`, create exactly one vertical 9:16 infographic.
+  Compress the full chronology, contradictions, and evidence into one
+  mobile-readable canvas instead of a card series. It may carry roughly 4-5
+  times the semantic detail of one old card, but its hierarchy, primary labels,
+  numbering, and arrows must remain legible at phone width. Use more than one
+  image only when Alex gives a newer explicit instruction for that exact target.
 - Validate with:
 
   ```bash

@@ -452,6 +452,28 @@ class BrowserOwnerRotationTests(unittest.TestCase):
                 now=self.now,
             )
 
+    def test_record_created_rejects_wrong_runtime_settings(self) -> None:
+        with mock.patch(
+            "scripts.browser_owner_rotation.uuid.uuid4",
+            return_value="token",
+        ):
+            self.reserve()
+        self.write_thread("new-owner", reasoning_effort="high")
+
+        with self.assertRaisesRegex(ValueError, "reasoning_effort"):
+            browser_owner_rotation.record_created(
+                self.config,
+                self.root / "contract.json",
+                rotation_token="token",
+                thread_id="new-owner",
+                now=self.now,
+            )
+
+        pending = browser_owner_rotation.pending(self.config, self.contract)
+        self.assertIsNotNone(pending)
+        self.assertEqual(pending["action"], "create_thread")
+        self.assertIsNone(pending["new_thread_id"])
+
 
 if __name__ == "__main__":
     unittest.main()

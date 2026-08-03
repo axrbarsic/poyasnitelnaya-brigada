@@ -9,7 +9,7 @@
   "autopilot_supervisor_state_file": "var/autopilot-supervisor.json",
   "autopilot_supervisor_repair_cooldown_seconds": 90,
   "autopilot_supervisor_escalation_retry_seconds": 1800,
-  "autopilot_owner_rotation_after_runs": 20,
+  "autopilot_owner_rotation_after_runs": 3,
   "autopilot_owner_rotation_state_file": "var/browser-owner-rotation.json",
   "autopilot_max_claim_events": 3,
   "inbound_priority_author_ids": [],

@@ -182,6 +182,38 @@ def _validate_new_owner(
     return row
 
 
+def _validate_created_owner(
+    config: dict[str, Any],
+    contract: dict[str, Any],
+    thread_id: str,
+) -> dict[str, Any]:
+    """Validate immutable owner runtime fields before recording a candidate."""
+
+    owner = _owner_contract(contract)
+    row = codex_thread_state.thread_row(codex_home(config), thread_id)
+    if row is None:
+        raise ValueError("new owner thread is missing from Codex state")
+    mismatches: list[str] = []
+    if int(row.get("archived", 0)) != 0:
+        mismatches.append("archived")
+    if row.get("model") != owner.get("model"):
+        mismatches.append("model")
+    if not _reasoning_meets_minimum(
+        row.get("reasoning_effort"),
+        owner.get("minimum_reasoning_effort"),
+    ):
+        mismatches.append("reasoning_effort")
+    expected_cwd = Path(str(owner.get("cwd", ""))).expanduser().resolve()
+    actual_cwd = Path(str(row.get("cwd", ""))).expanduser().resolve()
+    if actual_cwd != expected_cwd:
+        mismatches.append("cwd")
+    if mismatches:
+        raise ValueError(
+            "new owner candidate differs from contract: " + ", ".join(mismatches)
+        )
+    return row
+
+
 def _old_owner_is_archived(config: dict[str, Any], thread_id: str) -> bool:
     row = codex_thread_state.thread_row(codex_home(config), thread_id)
     return row is not None and int(row.get("archived", 0)) == 1
@@ -360,6 +392,7 @@ def _require_transaction(
 
 def record_created(
     config_path: Path,
+    contract_path: Path | None = None,
     *,
     rotation_token: str,
     thread_id: str,
@@ -372,6 +405,9 @@ def record_created(
     new_thread_id = thread_id.strip()
     if not new_thread_id:
         raise ValueError("new owner thread id is required")
+    if contract_path is not None:
+        contract = read_json(contract_path.expanduser().resolve())
+        _validate_created_owner(config, contract, new_thread_id)
     with autopilot_dispatch.locked_state(path):
         state = load_state(path)
         transaction = _require_transaction(state, rotation_token)
@@ -673,6 +709,7 @@ def main() -> int:
     elif arguments.command == "created":
         result = record_created(
             arguments.config,
+            arguments.contract,
             rotation_token=arguments.rotation_token,
             thread_id=arguments.thread_id,
         )

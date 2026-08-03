@@ -198,6 +198,27 @@ def build_parser(
         default=50,
         help="Maximum prior interactions to return, newest-first.",
     )
+    author_dossier = commands.add_parser(
+        "author-dossier",
+        help=(
+            "Build a source-linked, context-aware navigation dossier for "
+            "the author of one stored event."
+        ),
+    )
+    author_dossier.add_argument("event_id")
+    author_dossier.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum recent and separately relevant records to return.",
+    )
+    author_dossier.add_argument(
+        "--query",
+        help=(
+            "Optional current thesis text for context-aware retrieval. "
+            "Omit to use the stored event text."
+        ),
+    )
 
     acknowledge = commands.add_parser("ack", help="Acknowledge queued event IDs.")
     acknowledge.add_argument("event_ids", nargs="+")

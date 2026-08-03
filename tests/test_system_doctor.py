@@ -24,7 +24,8 @@ class SystemDoctorTests(unittest.TestCase):
         (self.root / ".git").mkdir()
         (self.root / ".codex").mkdir()
         (self.root / ".codex" / "config.toml").write_text(
-            'model = "gpt-5.6-sol"\n',
+            'model = "gpt-5.6-sol"\n'
+            'model_reasoning_effort = "high"\n',
             encoding="utf-8",
         )
         (self.root / "required.txt").write_text("ok\n", encoding="utf-8")
@@ -148,6 +149,12 @@ class SystemDoctorTests(unittest.TestCase):
             "system_id": "test",
             "canonical_root": str(self.root),
             "git_origin": "https://example.test/repo.git",
+            "model_routing": {
+                "project_default": {
+                    "model": "gpt-5.6-sol",
+                    "reasoning_effort": "high",
+                }
+            },
             "required_files": ["required.txt"],
             "threads": {
                 "browser_owner": {
@@ -536,6 +543,8 @@ class SystemDoctorTests(unittest.TestCase):
 
         self.assertEqual(check.status, "pass")
         self.assertEqual(check.details["dispatch_status"], "route_paused")
+        self.assertIn("route policy", check.repair)
+        self.assertNotIn("simple-wave", check.repair)
 
     def test_relay_progress_rejects_failed_dispatch_with_queue(self) -> None:
         check = system_doctor.relay_progress_check(
@@ -633,6 +642,8 @@ class SystemDoctorTests(unittest.TestCase):
 
         self.assertEqual(check.status, "pass")
         self.assertTrue(check.details["route_paused"])
+        self.assertIn("route policy", check.repair)
+        self.assertNotIn("simple-wave", check.repair)
 
     def test_queue_latency_warns_for_owned_long_running_event(self) -> None:
         check = system_doctor.queue_latency_check(
@@ -1755,6 +1766,61 @@ class SystemDoctorTests(unittest.TestCase):
         )
         self.assertEqual(throughput.status, "fail")
         self.assertEqual(throughput.details["actual_claim_events"], 1)
+
+    @mock.patch(
+        "scripts.system_doctor.git_origin",
+        return_value="https://example.test/repo.git",
+    )
+    def test_project_default_model_and_rotation_are_versioned(
+        self, _git_origin: mock.Mock
+    ) -> None:
+        (self.root / ".codex" / "config.toml").write_text(
+            'model = "gpt-5.6-luna"\n'
+            'model_reasoning_effort = "max"\n',
+            encoding="utf-8",
+        )
+        self.contract["model_routing"]["project_default"] = {
+            "model": "gpt-5.6-luna",
+            "reasoning_effort": "max",
+        }
+        self.contract["runtime"]["owner_rotation_after_runs"] = 3
+        config = json.loads(self.config.read_text(encoding="utf-8"))
+        config["autopilot_owner_rotation_after_runs"] = 3
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+        model_check = next(
+            item
+            for item in checks
+            if item.identifier == "project.default_model"
+        )
+        rotation_check = next(
+            item
+            for item in checks
+            if item.identifier == "config.owner_rotation"
+        )
+        self.assertEqual(model_check.status, "pass")
+        self.assertEqual(rotation_check.status, "pass")
+
+        config["autopilot_owner_rotation_after_runs"] = 20
+        self.config.write_text(json.dumps(config), encoding="utf-8")
+        checks = system_doctor.check_contract(
+            self.root,
+            self.home,
+            self.contract,
+            self.config,
+        )
+        rotation_check = next(
+            item
+            for item in checks
+            if item.identifier == "config.owner_rotation"
+        )
+        self.assertEqual(rotation_check.status, "fail")
 
     @mock.patch(
         "scripts.system_doctor.git_origin",

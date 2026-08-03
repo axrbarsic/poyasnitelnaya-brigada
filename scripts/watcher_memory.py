@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import sqlite3
 from typing import Any
 
@@ -25,6 +26,62 @@ def _excerpt(value: str, limit: int = 400) -> dict[str, Any]:
 CANDIDATE_MEMORY_CONTRACT = (
     "Unverified candidates are search hints only. Verify the exact "
     "live X post before quoting or using it as evidence."
+)
+AUTHOR_DOSSIER_CONTRACT = (
+    "This dossier is derived navigation, not primary evidence or a "
+    "psychological profile. Quote or claim a contradiction only after "
+    "opening the exact source-linked public record."
+)
+DOSSIER_SCAN_LIMIT = 500
+TOKEN_PATTERN = re.compile(r"[0-9A-Za-zА-Яа-яЁё_]{3,}")
+DOSSIER_STOP_TOKENS = frozenset(
+    {
+        "and",
+        "are",
+        "but",
+        "for",
+        "not",
+        "that",
+        "the",
+        "this",
+        "with",
+        "без",
+        "был",
+        "была",
+        "были",
+        "быть",
+        "вам",
+        "вас",
+        "вот",
+        "все",
+        "для",
+        "его",
+        "если",
+        "есть",
+        "еще",
+        "или",
+        "как",
+        "когда",
+        "который",
+        "меня",
+        "мне",
+        "может",
+        "они",
+        "она",
+        "оно",
+        "при",
+        "про",
+        "так",
+        "также",
+        "тебя",
+        "тоже",
+        "только",
+        "уже",
+        "что",
+        "это",
+        "этот",
+        "является",
+    }
 )
 
 
@@ -111,45 +168,272 @@ def _prior_interactions(
     ).fetchall()
     interactions: list[dict[str, Any]] = []
     for row in rows:
-        status_id = str(row["event_id"])
-        payload = json.loads(str(row["payload_json"]))
-        prior_username = row["username"]
-        alex_rows = connection.execute(
-            """
-            SELECT status_id, url, exact_text, posted_at
-            FROM conversation_turns
-            WHERE parent_status_id = ? AND actor = 'alex'
-            ORDER BY posted_at, CAST(status_id AS INTEGER)
-            LIMIT 3
-            """,
-            (status_id,),
-        ).fetchall()
-        interactions.append(
-            {
-                "status_id": status_id,
-                "url": (
-                    f"https://x.com/{prior_username}/status/{status_id}"
-                    if prior_username
-                    else f"https://x.com/i/web/status/{status_id}"
-                ),
-                "created_at": row["created_at"],
-                "conversation_id": row["conversation_id"],
-                "disposition": row["disposition"],
-                "stance": row["stance"],
-                "stance_detail": row["stance_detail"],
-                **_excerpt(str(payload.get("text") or "")),
-                "alex_replies": [
-                    {
-                        "status_id": str(reply["status_id"]),
-                        "url": str(reply["url"]),
-                        "posted_at": reply["posted_at"],
-                        **_excerpt(str(reply["exact_text"])),
-                    }
-                    for reply in alex_rows
-                ],
-            }
-        )
+        interactions.append(_interaction_record(connection, row))
     return aggregate, interactions
+
+
+def _interaction_record(
+    connection: sqlite3.Connection,
+    row: sqlite3.Row,
+    *,
+    retrieval_score: float | None = None,
+) -> dict[str, Any]:
+    status_id = str(row["event_id"])
+    payload = json.loads(str(row["payload_json"]))
+    prior_username = row["username"]
+    alex_rows = connection.execute(
+        """
+        SELECT status_id, url, exact_text, posted_at
+        FROM conversation_turns
+        WHERE parent_status_id = ? AND actor = 'alex'
+        ORDER BY posted_at, CAST(status_id AS INTEGER)
+        LIMIT 3
+        """,
+        (status_id,),
+    ).fetchall()
+    result = {
+        "status_id": status_id,
+        "url": (
+            f"https://x.com/{prior_username}/status/{status_id}"
+            if prior_username
+            else f"https://x.com/i/web/status/{status_id}"
+        ),
+        "created_at": row["created_at"],
+        "conversation_id": row["conversation_id"],
+        "disposition": row["disposition"],
+        "stance": row["stance"],
+        "stance_detail": row["stance_detail"],
+        **_excerpt(str(payload.get("text") or "")),
+        "alex_replies": [
+            {
+                "status_id": str(reply["status_id"]),
+                "url": str(reply["url"]),
+                "posted_at": reply["posted_at"],
+                **_excerpt(str(reply["exact_text"])),
+            }
+            for reply in alex_rows
+        ],
+    }
+    if retrieval_score is not None:
+        result["retrieval_score"] = round(retrieval_score, 6)
+    return result
+
+
+def _dossier_terms(value: str) -> frozenset[str]:
+    return frozenset(
+        token
+        for token in (
+            match.group(0).casefold() for match in TOKEN_PATTERN.finditer(value)
+        )
+        if token not in DOSSIER_STOP_TOKENS and not token.startswith("http")
+    )
+
+
+def _dossier_rows(
+    connection: sqlite3.Connection,
+    event_id: str,
+    *,
+    identity_clause: str,
+    identity_value: str,
+) -> list[sqlite3.Row]:
+    return connection.execute(
+        f"""
+        SELECT e.event_id, e.username, e.created_at, e.conversation_id,
+               e.payload_json, r.disposition, r.stance, r.stance_detail
+        FROM events e
+        LEFT JOIN event_resolutions r ON r.event_id = e.event_id
+        WHERE e.event_id != ? AND {identity_clause}
+        ORDER BY e.created_at DESC, CAST(e.event_id AS INTEGER) DESC
+        LIMIT ?
+        """,
+        (event_id, identity_value, DOSSIER_SCAN_LIMIT),
+    ).fetchall()
+
+
+def _relevant_dossier_rows(
+    rows: list[sqlite3.Row],
+    query_text: str,
+    *,
+    limit: int,
+    excluded_status_ids: frozenset[str],
+) -> list[tuple[sqlite3.Row, float]]:
+    query_terms = _dossier_terms(query_text)
+    if not query_terms or limit <= 0:
+        return []
+    row_terms: list[tuple[sqlite3.Row, frozenset[str]]] = []
+    frequencies: dict[str, int] = {}
+    for row in rows:
+        payload = json.loads(str(row["payload_json"]))
+        terms = _dossier_terms(str(payload.get("text") or ""))
+        row_terms.append((row, terms))
+        for term in query_terms.intersection(terms):
+            frequencies[term] = frequencies.get(term, 0) + 1
+    population = max(1, len(rows))
+    ranked: list[tuple[sqlite3.Row, float]] = []
+    for row, terms in row_terms:
+        status_id = str(row["event_id"])
+        if status_id in excluded_status_ids:
+            continue
+        overlap = query_terms.intersection(terms)
+        if not overlap:
+            continue
+        score = sum(
+            math.log((population + 1) / (frequencies[term] + 1)) + 1
+            for term in overlap
+        )
+        score /= math.sqrt(max(1, len(terms)))
+        ranked.append((row, score))
+    ranked.sort(
+        key=lambda item: (
+            -item[1],
+            -int(str(item[0]["event_id"])),
+        ),
+    )
+    return ranked[:limit]
+
+
+def _conversation_summaries(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    grouped: dict[str, dict[str, Any]] = {}
+    for row in reversed(rows):
+        conversation_id = str(row["conversation_id"] or row["event_id"])
+        status_id = str(row["event_id"])
+        summary = grouped.setdefault(
+            conversation_id,
+            {
+                "conversation_id": conversation_id,
+                "interaction_count": 0,
+                "first_interaction_at": row["created_at"],
+                "last_interaction_at": row["created_at"],
+                "latest_status_ids": [],
+            },
+        )
+        summary["interaction_count"] += 1
+        summary["last_interaction_at"] = row["created_at"]
+        summary["latest_status_ids"] = (
+            summary["latest_status_ids"] + [status_id]
+        )[-3:]
+    return sorted(
+        grouped.values(),
+        key=lambda item: str(item["last_interaction_at"] or ""),
+        reverse=True,
+    )[:12]
+
+
+def _navigation_labels(rows: list[sqlite3.Row]) -> list[dict[str, Any]]:
+    labels: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        label = str(row["stance_detail"] or "").strip()
+        if not label:
+            continue
+        record = labels.setdefault(
+            label,
+            {"label": label, "count": 0, "status_ids": []},
+        )
+        record["count"] += 1
+        if len(record["status_ids"]) < 3:
+            record["status_ids"].append(str(row["event_id"]))
+    return sorted(
+        labels.values(),
+        key=lambda item: (-int(item["count"]), str(item["label"])),
+    )[:8]
+
+
+def author_dossier_for_event(
+    connection: sqlite3.Connection,
+    event_id: str,
+    *,
+    limit: int,
+    query_text: str | None = None,
+    include_recent: bool = True,
+    excluded_status_ids: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """Build a source-linked, context-aware navigation dossier for an author."""
+
+    if limit <= 0:
+        raise ValueError("Author dossier limit must be positive")
+    event_id = watcher_validation.validate_status_id(str(event_id), "event_id")
+    current, identity_clause, identity_value, identity_kind = _commenter_identity(
+        connection,
+        event_id,
+    )
+    if identity_clause is None or identity_value is None or identity_kind is None:
+        return {
+            "event_id": event_id,
+            "identity_kind": "unavailable",
+            "author_id": None,
+            "username": current["username"],
+            "dossier_contract": AUTHOR_DOSSIER_CONTRACT,
+            "total_prior_interactions": 0,
+            "scanned_interactions": 0,
+            "conversation_summaries": [],
+            "recent_interactions": [],
+            "relevant_interactions": [],
+            "navigation_labels": [],
+        }
+    rows = _dossier_rows(
+        connection,
+        event_id,
+        identity_clause=identity_clause,
+        identity_value=identity_value,
+    )
+    aggregate = connection.execute(
+        f"""
+        SELECT COUNT(*) AS count
+        FROM events e
+        WHERE e.event_id != ? AND {identity_clause}
+        """,
+        (event_id, identity_value),
+    ).fetchone()
+    current_payload = connection.execute(
+        "SELECT payload_json FROM events WHERE event_id = ?",
+        (event_id,),
+    ).fetchone()
+    payload = json.loads(str(current_payload["payload_json"]))
+    effective_query = str(
+        query_text if query_text is not None else payload.get("text") or ""
+    )
+    recent_rows = [
+        row
+        for row in rows
+        if str(row["event_id"]) not in excluded_status_ids
+    ][:limit]
+    relevant_rows = _relevant_dossier_rows(
+        rows,
+        effective_query,
+        limit=limit,
+        excluded_status_ids=(
+            excluded_status_ids
+            | frozenset(str(row["event_id"]) for row in recent_rows)
+        ),
+    )
+    return {
+        "event_id": event_id,
+        "identity_kind": identity_kind,
+        "author_id": (
+            str(current["author_id"]) if current["author_id"] else None
+        ),
+        "username": current["username"],
+        "dossier_contract": AUTHOR_DOSSIER_CONTRACT,
+        "retrieval_method": "exact_identity_plus_lexical_idf",
+        "total_prior_interactions": int(aggregate["count"]),
+        "scanned_interactions": len(rows),
+        "scan_truncated": int(aggregate["count"]) > len(rows),
+        "conversation_summaries": _conversation_summaries(rows),
+        "recent_interactions": (
+            [_interaction_record(connection, row) for row in recent_rows]
+            if include_recent
+            else []
+        ),
+        "relevant_interactions": [
+            _interaction_record(connection, row, retrieval_score=score)
+            for row, score in relevant_rows
+        ],
+        "navigation_labels": _navigation_labels(rows),
+        "deeper_history_command": (
+            f"python3 xmention_watcher.py --config config.json "
+            f"author-dossier {event_id} --limit {max(50, limit)}"
+        ),
+    }
 
 
 def _archive_commenter_memory(

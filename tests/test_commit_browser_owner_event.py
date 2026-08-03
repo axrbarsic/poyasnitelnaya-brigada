@@ -503,6 +503,234 @@ class CommitBrowserOwnerEventTests(unittest.TestCase):
             any(value.endswith("generated-image.png") for value in ledger["evidence"])
         )
 
+    def test_commits_local_sol_max_with_four_visuals(self) -> None:
+        payload = self._published_evidence()
+        media_files = []
+        published_media = []
+        for index in range(1, 5):
+            media_file = self.event_dir / f"chronology-{index}.png"
+            media_file.write_bytes(
+                b"\x89PNG\r\n\x1a\nverified-image-" + str(index).encode()
+            )
+            media_files.append(
+                {
+                    "file": media_file.name,
+                    "sha256": hashlib.sha256(media_file.read_bytes()).hexdigest(),
+                    "mime_type": "image/png",
+                    "published_media_key": f"3_verified_{index}",
+                }
+            )
+            published_media.append(
+                {
+                    "media_key": f"3_verified_{index}",
+                    "type": "photo",
+                    "url": f"https://pbs.twimg.com/media/verified-{index}.png",
+                    "width": 1024,
+                    "height": 1792,
+                }
+            )
+        payload["generation"].update(
+            {
+                "generation_profile": "local_sol_max_visual",
+                "generation_skill": "poyasnitelnaya-brigada-v2",
+                "visual_skill": "imagegen",
+                "media_files": media_files,
+                "composer_attachment_verified": True,
+                "composer_attachment_count": 4,
+            }
+        )
+        payload["reply"]["media"] = published_media
+        report_path = self.event_dir / "api-verification.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report.update(
+            {
+                "require_media": True,
+                "media_verified": True,
+                "media_count": 4,
+                "published_photo_present": True,
+                "published_media": published_media,
+            }
+        )
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        self._write_evidence(payload)
+
+        result = browser_owner_evidence.commit_event(
+            config_path=self.config_path,
+            claim_token=self.claim_token,
+            requested_event_dir=self.event_dir,
+        )
+
+        self.assertEqual(result["status"], "committed")
+        ledger = json.loads(
+            (self.event_dir / "run-ledger.jsonl").read_text(encoding="utf-8")
+        )
+        for index in range(1, 5):
+            self.assertTrue(
+                any(
+                    value.endswith(f"chronology-{index}.png")
+                    for value in ledger["evidence"]
+                )
+            )
+
+    def test_rejects_multiple_images_when_api_media_count_differs(self) -> None:
+        payload = self._published_evidence()
+        media_files = []
+        for index in range(1, 3):
+            media_file = self.event_dir / f"chronology-{index}.png"
+            media_file.write_bytes(
+                b"\x89PNG\r\n\x1a\nverified-image-" + str(index).encode()
+            )
+            media_files.append(
+                {
+                    "file": media_file.name,
+                    "sha256": hashlib.sha256(media_file.read_bytes()).hexdigest(),
+                    "mime_type": "image/png",
+                    "published_media_key": f"3_verified_{index}",
+                }
+            )
+        payload["generation"].update(
+            {
+                "generation_profile": "commenter_requested_image",
+                "generation_skill": "imagegen",
+                "media_files": media_files,
+                "composer_attachment_verified": True,
+                "composer_attachment_count": 2,
+            }
+        )
+        published_media = [
+            {
+                "media_key": "3_verified_1",
+                "type": "photo",
+                "url": "https://pbs.twimg.com/media/verified-1.png",
+            }
+        ]
+        payload["reply"]["media"] = published_media
+        report_path = self.event_dir / "api-verification.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report.update(
+            {
+                "require_media": True,
+                "media_verified": True,
+                "media_count": 1,
+                "published_photo_present": True,
+                "published_media": published_media,
+            }
+        )
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        self._write_evidence(payload)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Official X media count does not match generated media count",
+        ):
+            browser_owner_evidence.commit_event(
+                config_path=self.config_path,
+                claim_token=self.claim_token,
+                requested_event_dir=self.event_dir,
+            )
+
+    def test_rejects_local_sol_visual_without_media_array(self) -> None:
+        payload = self._published_evidence()
+        media_file = self.event_dir / "chronology-1.png"
+        media_file.write_bytes(b"\x89PNG\r\n\x1a\nverified-image")
+        payload["generation"].update(
+            {
+                "generation_profile": "local_sol_max_visual",
+                "generation_skill": "poyasnitelnaya-brigada-v2",
+                "visual_skill": "imagegen",
+                "media_file": media_file.name,
+                "media_sha256": hashlib.sha256(
+                    media_file.read_bytes()
+                ).hexdigest(),
+                "media_mime_type": "image/png",
+                "composer_attachment_verified": True,
+            }
+        )
+        published_media = [
+            {
+                "media_key": "3_verified",
+                "type": "photo",
+                "url": "https://pbs.twimg.com/media/verified.png",
+            }
+        ]
+        payload["reply"]["media"] = published_media
+        report_path = self.event_dir / "api-verification.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report.update(
+            {
+                "require_media": True,
+                "media_verified": True,
+                "media_count": 1,
+                "published_photo_present": True,
+                "published_media": published_media,
+            }
+        )
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        self._write_evidence(payload)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "local_sol_max_visual must use generation.media_files",
+        ):
+            browser_owner_evidence.commit_event(
+                config_path=self.config_path,
+                claim_token=self.claim_token,
+                requested_event_dir=self.event_dir,
+            )
+
+    def test_rejects_media_array_without_exact_composer_count(self) -> None:
+        payload = self._published_evidence()
+        media_file = self.event_dir / "generated-image.png"
+        media_file.write_bytes(b"\x89PNG\r\n\x1a\nverified-image")
+        payload["generation"].update(
+            {
+                "generation_profile": "commenter_requested_image",
+                "generation_skill": "imagegen",
+                "media_files": [
+                    {
+                        "file": media_file.name,
+                        "sha256": hashlib.sha256(
+                            media_file.read_bytes()
+                        ).hexdigest(),
+                        "mime_type": "image/png",
+                        "published_media_key": "3_verified",
+                    }
+                ],
+                "composer_attachment_verified": True,
+            }
+        )
+        published_media = [
+            {
+                "media_key": "3_verified",
+                "type": "photo",
+                "url": "https://pbs.twimg.com/media/verified.png",
+            }
+        ]
+        payload["reply"]["media"] = published_media
+        report_path = self.event_dir / "api-verification.json"
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        report.update(
+            {
+                "require_media": True,
+                "media_verified": True,
+                "media_count": 1,
+                "published_photo_present": True,
+                "published_media": published_media,
+            }
+        )
+        report_path.write_text(json.dumps(report), encoding="utf-8")
+        self._write_evidence(payload)
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "Composer attachment count does not match generated media",
+        ):
+            browser_owner_evidence.commit_event(
+                config_path=self.config_path,
+                claim_token=self.claim_token,
+                requested_event_dir=self.event_dir,
+            )
+
     def test_rejects_requested_image_without_official_media_proof(self) -> None:
         payload = self._published_evidence()
         media_file = self.event_dir / "generated-image.png"

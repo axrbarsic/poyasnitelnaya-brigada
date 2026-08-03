@@ -32,7 +32,9 @@ class PoyasnitelnayaBrigadaV2EvalContractTests(unittest.TestCase):
                 "qualification",
                 "contradiction",
                 "goalpost_shift",
+                "loaded_binary_frame",
                 "new_evidence",
+                "self_awarded_victory",
             },
         )
         self.assertEqual(len({case["id"] for case in cases}), len(cases))
@@ -60,6 +62,11 @@ class PoyasnitelnayaBrigadaV2EvalContractTests(unittest.TestCase):
             "обе короткие точные формулировки",
             "При смене критерия",
             "При новом доказательстве",
+            "neutral_question",
+            "burden_ledger",
+            "inference_bridge",
+            "самоприсуждённая победа",
+            "author_dossier",
         ):
             self.assertIn(required, skill)
 

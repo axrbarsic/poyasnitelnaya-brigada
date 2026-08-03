@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -70,6 +71,56 @@ def project_checks(
             {"actual": actual_origin, "expected": expected_origin},
         )
     )
+    expected_default = contract.get("model_routing", {}).get(
+        "project_default"
+    )
+    if isinstance(expected_default, dict):
+        config_path = root / ".codex" / "config.toml"
+        actual_model = None
+        actual_effort = None
+        try:
+            for line in config_path.read_text(encoding="utf-8").splitlines():
+                if line.lstrip().startswith("["):
+                    break
+                match = re.match(
+                    r'^\s*(model|model_reasoning_effort)\s*=\s*"([^"]+)"\s*$',
+                    line,
+                )
+                if match is None:
+                    continue
+                if match.group(1) == "model":
+                    actual_model = match.group(2)
+                else:
+                    actual_effort = match.group(2)
+        except OSError:
+            pass
+        expected_model = str(expected_default.get("model", ""))
+        expected_effort = str(
+            expected_default.get("reasoning_effort", "")
+        )
+        model_matches = (
+            actual_model == expected_model
+            and actual_effort == expected_effort
+        )
+        checks.append(
+            deps.make_check(
+                "project.default_model",
+                "pass" if model_matches else "fail",
+                (
+                    "Project default model соответствует контракту."
+                    if model_matches
+                    else "Project default model отклонилась от контракта."
+                ),
+                "Восстанови model и model_reasoning_effort в "
+                ".codex/config.toml из model_routing.project_default.",
+                {
+                    "actual_model": actual_model,
+                    "expected_model": expected_model,
+                    "actual_reasoning_effort": actual_effort,
+                    "expected_reasoning_effort": expected_effort,
+                },
+            )
+        )
     return checks
 
 
@@ -213,4 +264,25 @@ def config_checks(
     throughput = inbound_throughput_check(config, runtime, deps)
     if throughput is not None:
         checks.append(throughput)
+    expected_rotation = runtime.get("owner_rotation_after_runs")
+    if expected_rotation is not None:
+        actual_rotation = config.get("autopilot_owner_rotation_after_runs")
+        rotation_matches = actual_rotation == expected_rotation
+        checks.append(
+            deps.make_check(
+                "config.owner_rotation",
+                "pass" if rotation_matches else "fail",
+                (
+                    "Порог ротации owner соответствует контракту."
+                    if rotation_matches
+                    else "Порог ротации owner отклонился от контракта."
+                ),
+                "Восстанови autopilot_owner_rotation_after_runs из "
+                "runtime.owner_rotation_after_runs.",
+                {
+                    "actual": actual_rotation,
+                    "expected": expected_rotation,
+                },
+            )
+        )
     return checks, config

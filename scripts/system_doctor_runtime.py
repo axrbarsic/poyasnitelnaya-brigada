@@ -157,7 +157,7 @@ def _relay_immediate_result(
             "runtime.relay_progress",
             "pass",
             "Relay удерживает только временно отложенные route events.",
-            "Проверь завершение simple-wave и автоматический возврат normal.",
+            "Проверь активную route policy и условие возврата normal.",
             details,
         )
     return None
@@ -531,7 +531,7 @@ def _queue_message(
     if route_paused:
         return (
             "Старейшее событие временно отложено route policy.",
-            "Проверь завершение simple-wave и автоматический возврат normal.",
+            "Проверь активную route policy и условие возврата normal.",
         )
     if healthy:
         return (

@@ -83,7 +83,7 @@ trust_level = "trusted"
   "browser_owner_cwd": ".",
   "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
   "codex_project_id": "CODEX_PROJECT_ID",
-  "autopilot_owner_rotation_after_runs": 20,
+  "autopilot_owner_rotation_after_runs": 3,
   "autopilot_owner_rotation_state_file": "var/browser-owner-rotation.json",
   "desktop_relay_mode": "in_app_heartbeat",
   "desktop_auto_quit_after_work": true,
@@ -265,6 +265,15 @@ renew и durable завершение.
   формулирует ответы. Self-owned Sol Max задача читает deterministic route и
   сама выполняет его.
 - Ресурсный guard ставит Browser на паузу, но не удаляет очередь.
+- Явный временный фокус на одном авторе включается командой
+  `python3 scripts/autopilot_bridge.py --config config.json
+  start-author-focus --author-id <IMMUTABLE_X_USER_ID>`. В claim попадают
+  только совпавшие события. Все остальные остаются queued и unresolved.
+  Команда `stop-author-focus` возвращает обычный FIFO. Выбирать автора по
+  handle или display name запрещено.
+- Каждый claim содержит компактную свежую `commenter_memory` и контекстное
+  `author_dossier`. Досье служит только source-linked навигацией. Перед цитатой
+  или заявлением о противоречии нужно заново открыть точную публичную запись.
 - Лимиты renderer считаются эквивалентами по 256 МиБ RSS, при этом сырое
   количество процессов и суммарный renderer RSS остаются видимыми. Легкие
   кэшированные renderer не блокируют Browser только из-за изменений
