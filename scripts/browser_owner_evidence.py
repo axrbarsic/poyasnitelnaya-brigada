@@ -359,8 +359,11 @@ def _validate_generation(evidence: dict[str, Any]) -> str:
         raise ValueError("Published outcome has unknown generation profile")
     if _required_text(generation, "generation_model") != "gpt-5.6-sol":
         raise ValueError("Published outcome must use gpt-5.6-sol")
-    if _required_text(generation, "reasoning_effort") != "max":
-        raise ValueError("Published outcome must use reasoning_effort=max")
+    reasoning_effort = _required_text(generation, "reasoning_effort")
+    if reasoning_effort not in {"high", "xhigh", "max", "ultra"}:
+        raise ValueError(
+            "Published outcome must use reasoning_effort=high or stronger"
+        )
     if profile in {"local_sol_max", "local_sol_max_visual"}:
         if skill != "poyasnitelnaya-brigada-v2":
             raise ValueError(

@@ -129,6 +129,15 @@ def build_parser(
         action="store_true",
         help="Report candidates without changing queue state.",
     )
+    deleted_replacement = commands.add_parser(
+        "replace-deleted-publication",
+        help=(
+            "Requeue one exact published event only after the official X API "
+            "proves that its recorded Alex reply was deleted."
+        ),
+    )
+    deleted_replacement.add_argument("event_id")
+    deleted_replacement.add_argument("--reason", required=True)
     commands.add_parser(
         "initial-audit-complete",
         help="Complete first review only when the queue is empty.",
@@ -256,8 +265,8 @@ def build_parser(
     revise = commands.add_parser(
         "revise-resolution",
         help=(
-            "Auditably revise an existing skip after an explicit scope "
-            "change and verified publication."
+            "Auditably revise an existing skip or blocker, or consume an "
+            "authorized deleted-publication replacement."
         ),
     )
     revise.add_argument("event_id")

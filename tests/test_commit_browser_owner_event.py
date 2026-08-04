@@ -179,7 +179,7 @@ class CommitBrowserOwnerEventTests(unittest.TestCase):
                 "generation_profile": "local_sol_max",
                 "generation_skill": "poyasnitelnaya-brigada-v2",
                 "generation_model": "gpt-5.6-sol",
-                "reasoning_effort": "max",
+                "reasoning_effort": "high",
                 "chatgpt_web_used": False,
             },
             "reply": {
@@ -424,6 +424,18 @@ class CommitBrowserOwnerEventTests(unittest.TestCase):
         self._write_evidence(payload)
 
         with self.assertRaisesRegex(ValueError, "must use poyasnitelnaya"):
+            browser_owner_evidence.commit_event(
+                config_path=self.config_path,
+                claim_token=self.claim_token,
+                requested_event_dir=self.event_dir,
+            )
+
+    def test_rejects_generation_below_high_effort(self) -> None:
+        payload = self._published_evidence()
+        payload["generation"]["reasoning_effort"] = "medium"
+        self._write_evidence(payload)
+
+        with self.assertRaisesRegex(ValueError, "high or stronger"):
             browser_owner_evidence.commit_event(
                 config_path=self.config_path,
                 claim_token=self.claim_token,

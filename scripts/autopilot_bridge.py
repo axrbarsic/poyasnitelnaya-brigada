@@ -402,7 +402,7 @@ def _resolution_recovery(
         return None
     latest_requeue = connection.execute(
         """
-        SELECT reason, requeued_at
+        SELECT reason, requeued_at, previous_resolution_json
         FROM response_policy_requeues
         WHERE event_id = ?
         ORDER BY id DESC
@@ -421,7 +421,7 @@ def _resolution_recovery(
         if requeue_reason == "local_poyasnitelnaya_brigada_skill_recovery"
         else "Auditable requeue after durable resolution: " + requeue_reason
     )
-    return {
+    recovery = {
         "supersedes_existing_resolution": True,
         "existing_disposition": existing["disposition"],
         "existing_blocker_code": existing["blocker_code"],
@@ -429,6 +429,25 @@ def _resolution_recovery(
         "requeue_reason": requeue_reason,
         "resolution_revision_reason": revision_reason,
     }
+    if requeue_reason == "operator_deleted_publication_replacement":
+        try:
+            previous = json.loads(
+                str(latest_requeue["previous_resolution_json"])
+            )
+        except (TypeError, ValueError):
+            previous = {}
+        authorization = previous.get("deleted_publication_replacement")
+        if isinstance(authorization, dict):
+            recovery.update(
+                {
+                    "replacement_authorized": True,
+                    "old_reply_url": authorization.get("old_reply_url"),
+                    "old_status_id": authorization.get("old_status_id"),
+                    "deletion_checked_at": authorization.get("checked_at"),
+                    "operator_reason": authorization.get("operator_reason"),
+                }
+            )
+    return recovery
 
 
 def _enriched_claim_event(
@@ -1055,6 +1074,28 @@ def start_author_focus(
     }
 
 
+def start_author_priority(
+    config_path: Path,
+    author_ids: list[str],
+) -> dict[str, Any]:
+    """Process normal FIFO until a selected author's event appears."""
+
+    config = autopilot_dispatch.read_json(config_path)
+    path = route_control_path(config_path, config)
+    state = inbound_route_control.set_mode(
+        path,
+        mode=inbound_route_control.AUTHOR_PRIORITY_MODE,
+        updated_at=autopilot_dispatch.isoformat(),
+        updated_by="Alex",
+        focus_author_ids=author_ids,
+    )
+    return {
+        "status": "author_priority_started",
+        "mode": state["mode"],
+        "focus_author_ids": state["focus_author_ids"],
+    }
+
+
 def stop_author_focus(config_path: Path) -> dict[str, Any]:
     """Restore normal FIFO without rewriting or resolving queued events."""
 
@@ -1120,6 +1161,8 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("start-simple-wave")
     author_focus = subparsers.add_parser("start-author-focus")
     author_focus.add_argument("--author-id", action="append", required=True)
+    author_priority = subparsers.add_parser("start-author-priority")
+    author_priority.add_argument("--author-id", action="append", required=True)
     subparsers.add_parser("stop-author-focus")
     completed = subparsers.add_parser("completed")
     completed.add_argument("--claim-token", required=True)
@@ -1175,6 +1218,11 @@ def main(argv: list[str] | None = None) -> int:
         result = start_simple_wave(arguments.config)
     elif arguments.command == "start-author-focus":
         result = start_author_focus(
+            arguments.config,
+            arguments.author_id,
+        )
+    elif arguments.command == "start-author-priority":
+        result = start_author_priority(
             arguments.config,
             arguments.author_id,
         )

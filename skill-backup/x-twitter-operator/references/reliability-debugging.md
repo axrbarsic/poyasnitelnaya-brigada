@@ -25,7 +25,7 @@ Check each layer in order:
 4. Eligibility classified it as queued or ignored for an explicit reason.
 5. `wake-request.json` exposed every queued event.
 6. The model-free event dispatcher marked the exact queue ready for Desktop.
-7. The self-owned heartbeat in the Sol Max owner task returned
+7. The self-owned heartbeat in the Sol High owner task returned
    `dispatch=true` with one saved route and reservation.
 8. The same owner task claimed the event exactly once.
 9. The production claim contains at most the configured bounded oldest-first

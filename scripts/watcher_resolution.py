@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from scripts import (
+    deleted_publication_replacement,
     watcher_chatgpt,
     watcher_constants,
     watcher_time,
@@ -520,6 +521,8 @@ def _resolution_matches(
 
 def _validate_revision_transition(
     config: Any,
+    connection: sqlite3.Connection,
+    event_id: str,
     existing: sqlite3.Row,
     resolution: ResolutionInput,
 ) -> None:
@@ -532,6 +535,14 @@ def _validate_revision_transition(
         ("blocked", "skip"),
     }
     transition = (existing["disposition"], resolution.disposition)
+    if transition == ("published", "published"):
+        deleted_publication_replacement.require_active_revision_authorization(
+            connection,
+            event_id=event_id,
+            existing=existing,
+            replacement_reply_url=resolution.reply_url,
+        )
+        return
     if transition == ("skip", "skip") and not config.mandatory_response_mode:
         raise ValueError(
             "Skip to skip revision requires mandatory response mode"
@@ -710,7 +721,13 @@ def revise_event_resolution(
             "pending_count": wake["pending_count"],
             "health": health["status"],
         }
-    _validate_revision_transition(config, existing, resolution)
+    _validate_revision_transition(
+        config,
+        connection,
+        event_id,
+        existing,
+        resolution,
+    )
     _require_event_history(
         connection,
         event_id,

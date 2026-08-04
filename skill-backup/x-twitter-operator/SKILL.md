@@ -22,7 +22,7 @@ Read and follow the bundled `browser:control-in-app-browser` skill before Browse
 Keep the Browser owner and final publication brain on `gpt-5.6-sol`.
 
 - Every standalone reply written without «Пояснительная бригада» must be authored and final-checked by Sol High or stronger.
-- Every turn that may invoke `poyasnitelnaya-brigada-v2` must run on Sol Max. Do not generate its output in High and do not delegate its writing to another model. Keep `poyasnitelnaya-brigada` v1 unchanged and use it only when Alex explicitly asks for v1.
+- Every turn that may invoke `poyasnitelnaya-brigada-v2` must run on Sol High or stronger. The deployed owner target is High. Do not delegate its writing to another model. Keep `poyasnitelnaya-brigada` v1 unchanged and use it only when Alex explicitly asks for v1.
 - Only Sol may decide the live target, resolve contextual ambiguity, classify `short`/`local-max`/`requested-media`/`satirical-media`/`already-answered`, operate authenticated tabs, validate the final composer, or publish.
 - Use deterministic scripts before any model for ledger lookup, state counting, exact duplicate IDs, Unicode length, forbidden-character scans, and queue timestamps.
 - Use Luna Low only for bounded read-only mechanical work on supplied artifacts. It must not browse, research, draft replies, interpret context, or mutate state.
@@ -43,7 +43,7 @@ Distinguish analysis from publication.
   eligible replies and conversation continuations as the same bounded reply
   workflow until Alex revokes it.
   This standing authority covers contextual inspection, fact checking, short
-  or local Sol Max routing, publication, verification, and durable resolution. It does not
+  or local Sol High routing, publication, verification, and durable resolution. It does not
   cover likes, reposts, follows, direct messages, unrelated original posts, or
   deletion of existing posts.
 - Delete or replace an existing post only when Alex explicitly authorizes that exact effect.
@@ -107,8 +107,8 @@ start, never the required quality of Sol reasoning or fact checking:
 - the resource profile caps simultaneous read-only X tabs before preflight;
   every composer, publication, verification and commit remains one ordered
   transaction before the next event in the claim;
-- Local Sol Max work generates locally through `poyasnitelnaya-brigada-v2` in
-  the Sol Max owner turn;
+- Local Sol High work generates locally through `poyasnitelnaya-brigada-v2` in
+  the Sol High owner turn;
 - `initial-audit-next --conversations 1`, never routine `status --full`;
 - no helper session for waiting, polling, or mechanical age filtering;
 - close old backlog with one
@@ -117,7 +117,7 @@ start, never the required quality of Sol reasoning or fact checking:
 - run `autopilot_bridge gate` in the model-free dispatcher before starting
   Desktop or any model;
 - on `dispatch=true`, launch Codex Desktop only when absent. The existing
-  self-owned heartbeat is attached directly to the dedicated Sol Max owner
+  self-owned heartbeat is attached directly to the dedicated Sol High owner
   task and calls one `relay-reserve-handoff`. Python chooses rotation, repair,
   inbound X, or idle-only outbound and returns one unambiguous `dispatch` plus
   `route`. The same task executes the corresponding claim. There is no
@@ -206,6 +206,15 @@ other event remains queued and unresolved. Never claim, skip, block, delete or
 rewrite excluded events, and never match this mode by handle or display name.
 `stop-author-focus` restores normal FIFO.
 
+When Alex asks to drain the ordinary backlog while retaining selected author
+priorities, use `mode=author-priority` with immutable numeric IDs in explicit
+descending priority order. The dispatcher exposes normal FIFO while no selected
+author has pending work. Otherwise the next claim contains only events from the
+first listed author who currently has pending work. Lower tiers and other
+events remain queued. Do not interrupt an already active publication;
+the priority applies at the next reservation gate. Use the existing
+`stop-author-focus` command to restore normal FIFO.
+
 ## Cross-thread commenter memory
 
 Before drafting every reply, inspect the event's `commenter_memory`. It is
@@ -283,7 +292,7 @@ supports the present sentence.
 
 For a `local-max` reply, use the verified research directly while applying
 `poyasnitelnaya-brigada-v2`. The skill and final publication brain are the same
-Sol Max turn, so no external bot handoff exists.
+Sol High turn, so no external bot handoff exists.
 
 Keep replies focused on claims, evidence, logic, and contradictions. Do not:
 
@@ -377,7 +386,7 @@ Use the local `poyasnitelnaya-brigada-v2` skill by default for `local-max`
 targets. Use `poyasnitelnaya-brigada` v1 only when Alex explicitly requests the
 old version.
 
-- Require `gpt-5.6-sol` with reasoning effort `max` before invoking the skill.
+- Require `gpt-5.6-sol` with reasoning effort `high` before invoking the skill.
 - Never open ChatGPT, the custom GPT, or a ChatGPT conversation for generation.
 - For a new target, give the skill the exact live author, complete target text,
   quoted material that belongs to the target, relevant media meaning, verified
@@ -406,7 +415,7 @@ old version.
   Then validate the actual X composer value again.
 - Record `generation_profile=local_sol_max`,
   `generation_skill=poyasnitelnaya-brigada-v2`,
-  `generation_model=gpt-5.6-sol`, `reasoning_effort=max`, source URLs, target
+  `generation_model=gpt-5.6-sol`, `reasoning_effort=high`, source URLs, target
   URL, exact text hash, and verified reply URL in durable evidence. Keep
   turn-level `provenance` as audit metadata. Do not guess or rewrite the
   chain-level provenance of an existing conversation: the deterministic
@@ -479,13 +488,13 @@ without supplying target IDs.
   controlled failure, recovery, and Browser comparison are all green.
 - The watcher may detect and queue work, but it must never draft or publish.
   Sol and the Browser owner retain classification and publication.
-- A queued local Sol Max follow-up must load the exact recorded local X history and use
-  `poyasnitelnaya-brigada-v2` in Sol Max by default.
+- A queued local Sol High follow-up must load the exact recorded local X history and use
+  `poyasnitelnaya-brigada-v2` in Sol High by default.
 - Run poll, watchdog, and the Python event dispatcher every minute on
   the 8 GB iMac. Empty, leased, voice-paused, and resource-deferred checks stop
   without a model, Browser, or new Codex task.
 - When `dispatch=true`, the supervisor launches Desktop only if needed. The
-  existing self-owned heartbeat is already attached to the single Sol Max
+  existing self-owned heartbeat is already attached to the single Sol High
   owner task and calls one `relay-reserve-handoff`. Python chooses rotation,
   repair, inbound X, or idle-only outbound and atomically reserves at most one
   route. The same task executes the matching claim. A pre-claim failure
@@ -579,8 +588,8 @@ During long work, report verified progress after meaningful batches and at least
 - candidates checked;
 - duplicates skipped;
 - short replies published;
-- local Sol Max replies published;
-- local Sol Max drafts rejected by exact validation;
+- local Sol High replies published;
+- local Sol High drafts rejected by exact validation;
 - blockers.
 
 At completion, distinguish `published`, `skipped`, `unverified`, and `blocked`. Never inflate the completed count.

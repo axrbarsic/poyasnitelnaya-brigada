@@ -11,13 +11,13 @@ Alex имеет legacy database marker `provenance=pro`. Сохранять
 До генерации доказать:
 
 1. Активная модель дословно `gpt-5.6-sol`.
-2. Reasoning effort дословно `max`.
+2. Reasoning effort дословно `high`.
 3. Открыт точный X target.
 4. Восстановлена полная локальная цепочка до target.
 5. Выполнен актуальный фактчек по первичным источникам.
 
 Если модель или effort не соответствуют контракту, не генерировать черновик.
-Передать работу в Sol Max turn.
+Передать работу в Sol High turn.
 
 ## Запрет веб-передачи
 
@@ -136,7 +136,7 @@ durable resolve или outbound `completed`.
 - `generation_profile=local_sol_max`;
 - `generation_skill=poyasnitelnaya-brigada-v2` по умолчанию;
 - `generation_model=gpt-5.6-sol`;
-- `reasoning_effort=max`;
+- `reasoning_effort=high`;
 - target URL и status ID;
 - parent status ID;
 - exact reply text, code-point count и SHA-256;

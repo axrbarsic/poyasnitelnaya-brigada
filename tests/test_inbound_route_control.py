@@ -127,6 +127,62 @@ class InboundRouteControlTests(unittest.TestCase):
         self.assertNotIn("focus_author_ids", restored)
         self.assertEqual(restored["mode"], "normal")
 
+    def test_author_priority_uses_fifo_until_focus_event_appears(self) -> None:
+        inbound_route_control.set_mode(
+            self.state,
+            mode="author-priority",
+            updated_at="2026-08-03T22:00:00Z",
+            updated_by="Alex",
+            focus_author_ids=["902"],
+        )
+
+        priority, excluded = inbound_route_control.selection_sets(
+            inbound_route_control.load(self.state),
+            [
+                {"id": "101", "author_id": "901"},
+                {"id": "102", "author_id": None},
+            ],
+        )
+        self.assertEqual(priority, frozenset({"101", "102"}))
+        self.assertEqual(excluded, frozenset())
+
+        priority, excluded = inbound_route_control.selection_sets(
+            inbound_route_control.load(self.state),
+            [
+                {"id": "101", "author_id": "901"},
+                {"id": "102", "author_id": "902"},
+                {"id": "103", "author_id": None},
+            ],
+        )
+        self.assertEqual(priority, frozenset({"102"}))
+        self.assertEqual(excluded, frozenset({"101", "103"}))
+
+    def test_author_priority_uses_declared_author_order(self) -> None:
+        state = inbound_route_control.set_mode(
+            self.state,
+            mode="author-priority",
+            updated_at="2026-08-04T01:00:00Z",
+            updated_by="Alex",
+            focus_author_ids=["902", "901", "902"],
+        )
+        self.assertEqual(state["focus_author_ids"], ["902", "901"])
+
+        pending = [
+            {"id": "101", "author_id": "901"},
+            {"id": "102", "author_id": "902"},
+            {"id": "103", "author_id": "903"},
+        ]
+        priority, excluded = inbound_route_control.selection_sets(state, pending)
+        self.assertEqual(priority, frozenset({"102"}))
+        self.assertEqual(excluded, frozenset({"101", "103"}))
+
+        priority, excluded = inbound_route_control.selection_sets(
+            state,
+            [pending[0], pending[2]],
+        )
+        self.assertEqual(priority, frozenset({"101"}))
+        self.assertEqual(excluded, frozenset({"103"}))
+
     def test_route_cannot_be_reclassified_silently(self) -> None:
         inbound_route_control.record_route(
             self.state,

@@ -148,11 +148,11 @@ class LocalExplainerSkillTests(unittest.TestCase):
         self.assertIn("Не объявлять молчание признанием", skill)
         self.assertIn("назвать уход и повторить исходный вопрос", skill)
 
-    def test_v2_uses_sol_max_and_maximum_not_target_length(self) -> None:
+    def test_v2_uses_sol_high_and_maximum_not_target_length(self) -> None:
         skill = V2_SKILL.read_text(encoding="utf-8")
 
         self.assertIn("gpt-5.6-sol", skill)
-        self.assertIn("reasoning effort `max`", skill)
+        self.assertIn("reasoning effort `high`", skill)
         self.assertIn("Не превышать 4000 Unicode code points", skill)
         self.assertIn("Не стремиться к лимиту", skill)
         self.assertIn("--non-empty --max 4000", skill)

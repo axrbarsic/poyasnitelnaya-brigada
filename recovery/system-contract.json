@@ -6,15 +6,15 @@
   "model_routing": {
     "project_default": {
       "model": "gpt-5.6-luna",
-      "reasoning_effort": "max"
+      "reasoning_effort": "medium"
     },
     "browser_owner": {
       "model": "gpt-5.6-sol",
-      "reasoning_effort": "max"
+      "reasoning_effort": "high"
     },
     "reply_author": {
       "model": "gpt-5.6-sol",
-      "reasoning_effort": "max"
+      "reasoning_effort": "high"
     },
     "bounded_research": {
       "model": "gpt-5.6-terra",
@@ -113,7 +113,7 @@
       "id_source": "config.browser_owner_thread_id",
       "title": "X: Browser owner",
       "model": "gpt-5.6-sol",
-      "minimum_reasoning_effort": "max",
+      "minimum_reasoning_effort": "high",
       "cwd": "/Users/alexlane/Developer/x-mention-watcher",
       "must_be_unarchived": true,
       "unique_unarchived_in_cwd": true,
@@ -139,7 +139,7 @@
       "status": "PAUSED",
       "rrule": "FREQ=MINUTELY;INTERVAL=10",
       "model": "gpt-5.6-sol",
-      "reasoning_effort": "max",
+      "reasoning_effort": "high",
       "execution_environment": "local",
       "prompt_source": "macos/x-15.prompt.txt"
     },

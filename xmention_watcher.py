@@ -19,6 +19,7 @@ from typing import Any, Callable, Iterable
 
 from scripts import (
     browser_handoff_sync,
+    deleted_publication_replacement,
     event_dispatch,
     keychain_bundle,
     watcher_audit_lifecycle,
@@ -399,6 +400,27 @@ def revise_event_resolution(
         media_meaning=media_meaning,
         evidence=evidence,
         dependencies=_resolution_dependencies(),
+    )
+
+
+def prepare_deleted_publication_replacement(
+    config: Config,
+    connection: sqlite3.Connection,
+    event_id: str,
+    *,
+    reason: str,
+) -> dict[str, Any]:
+    return deleted_publication_replacement.prepare_deleted_publication_replacement(
+        config,
+        connection,
+        event_id,
+        reason=reason,
+        dependencies=deleted_publication_replacement.Dependencies(
+            bearer_token=bearer_token,
+            request_json=request_json,
+            refresh_wake_file=refresh_wake_file,
+            write_health=write_health,
+        ),
     )
 
 
@@ -983,6 +1005,25 @@ def _handle_revise_resolution(
     return 0
 
 
+def _handle_replace_deleted_publication(
+    args: argparse.Namespace,
+    config: Config,
+    connection: sqlite3.Connection,
+) -> int:
+    try:
+        print_json(
+            prepare_deleted_publication_replacement(
+                config,
+                connection,
+                args.event_id,
+                reason=args.reason,
+            )
+        )
+    except (KeyError, RuntimeError, ValueError) as error:
+        return _blocked_result(error)
+    return 0
+
+
 def _simple_command_handlers() -> dict[str, Callable[..., Any]]:
     return {
         "self-authored-reconcile": reconcile_self_authored_events,
@@ -1030,6 +1071,7 @@ def _database_command_handlers() -> dict[str, Callable[..., int]]:
         "initial-audit-expire": _handle_initial_audit_expire,
         "mandatory-response-requeue": _handle_mandatory_response_requeue,
         "pro-model-recovery-requeue": _handle_pro_recovery_requeue,
+        "replace-deleted-publication": _handle_replace_deleted_publication,
         "browser-handoff-sync": _handle_browser_handoff_sync,
         "history-show": _handle_history_show,
         "memory-audit": _handle_memory_audit,

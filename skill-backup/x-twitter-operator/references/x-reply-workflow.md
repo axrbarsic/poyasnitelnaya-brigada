@@ -147,10 +147,10 @@ create a picture, photo, illustration, meme, chart, diagram, or infographic.
    A temporary generation, review, or upload failure leaves the event queued;
    do not publish a text-only substitute.
 
-### Local Sol Max reply
+### Local Sol High reply
 
 Inspect the complete context locally, load `poyasnitelnaya-brigada-v2` by
-default, and generate inside the Sol Max Browser-owner turn. Keep
+default, and generate inside the Sol High Browser-owner turn. Keep
 `poyasnitelnaya-brigada` v1 unchanged and use it only when Alex explicitly asks
 for v1. Include exact durable X history and
 current primary-source research. Never open ChatGPT or the custom GPT. Produce
@@ -180,7 +180,7 @@ Before filling a local «Пояснительная бригада» reply:
   ```
 
 - confirm `generation_model=gpt-5.6-sol`;
-- confirm `reasoning_effort=max`;
+- confirm `reasoning_effort=high`;
 - confirm `generation_skill=poyasnitelnaya-brigada-v2` unless Alex explicitly
   requested v1;
 - confirm the target post is still open.
@@ -259,7 +259,7 @@ Maintain separate counts:
 - already-answered events with exact Alex child URLs;
 - terminal blockers;
 - short replies published;
-- local Sol Max replies published;
+- local Sol High replies published;
 - unverified submissions;
 - blocked targets.
 

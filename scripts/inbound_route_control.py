@@ -21,8 +21,14 @@ STATE_VERSION = 2
 NORMAL_MODE = "normal"
 SIMPLE_WAVE_MODE = "simple-wave"
 AUTHOR_FOCUS_MODE = "author-focus"
+AUTHOR_PRIORITY_MODE = "author-priority"
 SUPPORTED_MODES = frozenset(
-    {NORMAL_MODE, SIMPLE_WAVE_MODE, AUTHOR_FOCUS_MODE}
+    {
+        NORMAL_MODE,
+        SIMPLE_WAVE_MODE,
+        AUTHOR_FOCUS_MODE,
+        AUTHOR_PRIORITY_MODE,
+    }
 )
 SUPPORTED_ROUTES = frozenset(
     {
@@ -74,6 +80,18 @@ def _author_id(value: Any) -> str:
     if not author_id.isdigit() or len(author_id) > 19:
         raise ValueError("author id must be numeric")
     return author_id
+
+
+def _ordered_author_ids(values: Iterable[str]) -> list[str]:
+    result: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        author_id = _author_id(value)
+        if author_id in seen:
+            continue
+        seen.add(author_id)
+        result.append(author_id)
+    return result
 
 
 def _route(value: Any) -> str:
@@ -128,7 +146,7 @@ def validate_state(payload: dict[str, Any]) -> dict[str, Any]:
             "non-simple-wave mode must not retain simple wave event IDs"
         )
     raw_focus_ids = payload.get("focus_author_ids")
-    if mode == AUTHOR_FOCUS_MODE:
+    if mode in {AUTHOR_FOCUS_MODE, AUTHOR_PRIORITY_MODE}:
         if not isinstance(raw_focus_ids, list) or not raw_focus_ids:
             raise ValueError("author focus IDs must be a non-empty array")
         focus_ids = [_author_id(value) for value in raw_focus_ids]
@@ -199,6 +217,16 @@ def selection_sets(
             if author_id in focus
         }
         return frozenset(priority), frozenset(pending - priority)
+    if state["mode"] == AUTHOR_PRIORITY_MODE:
+        for focus_author_id in state["focus_author_ids"]:
+            priority = {
+                event_id
+                for event_id, author_id in author_by_event.items()
+                if author_id == focus_author_id
+            }
+            if priority:
+                return frozenset(priority), frozenset(pending - priority)
+        return frozenset(pending), frozenset()
     routes = state["routes"]
     wave = set(state["simple_wave_event_ids"])
     priority = {
@@ -239,11 +267,8 @@ def set_mode(
             )
         else:
             state.pop("simple_wave_event_ids", None)
-        if selected_mode == AUTHOR_FOCUS_MODE:
-            focus_ids = sorted(
-                {_author_id(value) for value in focus_author_ids},
-                key=int,
-            )
+        if selected_mode in {AUTHOR_FOCUS_MODE, AUTHOR_PRIORITY_MODE}:
+            focus_ids = _ordered_author_ids(focus_author_ids)
             if not focus_ids:
                 raise ValueError("author focus requires at least one author ID")
             state["focus_author_ids"] = focus_ids

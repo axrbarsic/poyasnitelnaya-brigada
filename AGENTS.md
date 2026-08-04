@@ -15,19 +15,19 @@
 
 ## Browser and publication
 
-- Use `gpt-5.6-luna` with reasoning effort `max` as the project default for
+- Use `gpt-5.6-luna` with reasoning effort `medium` as the project default for
   bounded repository work. Keep deterministic queue and validation mechanics
   in Python. Use Terra Medium only for bounded read-only research.
 - Use the installed `x-twitter-operator` skill for every X or ChatGPT Browser
   operation.
-- Keep the Browser owner on `gpt-5.6-sol` with reasoning effort `max`.
+- Keep the Browser owner on `gpt-5.6-sol` with reasoning effort `high`.
 - Only the Browser owner may operate authenticated tabs, classify a live
   target, author a short reply, validate the composer, or publish.
 - Idle runs own zero Browser tabs. One Browser owner may use up to three
   task-owned X tabs for independent read-only inspection and target-local
   preparation. Composer, publication, verification, durable import and resolve
   remain one ordered writer lane, with at most one filled composer. Fall back
-  to one X tab on Browser instability or memory pressure. The local Sol Max
+  to one X tab on Browser instability or memory pressure. The local Sol High
   route owns zero ChatGPT tabs. The explicit `377` visual route uses the local
   `377` skill and image generation, not ChatGPT. Open ChatGPT only for an
   explicitly authorized `Ложкин` visual-bot route, never for «Пояснительная
@@ -62,6 +62,17 @@
   other event remains queued and unresolved, without skip, blocker, deletion
   or catch-up mutation. Stop it with `autopilot_bridge.py stop-author-focus` to
   restore normal FIFO. Never derive this mode from a display name or handle.
+- The same runtime file may instead set `mode=author-priority` when Alex asks
+  to drain ordinary backlog while preserving an immediate author priority.
+  Start it with `autopilot_bridge.py start-author-priority --author-id
+  <PRIMARY_X_USER_ID>`, followed by additional `--author-id` values in explicit
+  descending priority order when Alex selects secondary authors. While no
+  pending event has any selected numeric author ID, the dispatcher uses normal
+  FIFO. It selects only events from the first listed author who currently has
+  pending work, so lower tiers never displace a live higher tier.
+  An already active claim finishes its current ordered transaction; it is not
+  interrupted mid-publication. Stop it with `stop-author-focus` to restore
+  normal FIFO. Never derive this mode from a display name or handle.
 - If the resource guard defers a run, leave every event unresolved and close
   the scheduled task without Browser work.
 - Use deterministic scripts for queue state, exact IDs, duplicate checks,
@@ -75,7 +86,7 @@
   `poyasnitelnaya-brigada-v2` skill by default. Keep
   `poyasnitelnaya-brigada` unchanged and use v1 only when Alex explicitly asks
   for the old version. Never open ChatGPT or the custom GPT for this route. The
-  active owner must be `gpt-5.6-sol` with reasoning effort `max`.
+  active owner must be `gpt-5.6-sol` with reasoning effort `high`.
 - A local «Пояснительная бригада» reply is non-empty and contains at most 4000
   Unicode code points after removing one technical final newline. Do not target
   the limit or pad the answer. Validate it with
@@ -94,7 +105,7 @@
   skipped while inbound work existed.
 - Keep exactly one unarchived Browser-owner task. After the configured number
   of completed owner runs, `x-relay` must enter the transactional `rotation`
-  route before taking another claim. Create one clean local Sol Max replacement,
+  route before taking another claim. Create one clean local Sol High replacement,
   retarget the existing heartbeat with official Codex app tools, atomically
   switch `browser_owner_thread_id`, archive the old owner, and then close the
   rotation transaction. Never create a second replacement while a transaction

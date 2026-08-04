@@ -63,7 +63,7 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertIn("poyasnitelnaya-brigada-v2", result["prompt"])
         self.assertIn("прямой просьбе Alex применить именно v1", result["prompt"])
         self.assertIn("gpt-5.6-sol", result["prompt"])
-        self.assertIn("reasoning_effort=max", result["prompt"])
+        self.assertIn("reasoning_effort=high", result["prompt"])
         self.assertIn(
             "generation_skill=poyasnitelnaya-brigada-v2",
             result["prompt"],
@@ -155,6 +155,29 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertTrue(resumed["dispatch"])
         self.assertEqual(resumed["event_ids"], [other["event_id"]])
         self.assertEqual(resumed["inbound_route_mode"], "normal")
+
+    def test_author_priority_drains_queue_until_focus_event_appears(self) -> None:
+        other = self.event()
+        focus = self.event()
+        focus["event_id"] = "2081050838240211435"
+        focus["event_url"] = (
+            "https://x.com/focus/status/2081050838240211435"
+        )
+        focus["author_id"] = "902"
+        self.write_events([other, focus])
+
+        started = autopilot_bridge.start_author_priority(
+            self.config,
+            ["902"],
+        )
+        gated = autopilot_bridge.gate(self.config, lease_seconds=1800)
+
+        self.assertEqual(started["mode"], "author-priority")
+        self.assertEqual(gated["event_ids"], [focus["event_id"]])
+
+        self.write_events([other])
+        resumed = autopilot_bridge.gate(self.config, lease_seconds=1800)
+        self.assertEqual(resumed["event_ids"], [other["event_id"]])
 
     def test_simple_only_gate_prioritizes_known_short_and_skips_local_max(
         self,
@@ -803,7 +826,7 @@ class AutopilotBridgeTests(unittest.TestCase):
             owner["id_source"],
             "config.browser_owner_thread_id",
         )
-        self.assertEqual(owner["minimum_reasoning_effort"], "max")
+        self.assertEqual(owner["minimum_reasoning_effort"], "high")
         self.assertEqual(
             automation["target_thread_role"],
             "browser_owner",

@@ -133,7 +133,7 @@ When the queue becomes non-empty:
    history across other stored conversations.
 5. It checks the ledger for the parent publication type and generation
    provenance.
-6. A follow-up to a prior local Sol Max reply continues through the local
+6. A follow-up to a prior local Sol High reply continues through the local
    explainer skill with the complete exact X history.
 7. A follow-up to a short reply is classified by Sol using the complete
    ordered X chain, exact earlier reply text, and prior source URLs.
@@ -182,7 +182,7 @@ author ID, parent status ID and conversation ID. A published
 web visual bot. Every visual profile must preserve the generated image file,
 SHA-256, MIME, `composer_attachment_verified=true`, and exact official
 `reply.media`. Every profile keeps the owner on `gpt-5.6-sol` with effort
-`max`. ChatGPT web is forbidden outside `lozhkin_web`.
+`high`. ChatGPT web is forbidden outside `lozhkin_web`.
 
 Live route classification is persisted separately in
 `var/inbound-route-control.json`. It is scheduling state, not a resolution and
@@ -243,9 +243,15 @@ recovered, keep the old ledger entry unchanged. Append a replacement handoff
 with `supersedes_existing_resolution=true` and a precise
 `resolution_revision_reason`. Synchronization may auditably revise `skip` to
 `published`, `skip` to `blocked`, `blocked` to `published`, or `blocked` to
-`skip`. A published resolution is terminal. Never use this mechanism to
-silently rewrite a classification, remove a publication, or bypass the normal
-duplicate checks.
+`skip`. A published resolution is terminal except for one narrow operator
+replacement: Alex explicitly deleted the exact recorded reply and requested a
+corrected publication. In that case run `replace-deleted-publication` for the
+exact event. It must verify the old status through the official X API and
+accept only an exact `resource-not-found` response, preserve the old resolution
+and Alex turn, and create a one-use authorization for a new canonical reply
+URL. Authentication, billing, network and generic API failures are not deletion
+proof. Never use this mechanism to silently rewrite a classification, remove a
+publication, or bypass the normal duplicate checks.
 
 For the historical backlog, use `initial-audit-next --conversations 1` to get
 the next deterministic newest-first conversation group with exact stored text
@@ -268,15 +274,15 @@ missing expanded attachment metadata, invalid stored payloads, and append-only
 history conflicts stay pending.
 
 Run expiry exactly once when a cycle begins. After that, process every new
-direct reply and preserve active short or local Sol Max chains until resolved.
+direct reply and preserve active short or local Sol High chains until resolved.
 Never rerun expiry to age out an event that is queued, being researched, or
-waiting for local Sol Max generation.
+waiting for local Sol High generation.
 
 While a historical audit is still running, every newly polled direct reply is
 a hot-wave priority. After completing each live conversation branch, call
 `initial-audit-next` again before opening another old branch. Process newly
 created events first and preserve their exact parent chain so a fast dialogue
-does not become stale. A queued local Sol Max event that has not passed local
+does not become stale. A queued local Sol High event that has not passed local
 generation and validation must remain unresolved, but it must not prevent
 processing other fresh short or already-answered events returned in the same
 newest-first batch.
@@ -334,7 +340,7 @@ authority for queued eligible replies.
    minute.
 3. Let the event dispatcher run `autopilot_bridge gate` without a model.
 4. Only for `dispatch=true`, launch Codex Desktop when it is absent. The
-   existing self-owned heartbeat is attached directly to the dedicated Sol Max
+   existing self-owned heartbeat is attached directly to the dedicated Sol High
    owner task and calls one `relay-reserve-handoff`. Python chooses rotation,
    repair, inbound X, or idle-only outbound and returns one unambiguous
    `dispatch` plus `route`. The same task executes the corresponding claim;
@@ -343,7 +349,7 @@ authority for queued eligible replies.
    `release-handoff` command with the exact reservation token and finish
    without Browser. Leave the durable queue pending. An outbound route already
    owns a slot claim and must use its exact failure or pause command instead.
-6. Let the same Sol Max owner task atomically claim the queue with
+6. Let the same Sol High owner task atomically claim the queue with
    `scripts/autopilot_bridge.py claim`.
 7. Run the mechanical claim before loading X skills and references. If the
    queue is empty, another global owner is active, or memory is deferred, use
@@ -362,7 +368,7 @@ authority for queued eligible replies.
     events. The resource profile caps independent read-only X tabs before
     preflight. Composer, publication, verification, history import and resolve
     remain one ordered writer lane, with immediate durable commit after each
-    event. A local Sol Max route opens no ChatGPT tab.
+    event. A local Sol High route opens no ChatGPT tab.
 12. Never let the watcher, dispatcher, or relay publish. Sol must perform
     live context inspection, fact checking, duplicate prevention, routing,
     composer validation, publication, URL verification, history storage, and
@@ -446,7 +452,7 @@ line. Append one metadata record:
 ```
 
 Use the legacy database enum `short`, `pro`, or `mixed` only after checking the
-canonical chain. Here `pro` is a compatibility value for the local Sol Max
+canonical chain. Here `pro` is a compatibility value for the local Sol High
 route, not a ChatGPT model. The importer pre-scans this correction and still
 rolls back the entire file on any remaining conflict.
 
