@@ -211,9 +211,16 @@ priorities, use `mode=author-priority` with immutable numeric IDs in explicit
 descending priority order. The dispatcher exposes normal FIFO while no selected
 author has pending work. Otherwise the next claim contains only events from the
 first listed author who currently has pending work. Lower tiers and other
-events remain queued. Do not interrupt an already active publication;
-the priority applies at the next reservation gate. Use the existing
-`stop-author-focus` command to restore normal FIFO.
+events remain queued. Do not interrupt an already active publication. After
+every durable event commit, run `autopilot_bridge.py priority-checkpoint` with
+the exact claim token and completed event ID. If it returns
+`higher_priority_preempted`, do not start the next event: close its unfilled
+task-owned tab, finalize evidence only for `completed_event_ids`, complete the
+shrunken claim, and end the turn. The deferred event IDs remain queued. Use the
+existing `stop-author-focus` command to restore normal FIFO.
+The first listed author may use the configured bounded batch. Every lower tier
+and ordinary FIFO fallback is claimed one event at a time, forcing a fresh
+priority decision immediately after that event.
 
 ## Cross-thread commenter memory
 

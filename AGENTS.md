@@ -70,9 +70,17 @@
   pending event has any selected numeric author ID, the dispatcher uses normal
   FIFO. It selects only events from the first listed author who currently has
   pending work, so lower tiers never displace a live higher tier.
-  An already active claim finishes its current ordered transaction; it is not
-  interrupted mid-publication. Stop it with `stop-author-focus` to restore
-  normal FIFO. Never derive this mode from a display name or handle.
+  Never interrupt the one event whose publication transaction is already in
+  progress. Immediately after every durable event commit, run
+  `autopilot_bridge.py priority-checkpoint`. If a newly queued author has a
+  higher configured rank, return every not-yet-published event in the current
+  claim to the durable queue, complete only the verified outcomes, and end the
+  turn so the next reservation gate claims the higher tier. Stop the mode with
+  `stop-author-focus` to restore normal FIFO. Never derive this mode from a
+  display name or handle.
+  Claims for the first listed author may use the configured bounded batch.
+  Claims for every lower tier and ordinary FIFO fallback contain exactly one
+  event, which makes the next priority decision unavoidable after that event.
 - If the resource guard defers a run, leave every event unresolved and close
   the scheduled task without Browser work.
 - Use deterministic scripts for queue state, exact IDs, duplicate checks,

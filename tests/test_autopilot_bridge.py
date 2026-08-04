@@ -91,6 +91,7 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.assertNotIn("Жди готовый ответ до", result["prompt"])
         self.assertIn("INBOUND_ROUTE_MODE=normal", result["prompt"])
         self.assertIn("route-classified", result["prompt"])
+        self.assertIn("priority-checkpoint", result["prompt"])
 
     def test_start_simple_wave_snapshots_only_current_queue(self) -> None:
         first = self.event()
@@ -178,6 +179,155 @@ class AutopilotBridgeTests(unittest.TestCase):
         self.write_events([other])
         resumed = autopilot_bridge.gate(self.config, lease_seconds=1800)
         self.assertEqual(resumed["event_ids"], [other["event_id"]])
+
+    def test_author_priority_lower_tier_claim_limit_is_one(self) -> None:
+        payload = json.loads(self.config.read_text(encoding="utf-8"))
+        payload["autopilot_max_claim_events"] = 3
+        payload["autopilot_max_parallel_read_tabs"] = 3
+        self.config.write_text(json.dumps(payload), encoding="utf-8")
+        lower_events = []
+        for offset in range(3):
+            event = self.event()
+            event_id = str(2081050838240211434 + offset)
+            event["event_id"] = event_id
+            event["event_url"] = f"https://x.com/lower/status/{event_id}"
+            event["author_id"] = "901"
+            lower_events.append(event)
+        self.write_events(lower_events)
+        autopilot_bridge.start_author_priority(self.config, ["902", "901"])
+
+        gated = autopilot_bridge.gate(self.config, lease_seconds=1800)
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+
+        self.assertEqual(gated["claim_limit"], 1)
+        self.assertEqual(gated["event_ids"], [lower_events[0]["event_id"]])
+        self.assertEqual(claimed["event_ids"], [lower_events[0]["event_id"]])
+
+    def test_priority_checkpoint_preempts_unpublished_lower_tier(self) -> None:
+        payload = json.loads(self.config.read_text(encoding="utf-8"))
+        payload["autopilot_max_claim_events"] = 3
+        payload["autopilot_max_parallel_read_tabs"] = 3
+        self.config.write_text(json.dumps(payload), encoding="utf-8")
+
+        lower_events = []
+        for offset in range(3):
+            event = self.event()
+            event_id = str(2081050838240211434 + offset)
+            event["event_id"] = event_id
+            event["event_url"] = f"https://x.com/lower/status/{event_id}"
+            event["author_id"] = "901"
+            event["first_seen_at"] = f"2026-07-25T16:19:0{offset}Z"
+            lower_events.append(event)
+        primary = self.event()
+        primary["event_id"] = "2081050838240211499"
+        primary["event_url"] = (
+            "https://x.com/primary/status/2081050838240211499"
+        )
+        primary["author_id"] = "902"
+        primary["first_seen_at"] = "2026-07-25T16:20:00Z"
+
+        self.write_events(lower_events)
+        autopilot_bridge.start_author_priority(self.config, ["902", "901"])
+        wake_file, state_file = autopilot_dispatch.load_paths(self.config)
+        claimed = autopilot_dispatch.claim(
+            wake_file,
+            state_file,
+            lease_seconds=1800,
+            max_events=3,
+            priority_event_ids=frozenset(
+                event["event_id"] for event in lower_events
+            ),
+        )
+        claimed_ids = [event["id"] for event in claimed["events"]]
+        self.assertEqual(
+            claimed_ids,
+            [event["event_id"] for event in lower_events],
+        )
+
+        completed_id = lower_events[0]["event_id"]
+        self.write_durable_resolutions([completed_id])
+        self.write_events([*lower_events[1:], primary])
+
+        checkpoint = autopilot_bridge.priority_checkpoint(
+            self.config,
+            claimed["claim_token"],
+            completed_id,
+        )
+
+        self.assertEqual(checkpoint["status"], "higher_priority_preempted")
+        self.assertTrue(checkpoint["preempted"])
+        self.assertEqual(checkpoint["preempting_author_id"], "902")
+        self.assertEqual(
+            checkpoint["preempting_event_ids"],
+            [primary["event_id"]],
+        )
+        self.assertEqual(
+            checkpoint["deferred_event_ids"],
+            [event["event_id"] for event in lower_events[1:]],
+        )
+        self.assertEqual(checkpoint["completed_event_ids"], [completed_id])
+        state = autopilot_dispatch.load_state(
+            self.root / "var" / "autopilot-dispatch.json"
+        )
+        self.assertEqual(state["owner"]["event_ids"], [completed_id])
+
+        self.write_claim_manifest(claimed["claim_token"], [completed_id])
+        with mock.patch.object(
+            autopilot_bridge,
+            "_trigger_next_dispatch",
+            return_value={"status": "dispatch_kicked", "triggered": True},
+        ):
+            completed = autopilot_bridge.mark_completed(
+                self.config,
+                claimed["claim_token"],
+            )
+        self.assertEqual(completed["event_ids"], [completed_id])
+        resumed = autopilot_bridge.gate(self.config, lease_seconds=1800)
+        self.assertEqual(resumed["event_ids"], [primary["event_id"]])
+
+    def test_priority_checkpoint_keeps_current_primary_batch(self) -> None:
+        payload = json.loads(self.config.read_text(encoding="utf-8"))
+        payload["autopilot_max_claim_events"] = 2
+        payload["autopilot_max_parallel_read_tabs"] = 2
+        self.config.write_text(json.dumps(payload), encoding="utf-8")
+
+        first = self.event()
+        first["author_id"] = "902"
+        second = self.event()
+        second["event_id"] = "2081050838240211435"
+        second["event_url"] = (
+            "https://x.com/primary/status/2081050838240211435"
+        )
+        second["author_id"] = "902"
+        lower = self.event()
+        lower["event_id"] = "2081050838240211499"
+        lower["event_url"] = (
+            "https://x.com/lower/status/2081050838240211499"
+        )
+        lower["author_id"] = "901"
+
+        self.write_events([first, second])
+        autopilot_bridge.start_author_priority(self.config, ["902", "901"])
+        claimed = autopilot_bridge.claim(self.config, lease_seconds=1800)
+        self.write_durable_resolutions([first["event_id"]])
+        self.write_events([second, lower])
+
+        checkpoint = autopilot_bridge.priority_checkpoint(
+            self.config,
+            claimed["claim_token"],
+            first["event_id"],
+        )
+
+        self.assertEqual(checkpoint["status"], "priority_checkpoint_clear")
+        self.assertFalse(checkpoint["preempted"])
+        self.assertEqual(checkpoint["current_author_rank"], 0)
+        state = autopilot_dispatch.load_state(
+            self.root / "var" / "autopilot-dispatch.json"
+        )
+        self.assertEqual(
+            state["owner"]["event_ids"],
+            [first["event_id"], second["event_id"]],
+        )
 
     def test_simple_only_gate_prioritizes_known_short_and_skips_local_max(
         self,

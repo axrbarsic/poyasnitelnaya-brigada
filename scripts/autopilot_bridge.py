@@ -97,6 +97,23 @@ def route_selection(
     return state, priority_ids, excluded_ids
 
 
+def effective_claim_limit(
+    route_state: dict[str, Any],
+    pending_events: list[dict[str, Any]],
+    configured_limit: int,
+) -> int:
+    """Keep lower-priority work interruptible after every single event."""
+
+    if route_state["mode"] != inbound_route_control.AUTHOR_PRIORITY_MODE:
+        return configured_limit
+    primary_author_id = str(route_state["focus_author_ids"][0])
+    primary_pending = any(
+        str(event.get("author_id") or "") == primary_author_id
+        for event in pending_events
+    )
+    return configured_limit if primary_pending else 1
+
+
 def active_supervisor_owner(
     config_path: Path,
     *,
@@ -572,6 +589,11 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         config,
         pending_events,
     )
+    claim_limit = effective_claim_limit(
+        route_state,
+        pending_events,
+        policy.claim_events,
+    )
     guard = resource_guard.check(config_path)
     if guard.get("defer"):
         return _deferred_claim_result(wake_file, guard)
@@ -579,7 +601,7 @@ def claim(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         wake_file,
         state_file,
         lease_seconds=lease_seconds,
-        max_events=policy.claim_events,
+        max_events=claim_limit,
         runtime_id=resource_guard.codex_runtime_id(),
         priority_author_ids=(
             autopilot_dispatch.configured_priority_author_ids(config)
@@ -619,10 +641,15 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         config,
         pending_events,
     )
+    claim_limit = effective_claim_limit(
+        route_state,
+        pending_events,
+        policy.claim_events,
+    )
     pending_event_ids = [str(event["id"]) for event in pending_events]
     selected_events = autopilot_dispatch.select_claim_events(
         pending_events,
-        max_events=policy.claim_events,
+        max_events=claim_limit,
         priority_author_ids=(
             autopilot_dispatch.configured_priority_author_ids(config)
         ),
@@ -696,7 +723,7 @@ def gate(config_path: Path, *, lease_seconds: int) -> dict[str, Any]:
         "pending_count": len(pending_event_ids),
         "event_ids": selected_event_ids,
         "queued_event_ids": pending_event_ids,
-        "claim_limit": policy.claim_events,
+        "claim_limit": claim_limit,
         "inbound_route_mode": route_state["mode"],
         "resource_guard": guard,
     }
@@ -949,6 +976,136 @@ def renew_claim(
     }
 
 
+def priority_checkpoint(
+    config_path: Path,
+    claim_token: str,
+    completed_event_id: str,
+) -> dict[str, Any]:
+    """Preempt an unfinished lower-tier batch after one durable outcome."""
+
+    event_id = str(completed_event_id).strip()
+    if not event_id.isdigit() or len(event_id) > 19:
+        raise ValueError("completed event id must be numeric")
+
+    config = autopilot_dispatch.read_json(config_path)
+    wake_file, state_file = autopilot_dispatch.load_paths(config_path)
+    dispatch_state = autopilot_dispatch.load_state(state_file)
+    active_ids = autopilot_dispatch.claim_event_ids(
+        dispatch_state,
+        claim_token,
+    )
+    if event_id not in active_ids:
+        raise ValueError("completed event is not in the active claim")
+
+    pending_events = autopilot_dispatch.load_wake_events(wake_file)
+    pending_by_id = {
+        str(event["id"]): event
+        for event in pending_events
+    }
+    if event_id in pending_by_id:
+        raise ValueError(
+            "completed event is still pending; durable commit is incomplete"
+        )
+
+    completed_ids = [
+        active_id
+        for active_id in active_ids
+        if active_id not in pending_by_id
+    ]
+    browser_owner_claim.require_durable_resolutions(
+        config_path,
+        completed_ids,
+    )
+    remaining_ids = [
+        active_id
+        for active_id in active_ids
+        if active_id in pending_by_id
+    ]
+    route_state = inbound_route_control.load(
+        route_control_path(config_path, config)
+    )
+    result: dict[str, Any] = {
+        "status": "priority_checkpoint_clear",
+        "claim_token": claim_token,
+        "completed_event_id": event_id,
+        "completed_event_ids": completed_ids,
+        "remaining_event_ids": remaining_ids,
+        "inbound_route_mode": route_state["mode"],
+        "preempted": False,
+    }
+    if (
+        route_state["mode"]
+        != inbound_route_control.AUTHOR_PRIORITY_MODE
+        or not remaining_ids
+    ):
+        return result
+
+    focus_ids = list(route_state["focus_author_ids"])
+    rank_by_author = {
+        author_id: rank
+        for rank, author_id in enumerate(focus_ids)
+    }
+    fallback_rank = len(focus_ids)
+
+    def event_rank(event: dict[str, Any]) -> int:
+        return rank_by_author.get(
+            str(event.get("author_id") or ""),
+            fallback_rank,
+        )
+
+    current_rank = min(
+        event_rank(pending_by_id[active_id])
+        for active_id in remaining_ids
+    )
+    active_set = set(active_ids)
+    preempting_events = [
+        event
+        for event in pending_events
+        if str(event["id"]) not in active_set
+        and event_rank(event) < current_rank
+    ]
+    if not preempting_events:
+        result["current_author_rank"] = current_rank
+        return result
+
+    preempting_rank = min(event_rank(event) for event in preempting_events)
+    preempting = [
+        event
+        for event in preempting_events
+        if event_rank(event) == preempting_rank
+    ]
+    deferred = autopilot_dispatch.defer_claim_events(
+        state_file,
+        claim_token,
+        remaining_ids,
+    )
+    retained_ids = list(deferred["remaining_event_ids"])
+    write_health(
+        config_path,
+        status="work_in_progress",
+        event_ids=retained_ids,
+        claim_token=claim_token,
+    )
+    result.update(
+        {
+            "status": "higher_priority_preempted",
+            "preempted": True,
+            "current_author_rank": current_rank,
+            "preempting_author_rank": preempting_rank,
+            "preempting_author_id": focus_ids[preempting_rank],
+            "preempting_event_ids": [
+                str(event["id"])
+                for event in preempting
+            ],
+            "deferred_event_ids": list(deferred["deferred_event_ids"]),
+            "completed_event_ids": retained_ids,
+            "remaining_event_ids": [],
+            "owner_released": bool(deferred["owner_released"]),
+        }
+    )
+    return result
+
+
 def record_route_classification(
     config_path: Path,
     claim_token: str,
@@ -1150,6 +1307,9 @@ def build_parser() -> argparse.ArgumentParser:
     started.add_argument("--claim-token", required=True)
     renew = subparsers.add_parser("renew")
     renew.add_argument("--claim-token", required=True)
+    checkpoint = subparsers.add_parser("priority-checkpoint")
+    checkpoint.add_argument("--claim-token", required=True)
+    checkpoint.add_argument("--completed-event-id", required=True)
     classified = subparsers.add_parser("route-classified")
     classified.add_argument("--claim-token", required=True)
     classified.add_argument("--event-id", required=True)
@@ -1206,6 +1366,12 @@ def main(argv: list[str] | None = None) -> int:
             arguments.config,
             arguments.claim_token,
             lease_seconds=arguments.lease_seconds,
+        )
+    elif arguments.command == "priority-checkpoint":
+        result = priority_checkpoint(
+            arguments.config,
+            arguments.claim_token,
+            arguments.completed_event_id,
         )
     elif arguments.command == "route-classified":
         result = record_route_classification(

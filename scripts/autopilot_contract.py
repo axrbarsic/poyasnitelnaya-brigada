@@ -79,8 +79,16 @@ policy из Browser owner. Они остаются durable queued до явно�
 Выбранные IDs перечислены по убыванию приоритета. Следующий claim содержит
 только события первого автора в этом списке, у которого есть pending work, а
 остальные остаются durable queued. Уже начатый claim не прерывай
-посередине публикационной транзакции: заверши текущий event и верни приоритет
-на следующем reservation gate.
+посередине публикационной транзакции. Немедленно после durable commit каждого
+event выполни `python3 scripts/autopilot_bridge.py --config config.json
+priority-checkpoint --claim-token <CLAIM_TOKEN> --completed-event-id
+<EVENT_ID>`. При `status=higher_priority_preempted` не начинай следующий event:
+закрой его незаполненную task-owned вкладку, финализируй manifest только для
+`completed_event_ids`, выполни `completed` текущего claim и заверши turn. Все
+`deferred_event_ids` остаются queued и вернутся после более высокого tier.
+Для первого выбранного автора claim может использовать штатный bounded batch.
+Для lower tier и обычного FIFO fallback dispatcher выдаёт ровно один event,
+чтобы после него обязательно состоялась новая проверка приоритета.
 Не готовь весь пакет целиком перед первой публикацией. Если Browser замедлился,
 потерял вкладку или выросло давление памяти, закрой лишние task-owned вкладки и
 продолжай с одной, не освобождая unresolved event.
