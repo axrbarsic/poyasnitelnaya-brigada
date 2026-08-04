@@ -9,13 +9,15 @@
 </p>
 
 Reliable X reply autopilot with token-free detection, durable conversation
-memory, Sol High reasoning, and verified Browser publication.
+memory, Sol Max local-skill reasoning, and verified Browser publication.
 
-<p align="center">
-  <img src="docs/assets/system-flow-en.png"
-       alt="Poyasnitelnaya Brigada system flow"
-       width="430">
-</p>
+> Deployment status on 2026-08-01: the inbound terminal-first path runs through
+> the self-owned heartbeat of one persistent Sol Max Browser owner. The explainer route
+> moved from the custom GPT to a local versioned skill. Generation no longer
+> opens ChatGPT and instead uses Sol Max, exact SQLite history, and a
+> deterministic 4000 Unicode code-point upper bound with no length padding.
+> Scheduled outbound reuses that heartbeat only when the inbound queue is empty
+> and the writer is idle. The standalone local `x-15` cron remains paused.
 
 ## License and attribution
 
@@ -35,22 +37,47 @@ Codex Desktop Browser worker. It separates cheap mechanical work from expensive
 content decisions:
 
 - Python and the official X API detect, deduplicate, persist, and queue replies.
+- After new event IDs are durably queued, the watcher performs a non-killing
+  `launchctl kickstart` of the local dispatcher. The minute LaunchAgent remains
+  an independent fallback, so a failed kick loses no work and creates no
+  second owner.
 - A token-free Python dispatcher leases only eligible events.
-- A Codex Desktop automation runs a mechanical claim before loading skills. An
-  empty run exits before Browser, while a non-empty claim becomes the Browser
-  owner.
+- A minute LaunchAgent runs the read-only gate in plain Python. Empty, busy,
+  and resource-deferred queues use no model, open no Browser, and create no
+  Codex task.
+- Only a ready queue checks Codex Desktop. The terminal supervisor starts the
+  canonical workspace when Desktop is closed. Launch failure keeps every event
+  pending and raises a throttled local alert.
+- One existing in-app heartbeat is attached directly to the Sol Max owner and
+  calls `reserve-handoff`. Python selects one durable route, then the same task
+  executes the matching claim. There is no cross-thread send, relay task, or
+  process-local host dependency. A TTL reservation and global owner claim block
+  adjacent heartbeat runs from creating concurrent Browser owners.
 - A model-free LaunchAgent archives completed service runs and recovers stale
   owner claims without creating another Codex task.
-- The same janitor gracefully terminates only helper processes exactly matched
-  to a completed scheduled run, never the current Browser owner.
-- The same Sol High run opens the real X thread in the authenticated Codex
+- The supervisor may stop only a Desktop process that it launched itself, and
+  only after the queue is empty, the owner lease is gone, and a grace period
+  expires. It never closes a user-opened Desktop.
+- The Sol Max owner opens the real X thread in the authenticated Codex
   Browser, checks context and sources, prevents duplicates, and publishes one
   response per eligible event.
-- Long follow-ups can continue in the exact historical custom GPT conversation.
+- The dispatcher accepts success only after every dispatched event ID leaves
+  the durable queue. A released unresolved claim is a failure.
+- A reply posted manually by Alex is still an `alex` turn. When someone
+  continues that branch, the owner restores the manual parent and full live
+  context, persists them, and only then prepares the next reply.
+- Explainer targets and follow-ups run locally through
+  `poyasnitelnaya-brigada-v2` by default in Sol Max with exact durable history.
+  V1 remains unchanged and runs only when Alex explicitly requests it.
+- A local explainer reply is non-empty, contains at most 4000 Unicode code
+  points, does not target the limit, and passes deterministic source and
+  composer validation before publication.
 - SQLite and append-only JSONL preserve conversation history and audit evidence.
 
 Start with [the autopilot setup guide](docs/autopilot-setup.md) to adapt the
-system to another X account and Codex task.
+system to another X account and Codex task. The
+[local explainer skill contract](docs/local-explainer-skill.md) documents the
+Sol Max, maximum-length, history, and recovery rules.
 
 The complete executable project uses one canonical directory. See
 [the project layout contract](docs/project-layout.md) and
@@ -74,10 +101,16 @@ temporary directory, verifies SHA-256 for every file, and atomically publishes
 one manifested evidence tree. Its CLI always writes to the canonical
 `var/evidence/browser-owner` tree and exposes no arbitrary output path.
 
-The watcher uses the official X API user mentions endpoint with `since_id`. It
-stores immutable event IDs in SQLite, writes a durable pending queue, and
-maintains a health file. A separate watchdog detects stale polling and repeated
-failures. The official X API still requires an X API Bearer Token.
+The watcher uses the official X API user mentions endpoint with `since_id`.
+It can also run a bounded recent search over recent conversation IDs that
+contain an exact Alex turn. This closes the source gap for nested replies that
+continue the discussion without repeating `@axrbarsic`. The two sources keep
+independent cursors. The watcher stores immutable event IDs in SQLite, writes a
+durable pending queue, and maintains a health file. A token-free supervisor
+detects stale polling and contract failures. It performs one allowlisted poll
+kickstart, then creates one deduplicated durable incident for the existing Sol
+Max owner if the failure persists. The official X API still requires an X API
+Bearer Token.
 
 It does not:
 
@@ -86,10 +119,13 @@ It does not:
 - store API tokens in files;
 - make content-based skip decisions.
 
-When Alex explicitly grants standing autopilot authority, a Codex Desktop
-scheduled automation claims the durable queue and becomes the Browser owner for
-that run. The retired CLI launcher is not used because the built-in Browser is
-unavailable in Codex CLI. Sol High remains the only publication brain.
+When Alex explicitly grants standing autopilot authority, a model-free
+LaunchAgent checks the durable queue. Only a ready queue starts Desktop when
+needed. One existing in-app heartbeat belongs to the persistent Sol Max Browser
+owner. It reserves and claims work in the same durable task. Mobile Remote,
+local Desktop, and the automated Browser owner use that thread in order, while
+the global owner claim serializes publication. Sol remains the only publication
+brain, and the local explainer route always runs with Max reasoning.
 
 With `mandatory_response_mode=true`, every eligible available event inside the
 requested lookback receives exactly one reply. Support, sarcasm, jokes, insults,
@@ -124,9 +160,9 @@ post or official X API record is append-only verified.
 
 ## Current checkpoint
 
-Polling and watchdog LaunchAgents are installed for `@axrbarsic`. Both run
-every minute, and a Codex Desktop scheduled automation checks the compact queue
-every five minutes. A complete initial
+Polling, supervisor, and event dispatcher LaunchAgents run every minute
+for `@axrbarsic`. The dispatcher checks the compact queue without a model and
+starts the existing Sol owner only for ready work. A complete initial
 review remains a separate gate and must finish before an empty incremental
 queue is treated as proof of completeness.
 
@@ -141,6 +177,11 @@ Copy `config.example.json` to `config.json`, then set the numeric X user ID.
 Keep `mandatory_response_mode=true` for the no-content-skip contract.
 Set `commenter_memory_limit` to the compact number of prior interactions placed
 in each automation handoff. Deeper history remains available on demand:
+
+Enable `conversation_tail_enabled` to watch only recent chains with an exact
+Alex turn. Use `conversation_tail_initial_lookback_hours` to bound the first
+scan, and keep the mentions cursor separate from the conversation tail scan
+timestamp.
 
 ```bash
 python3 xmention_watcher.py --config config.json commenter-history EVENT_ID \
@@ -266,13 +307,10 @@ configuration and logs, and falls back to `/usr/bin/security` only when the
 helper is unavailable. Keychain is used only when no supported environment
 variable is present.
 
-Compile the helper locally before live use:
+Install the signed helper locally before live use:
 
 ```bash
-mkdir -p var
-xcrun swiftc -framework Security \
-  scripts/keychain_helper.swift \
-  -o var/keychain-helper
+scripts/install_keychain_helper.sh
 ```
 
 Store a token without putting it in process arguments:
@@ -282,11 +320,29 @@ printf '%s' "$X_BEARER_TOKEN" | \
   var/keychain-helper set axrbarsic-x-mention-watcher axrbarsic
 ```
 
-The helper also supports metadata-only verification:
+The helper supports presence checks:
 
 ```bash
 var/keychain-helper exists axrbarsic-x-mention-watcher axrbarsic
 ```
+
+Verify the Data Protection Keychain accessibility without printing the token:
+
+```bash
+var/keychain-helper is-after-first-unlock \
+  axrbarsic-x-mention-watcher axrbarsic
+```
+
+The installer builds an app-like helper, signs it with the configured Apple
+Development team, embeds a Mac provisioning profile, and verifies its
+Keychain access group and existing-item migration before atomically switching
+`var/keychain-helper`. On the first legacy migration, macOS may ask once for
+permission to let the signed helper read the old login-keychain item. Approve
+that system prompt: the token is not printed, the DP copy stays in Keychain,
+and later background reads do not require the prompt.
+The helper stores secrets in the macOS Data Protection Keychain as
+`AfterFirstUnlockThisDeviceOnly`. Add the Apple Account to Xcode before the
+first install. A standalone unsigned CLI cannot use this Keychain mode.
 
 `config.json`, `var/`, SQLite state, health files, queues, and secrets are
 excluded from Git.
@@ -324,7 +380,7 @@ python3 xmention_watcher.py --config config.json poll
 
 The optional dispatcher gives queued event IDs a 30-minute lease and returns
 one compact JSON claim. It prevents duplicate task wakeups while the Browser
-owner is working or a Pro response is still thinking.
+owner is working or a local-max response is still being prepared.
 
 ```bash
 python3 scripts/autopilot_dispatch.py \
@@ -347,8 +403,8 @@ python3 scripts/autopilot_bridge.py \
   claim
 ```
 
-If `dispatch` is true, the current Sol High scheduled run executes that prompt
-itself and marks the claim as started:
+If `dispatch` is true, the self-owned Sol Max heartbeat claims and marks the
+work as started:
 
 ```bash
 python3 scripts/autopilot_bridge.py \
@@ -378,10 +434,11 @@ python3 scripts/autopilot_bridge.py \
   --error "Browser work failed"
 ```
 
-An empty queue exits without opening Browser. A non-empty claim contains only
-eligible event metadata and the standing contract. The scheduled Browser owner
-reads exact conversation history from SQLite, the append-only ledger, and
-recorded custom GPT URLs. The watcher and bridge never post directly.
+An empty queue exits without a model or Browser. A non-empty claim contains
+only eligible event metadata and the standing contract. The pinned Browser
+owner reads exact conversation history from SQLite and the append-only ledger.
+Historical custom GPT URLs remain audit metadata only. The watcher, dispatcher,
+and relay never post directly.
 
 `scripts/autopilot_resume.py` is a fail-closed retirement guard. It always
 exits nonzero and never claims an event or starts Codex. This prevents an old
@@ -421,9 +478,10 @@ Invalid timestamps, missing attachment metadata, and append-only history
 conflicts remain pending and make the command fail closed.
 
 Run expiry once at the start of a response cycle. Do not rerun it while a
-reply is being researched or Pro is thinking. After the cutoff is fixed, every
-new direct reply belongs to that active cycle until Alex stops it, even if an
-earlier target later becomes older than the initial lookback interval.
+reply is being researched or a local explainer draft is being generated. After
+the cutoff is fixed, every new direct reply belongs to that active cycle until
+Alex stops it, even if an earlier target later becomes older than the initial
+lookback interval.
 
 The Browser owner must open every remaining queued status, inspect the full
 reply subtree, classify text and media in context, and durably resolve it.
@@ -472,19 +530,18 @@ runs are idempotent. A `published` handoff additionally requires
 whose parent is the resolved event.
 
 Use `blocked` only for an actionable event whose terminal mandatory workflow
-dependency is unavailable, and include an allowed `blocker_code`. For example,
-a follow-up to a Pro reply is blocked when its
-exact historical ChatGPT conversation URL cannot be recovered and opening a
-new conversation would violate the continuity contract. It is not an ordinary
-skip. The Browser handoff marker must be
+dependency is unavailable, and include an allowed `blocker_code`. Legacy
+ChatGPT conversation, model, and screenshot blockers are no longer terminal
+because the local skill does not depend on those resources. The Browser handoff
+marker must be
 `durable_blocked_pending_root_resolve`, and `blocked` must not include a reply
 URL.
 
-Use the narrowest terminal code. `required_pro_model_unavailable` means the
-exact historical conversation exists but cannot use the required Pro model.
-`target_screenshot_unavailable` means repeated verified capture attempts could
-not produce the mandatory clean target-only screenshot and no contract-safe
-fallback exists. A transient Browser or capture error remains queued and must
+Use the narrowest terminal code. The historical
+`required_pro_model_unavailable`, `missing_historical_pro_conversation`, and
+`target_screenshot_unavailable` records are requeued by the compatibility
+command `pro-model-recovery-requeue`. A transient Browser or source error
+remains queued and must
 not use either terminal code.
 
 If live X proves that Alex already answered before the current audit, use
@@ -504,9 +561,9 @@ python3 xmention_watcher.py --config config.json mandatory-response-requeue \
 ```
 
 This command is also the clean-experiment entry point after an eligibility fix.
-Run dry-run and apply with one identical `as-of`, then let the ordinary
-scheduled Sol automation discover the event. Do not manually inject its known
-ID. The reusable diagnostic contract is stored in
+Run dry-run and apply with one identical `as-of`, then let the model-free
+dispatcher launch the existing Sol owner heartbeat. Do not manually inject
+the known ID. The reusable diagnostic contract is stored in
 [`reliability-debugging.md`](skill-backup/x-twitter-operator/references/reliability-debugging.md).
 
 Never rewrite an old ledger record when scope changes or a contract dependency
@@ -575,26 +632,26 @@ Sol classification, such as `supportive_confirmation`,
 The broad field accepts only `supportive`, `opposing`, `neutral`, or
 `ambiguous`; labels such as `corrective` belong in `stance-detail`.
 
-## Watchdog
+## Supervisor
 
-One-shot health check:
-
-```bash
-python3 xmention_watcher.py --config config.json watchdog
-```
-
-Continuous shadow watchdog:
+One-shot token-free system check:
 
 ```bash
-python3 xmention_watcher.py --config config.json watchdog --loop
+python3 scripts/autopilot_supervisor.py \
+  --config config.json \
+  --contract recovery/system-contract.json \
+  run
 ```
 
-The watchdog is intentionally separate from the poller. If the poller dies, it
-cannot report its own death. The watchdog detects an old `last_success_at`,
-repeated failures, and a long period with no new events that deserves a manual
-cross-check. On macOS it sends a local notification only when health status
-changes. New queued X events also produce one local notification per successful
-poll that finds new IDs.
+The supervisor remains silent while healthy. A stale or failing poll receives
+one allowlisted LaunchAgent kickstart. A persistent or nonrepairable failure
+becomes one durable incident. Dispatcher and the self-owned heartbeat expose
+that incident to the existing Sol Max owner. Reservation, claim, cooldown,
+and a required completion report prevent duplicate wakes and false success.
+
+```bash
+python3 scripts/autopilot_supervisor.py --config config.json status
+```
 
 The poller uses a process lock, rejects repeated or excessive pagination, and
 never advances `since_id` when a request fails. Background stdout and stderr go
@@ -603,10 +660,11 @@ files cannot grow without bound.
 
 ## Conversation history
 
-SQLite stores an append-only conversation graph for both self-authored and Pro
-follow-ups. Each turn contains the exact public X text, status ID, parent status
-ID, URL, actor, author, provenance, timestamp, and factual source URLs. Pro
-chains also retain the exact ChatGPT conversation URL.
+SQLite stores an append-only conversation graph for both self-authored and
+local-max follow-ups. Each turn contains the exact public X text, status ID,
+parent status ID, URL, actor, author, provenance, timestamp, and factual source
+URLs. Legacy chains may also retain an exact ChatGPT conversation URL as
+historical audit metadata. Local generation never opens that URL.
 
 Import one JSON object, an array, or JSONL snapshots:
 
@@ -640,15 +698,12 @@ and applies the correction atomically, so append-only history remains intact.
 
 ## Background service
 
-The `macos/` directory contains LaunchAgent templates whose intervals come from
-`config.json`. The deployment uses a one-minute poll and watchdog plus a
-five-minute model-free session janitor. Codex Desktop owns the five-minute Sol
-High automation that exits early on an empty queue and processes a non-empty
-claim in the same run. The janitor archives old service tasks and recovers
-orphaned claims without creating a Codex task or spending model tokens. It
-also reaps only exact completed-run helper bundles after a grace period, which
-prevents five-minute `node_repl` and MCP accumulation without broad process
-killing.
+The `macos/` directory contains four LaunchAgent templates whose intervals come
+from `config.json`: poll, supervisor, event dispatcher, and Codex CLI updater.
+The idle terminal path is entirely model-free. A ready queue starts Codex
+Desktop when needed, then the existing Sol Max heartbeat claims the route.
+Owner rotation archives the exact retired task through the official Codex task
+API, and expired claims are reclaimed atomically by the next claim.
 
 Do not install the LaunchAgents on another machine until a live shadow run with
 the official X API has matched a manual Browser scan.
@@ -661,7 +716,7 @@ python3 scripts/render_launchd.py \
   --output-dir /absolute/path/to/staging
 ```
 
-Rendering validates all three plists. Loading them with `launchctl` is a
+Rendering validates all five plists. Loading them with `launchctl` is a
 separate, explicit production step.
 
 ## Tests
@@ -674,7 +729,7 @@ python3 -m unittest discover -s tests -v
 
 `skill-backup/x-twitter-operator` is a restorable snapshot of the installed
 Codex skill contract that governs detection, Browser ownership, duplicate
-checks, Pro continuity, and publication. Mutable runtime data remains under
+checks, local-max continuity, and publication. Mutable runtime data remains under
 the ignored `var/` directory in the same canonical project root. Credentials
 remain in macOS Keychain, and official X archive ZIP files remain in the
 separate archive vault.

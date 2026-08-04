@@ -6,7 +6,7 @@ from __future__ import annotations
 import ctypes
 import re
 import subprocess
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +27,8 @@ CODEX_MAIN_EXECUTABLES = (
     "/Applications/Codex.app/Contents/MacOS/Codex",
     "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT",
 )
+RENDERER_EQUIVALENT_RSS_KIB = 256 * 1024
+HELPER_EQUIVALENT_RSS_KIB = 64 * 1024
 
 
 @dataclass(frozen=True)
@@ -39,40 +41,87 @@ class ResourceSample:
     user_idle_seconds: int | None = None
     on_ac_power: bool | None = None
     swap_used_mb: float | None = None
+    node_repl_rss_mb: float = 0.0
+    mcp_process_rss_mb: float = 0.0
+    renderer_process_count: int = 0
+    renderer_rss_mb: float = 0.0
+    node_repl_process_count: int = 0
+    mcp_raw_process_count: int = 0
+
+
+@dataclass
+class ProcessTotals:
+    codex_rss_kib: int = 0
+    renderer_process_count: int = 0
+    renderer_rss_kib: int = 0
+    node_repl_process_count: int = 0
+    node_repl_rss_kib: int = 0
+    mcp_raw_process_count: int = 0
+    mcp_process_rss_kib: int = 0
+
+    def add(self, rss_kib: int, command: str) -> None:
+        is_codex = any(marker in command for marker in CODEX_MARKERS)
+        if is_codex:
+            self.codex_rss_kib += rss_kib
+        if is_codex and "(Renderer)" in command:
+            self.renderer_process_count += 1
+            self.renderer_rss_kib += rss_kib
+        if "node_repl" in command:
+            self.node_repl_process_count += 1
+            self.node_repl_rss_kib += rss_kib
+        lowered = command.lower()
+        if "mcp" in lowered and any(
+            marker in lowered for marker in ("python", "node", "uv")
+        ):
+            self.mcp_raw_process_count += 1
+            self.mcp_process_rss_kib += rss_kib
+
+    def sample(self) -> ResourceSample:
+        return ResourceSample(
+            codex_rss_mb=round(self.codex_rss_kib / 1024, 1),
+            renderer_count=_equivalent_count(
+                self.renderer_rss_kib,
+                self.renderer_process_count,
+                RENDERER_EQUIVALENT_RSS_KIB,
+            ),
+            node_repl_count=_equivalent_count(
+                self.node_repl_rss_kib,
+                self.node_repl_process_count,
+                HELPER_EQUIVALENT_RSS_KIB,
+            ),
+            mcp_process_count=_equivalent_count(
+                self.mcp_process_rss_kib,
+                self.mcp_raw_process_count,
+                HELPER_EQUIVALENT_RSS_KIB,
+            ),
+            free_percent=None,
+            node_repl_rss_mb=round(self.node_repl_rss_kib / 1024, 1),
+            mcp_process_rss_mb=round(self.mcp_process_rss_kib / 1024, 1),
+            renderer_process_count=self.renderer_process_count,
+            renderer_rss_mb=round(self.renderer_rss_kib / 1024, 1),
+            node_repl_process_count=self.node_repl_process_count,
+            mcp_raw_process_count=self.mcp_raw_process_count,
+        )
+
+
+def _equivalent_count(
+    rss_kib: int,
+    process_count: int,
+    equivalent_rss_kib: int,
+) -> int:
+    if process_count == 0:
+        return 0
+    return (rss_kib + equivalent_rss_kib - 1) // equivalent_rss_kib
 
 
 def parse_processes(output: str) -> ResourceSample:
-    codex_rss_kib = 0
-    renderer_count = 0
-    node_repl_count = 0
-    mcp_process_count = 0
+    totals = ProcessTotals()
     for raw_line in output.splitlines():
         match = re.match(r"^\s*(\d+)\s+(.+)$", raw_line)
         if match is None:
             continue
-        rss_kib = int(match.group(1))
-        command = match.group(2)
-        if any(marker in command for marker in CODEX_MARKERS):
-            codex_rss_kib += rss_kib
-        if "(Renderer)" in command and any(
-            marker in command for marker in CODEX_MARKERS
-        ):
-            renderer_count += 1
-        if "node_repl" in command:
-            node_repl_count += 1
-        if "mcp" in command.lower() and (
-            "python" in command.lower()
-            or "node" in command.lower()
-            or "uv" in command.lower()
-        ):
-            mcp_process_count += 1
-    return ResourceSample(
-        codex_rss_mb=round(codex_rss_kib / 1024, 1),
-        renderer_count=renderer_count,
-        node_repl_count=node_repl_count,
-        mcp_process_count=mcp_process_count,
-        free_percent=None,
-    )
+        totals.add(int(match.group(1)), match.group(2))
+    return totals.sample()
 
 
 def parse_runtime_id(output: str) -> str | None:
@@ -159,9 +208,8 @@ def _native_command(libc: Any, pid: int, path: str) -> str:
     return " ".join(arguments) if arguments else path
 
 
-def collect_native_processes() -> ResourceSample:
+def _load_libproc() -> Any:
     libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-    libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
     libproc.proc_listpids.argtypes = [
         ctypes.c_uint32,
         ctypes.c_uint32,
@@ -183,6 +231,11 @@ def collect_native_processes() -> ResourceSample:
         ctypes.c_int,
     ]
     libproc.proc_pidinfo.restype = ctypes.c_int
+    return libproc
+
+
+def _load_libc() -> Any:
+    libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
     libc.sysctl.argtypes = [
         ctypes.POINTER(ctypes.c_int),
         ctypes.c_uint,
@@ -192,7 +245,10 @@ def collect_native_processes() -> ResourceSample:
         ctypes.c_size_t,
     ]
     libc.sysctl.restype = ctypes.c_int
+    return libc
 
+
+def _native_pids(libproc: Any) -> list[int]:
     required = libproc.proc_listpids(1, 0, None, 0)
     if required <= 0:
         raise OSError(ctypes.get_errno(), "proc_listpids size failed")
@@ -206,66 +262,54 @@ def collect_native_processes() -> ResourceSample:
     )
     if written <= 0:
         raise OSError(ctypes.get_errno(), "proc_listpids failed")
+    return [
+        int(pid)
+        for pid in pids[: written // ctypes.sizeof(ctypes.c_int)]
+        if pid > 0
+    ]
 
+
+def _native_process_path(libproc: Any, pid: int) -> str | None:
+    path_buffer = ctypes.create_string_buffer(4096)
+    if libproc.proc_pidpath(pid, path_buffer, len(path_buffer)) <= 0:
+        return None
+    return path_buffer.value.decode("utf-8", errors="replace")
+
+
+def _native_process_row(libproc: Any, libc: Any, pid: int) -> str | None:
+    path = _native_process_path(libproc, pid)
+    if path is None:
+        return None
+    info = ProcTaskInfo()
+    info_size = libproc.proc_pidinfo(
+        pid,
+        4,
+        0,
+        ctypes.byref(info),
+        ctypes.sizeof(info),
+    )
+    if info_size != ctypes.sizeof(info):
+        return None
+    command = _native_command(libc, pid, path)
+    return f"{info.resident_size // 1024} {command}"
+
+
+def collect_native_processes() -> ResourceSample:
+    libproc = _load_libproc()
+    libc = _load_libc()
     rows: list[str] = []
-    for pid in pids[: written // ctypes.sizeof(ctypes.c_int)]:
-        if pid <= 0:
-            continue
-        path_buffer = ctypes.create_string_buffer(4096)
-        if libproc.proc_pidpath(pid, path_buffer, len(path_buffer)) <= 0:
-            continue
-        path = path_buffer.value.decode("utf-8", errors="replace")
-        info = ProcTaskInfo()
-        info_size = libproc.proc_pidinfo(
-            pid,
-            4,
-            0,
-            ctypes.byref(info),
-            ctypes.sizeof(info),
-        )
-        if info_size != ctypes.sizeof(info):
-            continue
-        command = _native_command(libc, pid, path)
-        rows.append(f"{info.resident_size // 1024} {command}")
+    for pid in _native_pids(libproc):
+        row = _native_process_row(libproc, libc, pid)
+        if row is not None:
+            rows.append(row)
     return parse_processes("\n".join(rows))
 
 
 def collect_native_runtime_id() -> str | None:
-    libproc = ctypes.CDLL("/usr/lib/libproc.dylib", use_errno=True)
-    libproc.proc_listpids.argtypes = [
-        ctypes.c_uint32,
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-        ctypes.c_int,
-    ]
-    libproc.proc_listpids.restype = ctypes.c_int
-    libproc.proc_pidpath.argtypes = [
-        ctypes.c_int,
-        ctypes.c_void_p,
-        ctypes.c_uint32,
-    ]
-    libproc.proc_pidpath.restype = ctypes.c_int
-    required = libproc.proc_listpids(1, 0, None, 0)
-    if required <= 0:
-        raise OSError(ctypes.get_errno(), "proc_listpids size failed")
-    capacity = max(required // ctypes.sizeof(ctypes.c_int) + 64, 128)
-    pids = (ctypes.c_int * capacity)()
-    written = libproc.proc_listpids(
-        1,
-        0,
-        pids,
-        ctypes.sizeof(pids),
-    )
-    if written <= 0:
-        raise OSError(ctypes.get_errno(), "proc_listpids failed")
+    libproc = _load_libproc()
     matches: list[str] = []
-    for pid in pids[: written // ctypes.sizeof(ctypes.c_int)]:
-        if pid <= 0:
-            continue
-        path_buffer = ctypes.create_string_buffer(4096)
-        if libproc.proc_pidpath(pid, path_buffer, len(path_buffer)) <= 0:
-            continue
-        path = path_buffer.value.decode("utf-8", errors="replace")
+    for pid in _native_pids(libproc):
+        path = _native_process_path(libproc, pid)
         if path in CODEX_MAIN_EXECUTABLES:
             matches.append(f"{path}:{pid}")
     return "|".join(sorted(matches)) if matches else None
@@ -286,7 +330,7 @@ def codex_runtime_id() -> str | None:
     return runtime_id
 
 
-def collect() -> ResourceSample:
+def _collect_process_sample() -> ResourceSample:
     try:
         process_result = subprocess.run(
             ["ps", "-axo", "rss=,command="],
@@ -295,9 +339,12 @@ def collect() -> ResourceSample:
             text=True,
             timeout=10,
         )
-        sample = parse_processes(process_result.stdout)
+        return parse_processes(process_result.stdout)
     except (OSError, subprocess.SubprocessError):
-        sample = collect_native_processes()
+        return collect_native_processes()
+
+
+def _collect_free_percent() -> int | None:
     try:
         memory_result = subprocess.run(
             ["/usr/bin/memory_pressure", "-Q"],
@@ -306,12 +353,17 @@ def collect() -> ResourceSample:
             text=True,
             timeout=10,
         )
-        free_percent = parse_free_percent(memory_result.stdout)
+        return parse_free_percent(memory_result.stdout)
     except (OSError, subprocess.SubprocessError):
-        free_percent = None
-    idle_seconds: int | None = None
-    on_ac_power: bool | None = None
-    swap_used_mb: float | None = None
+        return None
+
+
+def _collect_optional_metrics() -> tuple[
+    int | None,
+    bool | None,
+    float | None,
+]:
+    values: dict[str, Any] = {"idle": None, "power": None, "swap": None}
     commands = (
         (
             ["/usr/sbin/ioreg", "-c", "IOHIDSystem"],
@@ -341,19 +393,35 @@ def collect() -> ResourceSample:
             value = parser(result.stdout)
         except (OSError, subprocess.SubprocessError):
             value = None
-        if metric == "idle":
-            idle_seconds = value
-        elif metric == "power":
-            on_ac_power = value
-        else:
-            swap_used_mb = value
-    return ResourceSample(
-        codex_rss_mb=sample.codex_rss_mb,
-        renderer_count=sample.renderer_count,
-        node_repl_count=sample.node_repl_count,
-        mcp_process_count=sample.mcp_process_count,
+        values[metric] = value
+    return values["idle"], values["power"], values["swap"]
+
+
+def _merge_resource_sample(
+    sample: ResourceSample,
+    *,
+    free_percent: int | None,
+    idle_seconds: int | None,
+    on_ac_power: bool | None,
+    swap_used_mb: float | None,
+) -> ResourceSample:
+    return replace(
+        sample,
         free_percent=free_percent,
         user_idle_seconds=idle_seconds,
+        on_ac_power=on_ac_power,
+        swap_used_mb=swap_used_mb,
+    )
+
+
+def collect() -> ResourceSample:
+    sample = _collect_process_sample()
+    free_percent = _collect_free_percent()
+    idle_seconds, on_ac_power, swap_used_mb = _collect_optional_metrics()
+    return _merge_resource_sample(
+        sample,
+        free_percent=free_percent,
+        idle_seconds=idle_seconds,
         on_ac_power=on_ac_power,
         swap_used_mb=swap_used_mb,
     )
@@ -370,6 +438,10 @@ def select_mode(sample: ResourceSample, config: dict[str, Any]) -> str:
     pressure_free = int(config["resource_mode_pressure_free_percent"])
     pressure_rss = float(config["resource_mode_pressure_codex_rss_mb"])
     pressure_swap = float(config["resource_mode_pressure_swap_used_mb"])
+    swap_blocks_dispatch = bool(
+        config.get("memory_guard_swap_blocks_dispatch", False)
+    )
+    historical_swap = swap_is_historical(sample, config)
     if (
         (
             sample.free_percent is not None
@@ -377,8 +449,10 @@ def select_mode(sample: ResourceSample, config: dict[str, Any]) -> str:
         )
         or sample.codex_rss_mb > pressure_rss
         or (
-            sample.swap_used_mb is not None
+            swap_blocks_dispatch
+            and sample.swap_used_mb is not None
             and sample.swap_used_mb > pressure_swap
+            and not historical_swap
         )
     ):
         return "efficiency"
@@ -387,6 +461,16 @@ def select_mode(sample: ResourceSample, config: dict[str, Any]) -> str:
         sample.user_idle_seconds is not None
         and sample.user_idle_seconds >= idle_threshold
         and sample.on_ac_power is True
+        and (
+            sample.free_percent is None
+            or sample.free_percent
+            >= int(
+                config.get(
+                    "resource_mode_performance_min_free_percent",
+                    35,
+                )
+            )
+        )
     ):
         return "performance"
     return "balanced"
@@ -402,14 +486,109 @@ def profile_limits(config: dict[str, Any], mode: str) -> dict[str, Any]:
     return limits
 
 
+def swap_is_historical(
+    sample: ResourceSample,
+    config: dict[str, Any],
+) -> bool:
+    return (
+        sample.free_percent is not None
+        and sample.free_percent
+        >= int(config.get("memory_guard_swap_recovery_free_percent", 25))
+        and sample.codex_rss_mb
+        <= float(config.get("memory_guard_swap_recovery_codex_rss_mb", 2000))
+    )
+
+
+def helper_envelope_is_healthy(
+    sample: ResourceSample,
+    config: dict[str, Any],
+) -> bool:
+    return (
+        sample.free_percent is not None
+        and sample.free_percent
+        >= int(config.get("memory_guard_helper_recovery_free_percent", 25))
+        and sample.codex_rss_mb
+        <= float(
+            config.get("memory_guard_helper_recovery_codex_rss_mb", 2000)
+        )
+        and (
+            sample.node_repl_rss_mb + sample.mcp_process_rss_mb
+            <= float(
+                config.get(
+                    "memory_guard_helper_recovery_total_rss_mb",
+                    512,
+                )
+            )
+        )
+    )
+
+
+def high_free_dispatch_envelope_is_healthy(
+    sample: ResourceSample,
+    config: dict[str, Any],
+) -> bool:
+    return (
+        sample.free_percent is not None
+        and sample.free_percent
+        >= int(config.get("memory_guard_high_free_recovery_percent", 35))
+        and sample.codex_rss_mb
+        <= float(
+            config.get(
+                "memory_guard_high_free_recovery_codex_rss_mb",
+                2700,
+            )
+        )
+        and sample.renderer_count
+        <= int(
+            config.get(
+                "memory_guard_high_free_recovery_renderer_count",
+                6,
+            )
+        )
+        and (
+            sample.node_repl_rss_mb + sample.mcp_process_rss_mb
+            <= float(
+                config.get(
+                    "memory_guard_high_free_recovery_helper_rss_mb",
+                    512,
+                )
+            )
+        )
+    )
+
+
 def assess(
     sample: ResourceSample,
     config: dict[str, Any],
     *,
     mode: str | None = None,
 ) -> list[str]:
-    reasons: list[str] = []
     limits_config = profile_limits(config, mode) if mode else config
+    reasons = _assess_limits(sample, limits_config, config)
+    hard_caps = config.get("memory_guard_hard_caps")
+    if isinstance(hard_caps, dict) and hard_caps is not limits_config:
+        for reason in _assess_limits(sample, hard_caps, config):
+            hard_reason = "hard_cap: " + reason
+            if hard_reason not in reasons:
+                reasons.append(hard_reason)
+    return reasons
+
+
+def _assess_limits(
+    sample: ResourceSample,
+    limits_config: dict[str, Any],
+    policy_config: dict[str, Any],
+) -> list[str]:
+    reasons: list[str] = []
+    historical_swap = swap_is_historical(sample, policy_config)
+    helpers_recovered = helper_envelope_is_healthy(
+        sample,
+        policy_config,
+    )
+    high_free_recovered = high_free_dispatch_envelope_is_healthy(
+        sample,
+        policy_config,
+    )
     limits = (
         ("codex_rss_mb", sample.codex_rss_mb, float),
         ("renderer_count", sample.renderer_count, int),
@@ -418,6 +597,15 @@ def assess(
     )
     for name, value, converter in limits:
         maximum = converter(limits_config[f"memory_guard_max_{name}"])
+        if name == "renderer_count" and high_free_recovered:
+            continue
+        if (
+            name in {"node_repl_count", "mcp_process_count"}
+            and (helpers_recovered or high_free_recovered)
+        ):
+            continue
+        if name == "codex_rss_mb" and high_free_recovered:
+            continue
         if value > maximum:
             reasons.append(f"{name}={value} exceeds {maximum}")
     minimum_free = int(limits_config["memory_guard_min_free_percent"])
@@ -429,36 +617,66 @@ def assess(
         maximum_swap = float(
             limits_config.get("memory_guard_max_swap_used_mb", float("inf"))
         )
-        if sample.swap_used_mb > maximum_swap:
+        if (
+            bool(
+                policy_config.get(
+                    "memory_guard_swap_blocks_dispatch",
+                    False,
+                )
+            )
+            and sample.swap_used_mb > maximum_swap
+            and not historical_swap
+            and not high_free_recovered
+        ):
             reasons.append(
                 f"swap_used_mb={sample.swap_used_mb} exceeds {maximum_swap}"
             )
-    hard_caps = config.get("memory_guard_hard_caps")
-    if isinstance(hard_caps, dict) and hard_caps is not limits_config:
-        for reason in assess(sample, hard_caps):
-            hard_reason = "hard_cap: " + reason
-            if hard_reason not in reasons:
-                reasons.append(hard_reason)
     return reasons
+
+
+def _guard_result(
+    sample: ResourceSample,
+    config: dict[str, Any],
+    *,
+    memory_enabled: bool,
+) -> dict[str, Any]:
+    mode = select_mode(sample, config)
+    reasons = assess(sample, config, mode=mode) if memory_enabled else []
+    result: dict[str, Any] = {
+        "enabled": memory_enabled,
+        "available": True,
+        "defer": bool(reasons),
+        "reasons": reasons,
+        "mode": mode,
+        "swap_blocks_dispatch": bool(
+            config.get("memory_guard_swap_blocks_dispatch", False)
+        ),
+        "sample": asdict(sample),
+        "checked_at": autopilot_dispatch.isoformat(),
+    }
+    return result
 
 
 def check(config_path: Path) -> dict[str, Any]:
     config = autopilot_dispatch.read_json(config_path)
-    if not bool(config.get("memory_guard_enabled", False)):
-        return {"enabled": False, "defer": False, "reasons": []}
+    memory_enabled = bool(config.get("memory_guard_enabled", False))
+    if not memory_enabled:
+        return {
+            "enabled": False,
+            "defer": False,
+            "reasons": [],
+        }
+    state_value = str(
+        config.get("memory_guard_state_file", "var/resource-health.json")
+    )
+    state_path = autopilot_dispatch.resolve_path(config_path, state_value)
     try:
         sample = collect()
-        mode = select_mode(sample, config)
-        reasons = assess(sample, config, mode=mode)
-        result: dict[str, Any] = {
-            "enabled": True,
-            "available": True,
-            "defer": bool(reasons),
-            "reasons": reasons,
-            "mode": mode,
-            "sample": asdict(sample),
-            "checked_at": autopilot_dispatch.isoformat(),
-        }
+        result = _guard_result(
+            sample,
+            config,
+            memory_enabled=memory_enabled,
+        )
     except (OSError, subprocess.SubprocessError, ValueError, KeyError) as error:
         result = {
             "enabled": True,
@@ -468,9 +686,5 @@ def check(config_path: Path) -> dict[str, Any]:
             "error": str(error),
             "checked_at": autopilot_dispatch.isoformat(),
         }
-    state_value = str(
-        config.get("memory_guard_state_file", "var/resource-health.json")
-    )
-    state_path = autopilot_dispatch.resolve_path(config_path, state_value)
     autopilot_dispatch.atomic_write_json(state_path, result)
     return result

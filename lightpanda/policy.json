@@ -1,0 +1,98 @@
+{
+  "schema_version": 1,
+  "role": "public-read-only-worker",
+  "allowed_schemes": [
+    "https"
+  ],
+  "allowed_ports": [
+    443
+  ],
+  "blocked_host_suffixes": [
+    ".localhost",
+    ".local",
+    ".internal",
+    ".lan",
+    ".home",
+    ".arpa"
+  ],
+  "max_urls_per_run": 8,
+  "max_url_length": 2048,
+  "max_output_characters_per_page": 500000,
+  "allowed_dump_formats": [
+    "html",
+    "markdown",
+    "semantic_tree",
+    "semantic_tree_text"
+  ],
+  "allowed_script_root": "lightpanda/canaries",
+  "max_script_size_bytes": 65536,
+  "canaries": {
+    "public_read": {
+      "script": "lightpanda/canaries/public_read.js",
+      "expected": {
+        "title": "Example Domain",
+        "heading": "Example Domain"
+      }
+    }
+  },
+  "default_dump_format": "markdown",
+  "strip_mode": "js,css",
+  "obey_robots": true,
+  "block_private_networks": true,
+  "disable_subframes": true,
+  "disable_workers": true,
+  "blocked_url_patterns": [
+    "*doubleclick.net*",
+    "*googletagmanager.com*",
+    "*google-analytics.com*",
+    "*connect.facebook.net*"
+  ],
+  "limits": {
+    "process_timeout_seconds": 30,
+    "http_connect_timeout_ms": 5000,
+    "http_timeout_ms": 15000,
+    "http_max_response_size": 4194304,
+    "http_max_concurrent": 8,
+    "http_max_host_open": 4,
+    "websocket_max_concurrent": 2,
+    "v8_max_heap_mb": 128,
+    "watchdog_ms": 5000,
+    "terminate_ms": 20000,
+    "wait_profiles_ms": {
+      "fast": 1000,
+      "thread": 5000
+    }
+  },
+  "user_agent_suffix": "poyasnitelnaya-brigada-readonly",
+  "application_error_markers": [
+    "Application error: a client-side exception",
+    "Internal Server Error",
+    "This page could not be loaded"
+  ],
+  "partial_content_markers": [
+    "Loading post"
+  ],
+  "authentication_required_markers": [
+    "Continue with phone",
+    "Email or username"
+  ],
+  "robots_block_markers": [
+    "Reason: RobotsBlocked"
+  ],
+  "prompt_injection_markers": [
+    "ignore previous instructions",
+    "ignore all previous instructions",
+    "reveal the system prompt",
+    "developer message",
+    "do not tell the user",
+    "exfiltrate credentials"
+  ],
+  "environment_allowlist": [
+    "LANG",
+    "LC_ALL",
+    "PATH",
+    "SSL_CERT_DIR",
+    "SSL_CERT_FILE",
+    "TMPDIR"
+  ]
+}

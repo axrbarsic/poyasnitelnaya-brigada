@@ -1,0 +1,6 @@
+interface:
+  display_name: "377"
+  short_description: "Создаёт одну сатирическую метафору 9:16"
+  default_prompt: "Use $377 to создать ровно одно фотореалистичное сатирическое изображение-метафору 9:16 по моим материалам."
+policy:
+  allow_implicit_invocation: false

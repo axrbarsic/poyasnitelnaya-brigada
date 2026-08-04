@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "release_channel": "stable",
+  "install_id": "release-0.3.3",
+  "repository": "https://github.com/lightpanda-io/browser",
+  "capabilities": {
+    "script_subcommand": "agent",
+    "multi_fetch": false,
+    "block_urls": false,
+    "v8_max_heap": false,
+    "watchdog": false,
+    "fetch_terminate": true,
+    "fetch_wait": true,
+    "fetch_strip": true
+  },
+  "asset": {
+    "platform": "darwin",
+    "architecture": "arm64",
+    "name": "lightpanda-aarch64-macos",
+    "url": "https://github.com/lightpanda-io/browser/releases/download/0.3.3/lightpanda-aarch64-macos",
+    "size_bytes": 66269944,
+    "sha256": "1ef236a72e63975cf8acc7430e52dd31af5fff27a0b62ba81876eb8dde3e18e2",
+    "version": "0.3.3",
+    "install_path": "var/tools/lightpanda/release-0.3.3/lightpanda"
+  },
+  "documentation": {
+    "repository": "https://github.com/lightpanda-io/docs",
+    "commit": "ad945b39a7b0440badccf37d458e10461743497b"
+  }
+}

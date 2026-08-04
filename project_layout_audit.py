@@ -9,6 +9,8 @@ import json
 from pathlib import Path
 from typing import Any
 
+from scripts.json_contract import read_object
+
 
 REQUIRED_PATHS = (
     ".codex/config.toml",
@@ -23,17 +25,60 @@ REQUIRED_PATHS = (
     "docs/project-layout.ru.md",
     "docs/readiness-audit.md",
     "docs/readiness-audit.ru.md",
+    "docs/reliability-audit-2026-08-01.ru.md",
     "evidence_import.py",
     "macos/com.axrbarsic.xmention.poll.plist.example",
+    "macos/com.axrbarsic.xmention.dispatch.plist.example",
+    "macos/com.axrbarsic.xmention.codex-update.plist.example",
     "macos/com.axrbarsic.xmention.watchdog.plist.example",
+    "macos/x-15.prompt.txt",
+    "macos/x-relay.prompt.txt",
     "memory_snapshot.py",
     "readiness_audit.py",
     "scripts/autopilot_bridge.py",
+    "scripts/autopilot_continuation.py",
     "scripts/autopilot_contract.py",
     "scripts/autopilot_dispatch.py",
+    "scripts/inbound_policy.py",
+    "scripts/json_contract.py",
+    "scripts/launchagent_runtime.py",
+    "scripts/app_server_dispatch.py",
+    "scripts/app_server_desktop.py",
+    "scripts/autopilot_supervisor.py",
+    "scripts/autopilot_supervisor_incidents.py",
+    "scripts/autopilot_supervisor_routes.py",
+    "scripts/system_doctor.py",
+    "scripts/system_doctor_contract.py",
+    "scripts/system_doctor_deployment.py",
+    "scripts/system_doctor_foundation.py",
+    "scripts/system_doctor_runtime.py",
+    "scripts/system_doctor_types.py",
+    "scripts/browser_owner_evidence.py",
+    "scripts/browser_handoff_sync.py",
+    "scripts/build_outbound_history.py",
+    "scripts/event_dispatch.py",
+    "scripts/resource_guard.py",
+    "scripts/codex_cli_updater.py",
+    "scripts/outbound_cycle.py",
+    "skill-backup/poyasnitelnaya-brigada/SKILL.md",
+    "skill-backup/poyasnitelnaya-brigada/agents/openai.yaml",
+    "skill-backup/poyasnitelnaya-brigada-v2/SKILL.md",
+    "skill-backup/poyasnitelnaya-brigada-v2/agents/openai.yaml",
+    "skill-backup/377/SKILL.md",
+    "skill-backup/377/agents/openai.yaml",
     "skill-backup/x-twitter-operator/SKILL.md",
     "restic_backup.py",
     "tests/test_archive_intake.py",
+    "tests/test_377_skill.py",
+    "tests/test_app_server_dispatch.py",
+    "tests/test_codex_cli_updater.py",
+    "tests/test_local_explainer_skill.py",
+    "tests/test_inbound_policy.py",
+    "tests/test_json_contract.py",
+    "tests/test_launchagent_runtime.py",
+    "tests/test_outbound_cycle.py",
+    "tests/test_poyasnitelnaya_brigada_v2.py",
+    "tests/fixtures/poyasnitelnaya_brigada_v2_cases.json",
     "tests/test_readiness_audit.py",
     "tests/test_restic_backup.py",
     "tests/test_xmention_watcher.py",
@@ -81,6 +126,8 @@ def audit_layout(
     root: Path,
     config_path: Path,
     installed_skill: Path | None,
+    installed_generation_skill: Path | None = None,
+    installed_generation_skill_v2: Path | None = None,
     require_installed_skill: bool,
 ) -> dict[str, Any]:
     canonical_root = root.resolve()
@@ -95,7 +142,7 @@ def audit_layout(
     browser_owner_cwd: str | None = None
     browser_owner_cwd_ok = False
     try:
-        config = json.loads(resolved_config.read_text(encoding="utf-8"))
+        config = read_object(resolved_config)
         browser_owner_cwd = str(
             resolve_path(
                 resolved_config,
@@ -121,10 +168,66 @@ def audit_layout(
     elif require_installed_skill:
         errors.append("installed_skill_missing")
 
+    generation_skill_backup = (
+        canonical_root / "skill-backup/poyasnitelnaya-brigada"
+    )
+    generation_backup_manifest = directory_manifest(
+        generation_skill_backup
+    )
+    installed_generation_skill_exists = (
+        installed_generation_skill is not None
+        and installed_generation_skill.is_dir()
+    )
+    installed_generation_skill_matches: bool | None = None
+    if (
+        installed_generation_skill_exists
+        and installed_generation_skill is not None
+    ):
+        installed_generation_skill_matches = (
+            directory_manifest(installed_generation_skill.resolve())
+            == generation_backup_manifest
+        )
+        if not installed_generation_skill_matches:
+            errors.append(
+                "installed_generation_skill_differs_from_repository_backup"
+            )
+    elif require_installed_skill:
+        errors.append("installed_generation_skill_missing")
+
+    generation_skill_v2_backup = (
+        canonical_root / "skill-backup/poyasnitelnaya-brigada-v2"
+    )
+    generation_v2_backup_manifest = directory_manifest(
+        generation_skill_v2_backup
+    )
+    installed_generation_skill_v2_exists = (
+        installed_generation_skill_v2 is not None
+        and installed_generation_skill_v2.is_dir()
+    )
+    installed_generation_skill_v2_matches: bool | None = None
+    if (
+        installed_generation_skill_v2_exists
+        and installed_generation_skill_v2 is not None
+    ):
+        installed_generation_skill_v2_matches = (
+            directory_manifest(installed_generation_skill_v2.resolve())
+            == generation_v2_backup_manifest
+        )
+        if not installed_generation_skill_v2_matches:
+            errors.append(
+                "installed_generation_skill_v2_differs_from_repository_backup"
+            )
+    elif require_installed_skill:
+        errors.append("installed_generation_skill_v2_missing")
+
     if missing_paths:
         errors.append("required_project_paths_missing")
     if not backup_manifest:
         errors.append("skill_backup_empty")
+    if not generation_backup_manifest:
+        errors.append("generation_skill_backup_empty")
+    if not generation_v2_backup_manifest:
+        errors.append("generation_skill_v2_backup_empty")
 
     complete = not errors
     return {
@@ -143,6 +246,32 @@ def audit_layout(
             else None
         ),
         "installed_skill_matches": installed_skill_matches,
+        "generation_skill_backup_files": len(generation_backup_manifest),
+        "installed_generation_skill": (
+            str(installed_generation_skill.resolve())
+            if (
+                installed_generation_skill_exists
+                and installed_generation_skill is not None
+            )
+            else None
+        ),
+        "installed_generation_skill_matches": (
+            installed_generation_skill_matches
+        ),
+        "generation_skill_v2_backup_files": len(
+            generation_v2_backup_manifest
+        ),
+        "installed_generation_skill_v2": (
+            str(installed_generation_skill_v2.resolve())
+            if (
+                installed_generation_skill_v2_exists
+                and installed_generation_skill_v2 is not None
+            )
+            else None
+        ),
+        "installed_generation_skill_v2_matches": (
+            installed_generation_skill_v2_matches
+        ),
         "errors": errors,
     }
 
@@ -160,6 +289,16 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=Path.home() / ".codex/skills/x-twitter-operator",
     )
+    parser.add_argument(
+        "--installed-generation-skill",
+        type=Path,
+        default=Path.home() / ".codex/skills/poyasnitelnaya-brigada",
+    )
+    parser.add_argument(
+        "--installed-generation-skill-v2",
+        type=Path,
+        default=Path.home() / ".codex/skills/poyasnitelnaya-brigada-v2",
+    )
     parser.add_argument("--require-installed-skill", action="store_true")
     return parser.parse_args()
 
@@ -176,6 +315,8 @@ def main() -> int:
         root=root,
         config_path=config_path,
         installed_skill=args.installed_skill,
+        installed_generation_skill=args.installed_generation_skill,
+        installed_generation_skill_v2=args.installed_generation_skill_v2,
         require_installed_skill=args.require_installed_skill,
     )
     print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))

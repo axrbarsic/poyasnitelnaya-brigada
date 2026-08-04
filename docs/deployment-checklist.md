@@ -21,6 +21,13 @@
 - [x] Regenerate the existing Bearer Token only after explicit approval because
   X warns that the old token will be invalidated.
 - [x] Put the bearer token in macOS Keychain, never in the repository.
+- [x] Install the signed app-like Keychain helper with a Mac provisioning
+  profile that authorizes its Keychain access group.
+- [x] Store the bearer item in the macOS Data Protection Keychain as
+  `AfterFirstUnlockThisDeviceOnly` so the poll LaunchAgent keeps working after
+  the screen is locked without migrating the token to another device.
+- [x] Lock the screen and prove that the helper, poll LaunchAgent, and doctor
+  stay healthy without an authentication prompt.
 - [x] Configure the numeric X user ID.
 - [x] Start with a new empty shadow database.
 - [x] Run one live baseline poll and compare relevant IDs with the manual
@@ -35,18 +42,47 @@
 
 ## Gate 3: production
 
-- [x] Render the two machine-specific LaunchAgent plists.
-- [x] Inspect their absolute paths and load them explicitly with `launchctl`.
-- [x] Confirm poll and watchdog complete with exit code 0.
+- [x] Render the four machine-specific LaunchAgent plists.
+- [x] Inspect their absolute paths. Keep the dispatcher plist unloaded until
+  its live relay gate succeeds.
+- [x] Confirm the loaded poll and watchdog complete with exit code 0.
 - [x] Confirm the retired CLI launcher exits nonzero before claiming an event.
-- [x] Create the Sol High Codex Desktop worker automation.
+- [x] Create the Sol Max Codex Desktop Browser owner.
+- [x] Pause the five-minute Luna Low dispatcher automation.
+- [x] Remove the retired external app-server and cross-thread Luna transport
+  from production source, config examples, tests, and recovery contracts.
+- [x] Require `desktop_relay_mode=in_app_heartbeat` and fail closed before gate
+  or Desktop work for a missing or retired transport value.
+- [x] Confirm the ready-only self-owned heartbeat routes work inside the exact
+  pinned Sol Max owner without a cross-thread message.
+- [x] Confirm an atomic reservation suppresses a second handoff before the
+  owner claim appears.
+- [x] Confirm one isolated empty dispatcher cycle spends no model turn,
+  creates no task, and starts no helper bundle.
+- [x] Keep the retired dispatcher automation `x` paused as a recovery marker.
+  The current Desktop build exposes the official `automation_update` tool, and
+  automation state is changed only through that tool.
+- [x] Pause the retired outbound heartbeat `x-pro-15`.
+- [x] Keep standalone local cron `x-15` PAUSED as a deployment marker with its
+  versioned prompt and route live idle-only outbound through `x-relay`.
+- [x] Prove one independent `x-15` run publishes a locally generated reply,
+  deterministically capped at 4000 code points, without opening ChatGPT.
+- [x] Protect each relay-created outbound attempt with the atomic
+  `outbound_cycle.py` lease and a one-target limit.
+- [x] Preempt outbound on any inbound event without recording catch-up debt.
 - [x] Confirm real new replies create exact queue items.
-- [ ] Acknowledge the event only after the existing X workflow records its
+- [x] Acknowledge the event only after the existing X workflow records its
   disposition.
-- [x] Keep all publishing inside the claimed Sol High Browser run.
+- [x] Keep all publishing inside the claimed Sol Max Browser run.
 - [x] Confirm four naturally rediscovered events produce one dispatcher claim.
-- [x] Confirm a second scheduled run inside the lease does not start a
+- [x] Confirm a second dispatcher run inside the lease does not start a
   duplicate Sol turn.
+- [x] Confirm efficiency, balanced, and performance modes are selected in live
+  resource samples without changing Sol Max quality.
+- [x] Confirm voice input never changes the resource profile or defers Browser
+  work.
+- [x] Confirm the dispatcher process lock stops a second manual or launchd
+  instance before gate or model startup.
 - [x] Confirm a failed pre-resolution worker releases the exact claim.
 - [x] Confirm the Browser worker durably resolves every event and the
   dispatcher prunes the claim.
@@ -55,6 +91,15 @@
 - [x] Confirm mandatory response mode rejects content-based skips.
 - [x] Confirm a clean API canary rediscovers prior content skips and publishes
   exactly one reply to each without receiving target IDs.
+- [x] Update Codex CLI from the official digest-bearing release asset, run
+  `codex doctor`, notify Alex, and append local plus GitHub history.
+- [x] Install and load the event dispatcher and Codex CLI updater LaunchAgents.
+- [x] Prove the loaded dispatcher remains model-free and process-neutral across
+  repeated empty cycles.
+- [x] Prove on two organic events that the loaded dispatcher launches an
+  absent Desktop, marks the exact PID as supervisor-managed, lets the existing
+  self-owned heartbeat wake the pinned Sol owner, preserves the queue through
+  a resource deferral, and closes the managed Desktop after durable resolution.
 
 ## Gate 4: backup
 
@@ -66,7 +111,7 @@
   `usable_as_evidence=false` until live X or official API verification.
 - [x] Keep candidate corpora and exact-text verification scratch files out of
   Git when their redistribution status is unknown.
-- [x] Create a private GitHub repository.
+- [x] Create a public GitHub repository under the MIT license.
 - [x] Push source, tests, templates, and documentation.
 - [x] Add the watcher contract to the X skill only after the live gate is green.
 - [x] Generate transactionally consistent, manifested SQLite snapshots.

@@ -15,7 +15,7 @@ x-mention-watcher/
   docs/                    русская и английская документация
   macos/                   исходные шаблоны LaunchAgent
   scripts/                 dispatcher, bridge и служебные утилиты
-  skill-backup/            восстанавливаемая версия X skill
+  skill-backup/            восстанавливаемые версии всех четырёх skills
   tests/                   все тесты
   var/                     изменяемое локальное состояние, вне Git
   *.py                     watcher, importer и snapshot tools
@@ -23,15 +23,32 @@ x-mention-watcher/
   config.example.json      безопасный шаблон конфигурации
 ```
 
+Watcher entrypoint служит только composition root. Durable domains находятся
+в модулях `scripts/watcher_*.py`, а каждый tracked runtime module перечислен в
+`recovery/system-contract.json`. Поэтому deployment drift обнаруживается без
+создания копий исходного дерева.
+
+Публичные control-plane scripts также являются совместимыми facade. Их
+внутренние модули Desktop lifecycle, incident store, recovery routes и doctor
+runtime находятся в том же `scripts/` и перечислены в system contract.
+
 `browser_owner_cwd` равен `.`. Поэтому Browser owner запускается в том же
 каноническом каталоге и не требует отдельного проекта в `Documents/Codex`.
 Новые screenshots, ledgers, payloads и другие evidence должны сохраняться под
 `var/evidence/browser-owner/<session-id>/`.
 
-После durable sync отдельный ручной шаг не требуется:
-`browser-handoff-sync` автоматически создаёт и проверяет `manifest.json`, если
-оба входных JSONL находятся в одном каноническом каталоге evidence. Неполный
-или несогласованный набор fail closed блокирует backup-plan.
+Для каждого claimed event Browser owner создает только
+`<EVENT_ID>/evidence.json` и точные файлы, на которые ссылается эта запись.
+`commit_browser_owner_event.py` проверяет terminal record, детерминированно
+строит оба JSONL и разрешенный handoff route, импортирует точную историю и
+durably resolve событие. Ручное создание JSONL, отдельный history import и
+прямой resolve запрещены.
+
+После `status=committed` для всех событий
+`finalize_browser_owner_session.py` проверяет точное совпадение каталогов с
+активным claim, атомарно собирает два общих JSONL из уже созданных записей,
+вызывает идемпотентный `browser-handoff-sync` и требует проверенный
+`manifest.json`. Неполный или несогласованный набор блокирует завершение claim.
 
 Старые evidence переносятся без изменения источника:
 
@@ -51,13 +68,19 @@ python3 evidence_import.py \
 
 Снаружи остаются только обязательные deployment points:
 
-- `~/.codex/skills/x-twitter-operator`, установленная рабочая копия skill;
+- `~/.codex/skills/x-twitter-operator`, установленная копия X skill;
+- `~/.codex/skills/poyasnitelnaya-brigada`, установленная копия локального
+  генератора;
+- `~/.codex/skills/poyasnitelnaya-brigada-v2`, установленная копия
+  основного генератора ответов и продолжений;
+- `~/.codex/skills/377`, установленная копия локального визуального skill;
 - `~/Library/LaunchAgents/com.axrbarsic.xmention.*.plist`, загруженные службы
   macOS;
-- macOS Keychain, где хранятся секреты;
+- macOS Data Protection Keychain, где хранятся секреты. Подписанный helper
+  собирается из `macos/XMentionKeychainHelper*` и устанавливается под `var/`;
 - отдельный archive vault для исходных ZIP-архивов X.
 
-Это не отдельные исходники проекта. Skill восстанавливается из
+Это не отдельные исходники проекта. Все четыре skills восстанавливаются из
 `skill-backup/`, LaunchAgent из `macos/`, а секреты никогда не копируются в
 репозиторий.
 

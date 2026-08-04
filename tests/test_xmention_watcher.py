@@ -262,6 +262,294 @@ class WatcherTests(unittest.TestCase):
                 ["2081034932135096804"],
             )
 
+    def test_conversation_tail_finds_unmentioned_nested_reply(self) -> None:
+        chain_id = "2080312847230210375"
+        event_id = "2081809174187372787"
+        self.insert_alex_turn_for_chain(chain_id)
+        configured = replace(
+            self.config,
+            conversation_tail_enabled=True,
+            conversation_tail_initial_lookback_hours=3,
+        )
+        watcher.set_meta(
+            self.connection,
+            "since_id",
+            "2081800000000000000",
+        )
+        requested_urls: list[str] = []
+
+        def fetch(url: str, token: str, timeout: int) -> dict:
+            requested_urls.append(url)
+            if "/users/900/mentions?" in url:
+                return {
+                    "data": [],
+                    "meta": {"newest_id": "2081800000000000000"},
+                }
+            self.assertIn("/tweets/search/recent?", url)
+            query = watcher.urllib.parse.parse_qs(
+                watcher.urllib.parse.urlsplit(url).query
+            )
+            self.assertIn(f"conversation_id:{chain_id}", query["query"][0])
+            self.assertIn("is:reply", query["query"][0])
+            return {
+                "data": [
+                    {
+                        "id": event_id,
+                        "author_id": "901",
+                        "text": "Nested reply without configured account mention",
+                        "created_at": "2026-07-27T18:29:00Z",
+                        "conversation_id": chain_id,
+                        "in_reply_to_user_id": "902",
+                        "referenced_tweets": [
+                            {
+                                "type": "replied_to",
+                                "id": "2081808000000000000",
+                            }
+                        ],
+                    }
+                ],
+                "includes": {
+                    "users": [{"id": "901", "username": "nested_user"}]
+                },
+                "meta": {"newest_id": event_id},
+            }
+
+        with mock.patch.dict(
+            os.environ,
+            {"X_BEARER_TOKEN": "test-token"},
+            clear=True,
+        ):
+            result = watcher.poll_live(
+                configured,
+                self.connection,
+                fetch=fetch,
+            )
+
+        self.assertEqual(len(requested_urls), 2)
+        self.assertEqual(result["new_event_ids"], [event_id])
+        self.assertEqual(result["conversation_tail"]["new_event_ids"], [event_id])
+        stored = self.connection.execute(
+            """
+            SELECT delivery_state, conversation_id, in_reply_to_user_id
+            FROM events
+            WHERE event_id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(stored["delivery_state"], "queued")
+        self.assertEqual(stored["conversation_id"], chain_id)
+        self.assertEqual(stored["in_reply_to_user_id"], "902")
+        self.assertEqual(
+            watcher.get_meta(self.connection, "since_id"),
+            "2081800000000000000",
+        )
+        self.assertIsNotNone(
+            watcher.get_meta(
+                self.connection,
+                "conversation_tail_last_success_at",
+            )
+        )
+
+    def test_conversation_tail_is_not_due_before_interval(self) -> None:
+        chain_id = "2080312847230210375"
+        self.insert_alex_turn_for_chain(chain_id)
+        configured = replace(
+            self.config,
+            conversation_tail_enabled=True,
+            conversation_tail_poll_interval_seconds=300,
+        )
+        watcher.set_meta(
+            self.connection,
+            "conversation_tail_last_success_at",
+            watcher.isoformat(),
+        )
+        requested_urls: list[str] = []
+
+        def fetch(url: str, token: str, timeout: int) -> dict:
+            requested_urls.append(url)
+            return {"data": [], "meta": {}}
+
+        with mock.patch.dict(
+            os.environ,
+            {"X_BEARER_TOKEN": "test-token"},
+            clear=True,
+        ):
+            result = watcher.poll_live(
+                configured,
+                self.connection,
+                fetch=fetch,
+            )
+
+        self.assertEqual(len(requested_urls), 1)
+        self.assertEqual(result["conversation_tail"]["status"], "not_due")
+        self.assertEqual(result["new_count"], 0)
+
+    def test_conversation_tail_resumes_within_daily_read_budget(self) -> None:
+        chain_id = "2080312847230210375"
+        self.insert_alex_turn_for_chain(chain_id)
+        configured = replace(
+            self.config,
+            conversation_tail_enabled=True,
+            conversation_tail_poll_interval_seconds=300,
+            conversation_tail_daily_post_read_limit=20,
+            conversation_tail_max_post_reads_per_poll=10,
+        )
+        requested_urls: list[str] = []
+
+        def make_event(event_id: str) -> dict:
+            return {
+                "id": event_id,
+                "author_id": "901",
+                "text": f"Nested reply {event_id}",
+                "created_at": "2026-07-31T21:00:00Z",
+                "conversation_id": chain_id,
+                "in_reply_to_user_id": "902",
+                "referenced_tweets": [
+                    {"type": "replied_to", "id": "2081808000000000000"}
+                ],
+            }
+
+        first_ids = [str(2083400000000000010 - index) for index in range(10)]
+        final_id = "2083399999999999999"
+
+        def fetch(url: str, token: str, timeout: int) -> dict:
+            requested_urls.append(url)
+            if "/users/900/mentions?" in url:
+                return {"data": [], "meta": {}}
+            query = watcher.urllib.parse.parse_qs(
+                watcher.urllib.parse.urlsplit(url).query
+            )
+            self.assertNotIn("expansions", query)
+            self.assertNotIn("media.fields", query)
+            if "pagination_token" not in query:
+                return {
+                    "data": [make_event(event_id) for event_id in first_ids],
+                    "meta": {
+                        "newest_id": first_ids[0],
+                        "next_token": "unused-by-local-resume",
+                    },
+                }
+            self.assertEqual(
+                query["pagination_token"],
+                ["unused-by-local-resume"],
+            )
+            return {
+                "data": [make_event(final_id)],
+                "meta": {"newest_id": final_id},
+            }
+
+        with mock.patch.dict(
+            os.environ,
+            {"X_BEARER_TOKEN": "test-token"},
+            clear=True,
+        ):
+            first = watcher.poll_live(configured, self.connection, fetch=fetch)
+
+        first_tail = first["conversation_tail"]
+        self.assertEqual(first_tail["status"], "partial_budget_exhausted")
+        self.assertFalse(first_tail["scan_complete"])
+        self.assertEqual(first_tail["returned_count"], 10)
+        self.assertIsNotNone(
+            watcher.get_meta(
+                self.connection,
+                watcher.CONVERSATION_TAIL_SCAN_STATE_KEY,
+            )
+        )
+        self.assertIsNone(
+            watcher.get_meta(self.connection, "conversation_tail_last_success_at")
+        )
+
+        watcher.set_meta(
+            self.connection,
+            watcher.CONVERSATION_TAIL_LAST_ATTEMPT_KEY,
+            watcher.isoformat(datetime.now(timezone.utc) - timedelta(seconds=301)),
+        )
+        with mock.patch.dict(
+            os.environ,
+            {"X_BEARER_TOKEN": "test-token"},
+            clear=True,
+        ):
+            second = watcher.poll_live(configured, self.connection, fetch=fetch)
+
+        second_tail = second["conversation_tail"]
+        self.assertEqual(second_tail["status"], "success")
+        self.assertTrue(second_tail["scan_complete"])
+        self.assertEqual(second_tail["returned_count"], 1)
+        self.assertIsNone(
+            watcher.get_meta(
+                self.connection,
+                watcher.CONVERSATION_TAIL_SCAN_STATE_KEY,
+            )
+        )
+        self.assertIsNotNone(
+            watcher.get_meta(self.connection, "conversation_tail_last_success_at")
+        )
+        budget = watcher.conversation_tail_budget_status(
+            configured,
+            self.connection,
+        )
+        self.assertEqual(budget["used"], 11)
+        self.assertEqual(budget["remaining"], 9)
+
+    def test_conversation_tail_budget_does_not_stop_owned_mentions(self) -> None:
+        chain_id = "2080312847230210375"
+        self.insert_alex_turn_for_chain(chain_id)
+        configured = replace(
+            self.config,
+            conversation_tail_enabled=True,
+            conversation_tail_daily_post_read_limit=10,
+        )
+        now = watcher.isoformat()
+        with self.connection:
+            self.connection.execute(
+                """
+                INSERT INTO poll_runs(
+                    started_at, completed_at, source, status, new_count,
+                    returned_count, request_count
+                ) VALUES(?, ?, ?, 'success', 0, 10, 1)
+                """,
+                (now, now, watcher.CONVERSATION_TAIL_SOURCE),
+            )
+        requested_urls: list[str] = []
+
+        def fetch(url: str, token: str, timeout: int) -> dict:
+            requested_urls.append(url)
+            self.assertIn("/users/900/mentions?", url)
+            return {"data": [], "meta": {}}
+
+        with mock.patch.dict(
+            os.environ,
+            {"X_BEARER_TOKEN": "test-token"},
+            clear=True,
+        ):
+            result = watcher.poll_live(configured, self.connection, fetch=fetch)
+
+        self.assertEqual(len(requested_urls), 1)
+        self.assertEqual(result["conversation_tail"]["status"], "budget_exhausted")
+        self.assertEqual(result["health"], "healthy")
+
+    def test_conversation_tail_chunks_queries_at_x_api_limit(self) -> None:
+        conversation_ids = [
+            str(2_080_000_000_000_000_000 + index)
+            for index in range(13)
+        ]
+
+        queries = watcher.conversation_tail_query_chunks(
+            conversation_ids,
+            account_handle="axrbarsic",
+        )
+
+        self.assertEqual(len(queries), 2)
+        self.assertTrue(all(len(query) <= 512 for query in queries))
+        for conversation_id in conversation_ids:
+            self.assertEqual(
+                sum(
+                    f"conversation_id:{conversation_id}" in query
+                    for query in queries
+                ),
+                1,
+            )
+
     def test_record_failure_and_watchdog_threshold(self) -> None:
         watcher.ingest_response(
             self.config,
@@ -421,11 +709,9 @@ class WatcherTests(unittest.TestCase):
             watcher.urllib.parse.urlsplit(requested_urls[0]).query
         )
         self.assertIn("attachments", query["tweet.fields"][0])
-        self.assertIn(
-            "attachments.media_keys",
-            query["expansions"][0],
-        )
-        self.assertIn("alt_text", query["media.fields"][0])
+        self.assertNotIn("expansions", query)
+        self.assertNotIn("user.fields", query)
+        self.assertNotIn("media.fields", query)
 
         def error_fetch(url: str, token: str, timeout: int) -> dict:
             return {"errors": [{"title": "Synthetic API error"}]}
@@ -834,6 +1120,94 @@ class WatcherTests(unittest.TestCase):
         ).fetchone()["delivery_state"]
         self.assertEqual(state, "queued")
 
+    def test_mandatory_mode_never_queues_self_authored_reply(self) -> None:
+        watcher.set_meta(self.connection, "first_success_at", watcher.isoformat())
+        payload = json.loads(json.dumps(self.fixture))
+        event = payload["data"][0]
+        event_id = event["id"]
+        event["author_id"] = self.config.user_id
+        event["in_reply_to_user_id"] = self.config.user_id
+        payload["data"] = [event]
+        payload["includes"]["users"].append(
+            {"id": self.config.user_id, "username": "axrbarsic"}
+        )
+        payload["meta"]["newest_id"] = event_id
+        strict_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+
+        result = watcher.ingest_response(
+            strict_config,
+            self.connection,
+            payload,
+            source="x_api",
+        )
+
+        self.assertEqual(result["new_count"], 0)
+        self.assertEqual(result["self_authored_event_ids"], [event_id])
+        self.assertEqual(result["pending_count"], 0)
+        stored = self.connection.execute(
+            """
+            SELECT author_id, delivery_state
+            FROM events
+            WHERE event_id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(stored["author_id"], self.config.user_id)
+        self.assertEqual(stored["delivery_state"], "self_authored")
+
+    def test_self_authored_reconcile_repairs_legacy_queue_idempotently(
+        self,
+    ) -> None:
+        event_id = "2081490627879997803"
+        self.insert_direct_event(
+            event_id=event_id,
+            created_at="2026-07-26T21:23:32Z",
+            conversation_id="2081434236486029792",
+            parent_status_id="2081434236486029792",
+            text="Manual supplement",
+        )
+        with self.connection:
+            self.connection.execute(
+                """
+                UPDATE events
+                SET author_id = ?, username = 'axrbarsic'
+                WHERE event_id = ?
+                """,
+                (self.config.user_id, event_id),
+            )
+        watcher.refresh_wake_file(self.config, self.connection)
+
+        first = watcher.reconcile_self_authored_events(
+            self.config,
+            self.connection,
+        )
+        second = watcher.reconcile_self_authored_events(
+            self.config,
+            self.connection,
+        )
+        audit = watcher.start_initial_audit(self.config, self.connection)
+
+        self.assertEqual(first["reclassified_event_ids"], [event_id])
+        self.assertEqual(first["pending_count"], 0)
+        self.assertEqual(second["reclassified_event_ids"], [])
+        self.assertEqual(audit["requeued"], 0)
+        self.assertEqual(
+            self.connection.execute(
+                "SELECT delivery_state FROM events WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()["delivery_state"],
+            "self_authored",
+        )
+        self.assertIsNone(
+            self.connection.execute(
+                "SELECT 1 FROM event_resolutions WHERE event_id = ?",
+                (event_id,),
+            ).fetchone()
+        )
+
     def test_baseline_existing_queue_preserves_cursor(self) -> None:
         watcher.ingest_response(
             self.config,
@@ -1004,6 +1378,10 @@ class WatcherTests(unittest.TestCase):
             "record_type": "initial_audit_event_turn",
             "chain_id": "2080651494051737864",
             "conversation_root_id": "2080651494051737864",
+            "chatgpt_conversation_url": (
+                "https://chatgpt.com/g/example/c/flat-history"
+            ),
+            "ledger_reference": "claim-flat-history",
             "parent_status_id": "2080680475404742792",
             "status_id": "2080755430825861144",
             "actor": "user",
@@ -1061,6 +1439,11 @@ class WatcherTests(unittest.TestCase):
             stored["turns"][1]["parent_status_id"],
             "2080755430825861144",
         )
+        self.assertEqual(
+            stored["chatgpt_conversation_url"],
+            "https://chatgpt.com/g/example/c/flat-history",
+        )
+        self.assertEqual(stored["ledger_reference"], "claim-flat-history")
 
     def test_flat_audit_turn_inherits_existing_pro_chain_provenance(self) -> None:
         watcher.import_history_snapshot(
@@ -1652,6 +2035,48 @@ class WatcherTests(unittest.TestCase):
             "https://x.com/axrbarsic/status/3002",
         )
 
+    def test_author_dossier_combines_recency_and_context_relevance(self) -> None:
+        self.insert_direct_event(
+            event_id="3001",
+            created_at="2020-01-02T03:04:05Z",
+            conversation_id="3000",
+            parent_status_id="2999",
+            text="Договор НАТО требует назвать точную статью и правило вывода",
+        )
+        self.insert_direct_event(
+            event_id="4001",
+            created_at="2026-07-25T19:00:00Z",
+            conversation_id="4000",
+            parent_status_id="3999",
+            text="Совсем другая реплика про котов и погоду",
+        )
+        self.insert_direct_event(
+            event_id="5001",
+            created_at="2026-07-25T20:00:00Z",
+            conversation_id="5000",
+            parent_status_id="4999",
+            text="Какое правило связывает НАТО и договор с этим выводом",
+        )
+
+        result = watcher.author_dossier_for_event(
+            self.connection,
+            "5001",
+            limit=1,
+        )
+
+        self.assertEqual(result["identity_kind"], "x_user_id")
+        self.assertEqual(result["total_prior_interactions"], 2)
+        self.assertEqual(
+            result["recent_interactions"][0]["status_id"],
+            "4001",
+        )
+        self.assertEqual(
+            result["relevant_interactions"][0]["status_id"],
+            "3001",
+        )
+        self.assertEqual(len(result["conversation_summaries"]), 2)
+        self.assertIn("navigation", result["dossier_contract"])
+
     def test_mandatory_response_requires_terminal_blocker_code(self) -> None:
         watcher.ingest_response(
             self.config,
@@ -1705,6 +2130,306 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(
             result["blocker_code"],
             "missing_historical_pro_conversation",
+        )
+
+    def test_required_pro_model_blocker_requires_durable_proof(self) -> None:
+        watcher.ingest_response(
+            self.config,
+            self.connection,
+            self.fixture,
+            source="x_api",
+        )
+        event_id = "2080696811623190996"
+        event = self.connection.execute(
+            "SELECT * FROM events WHERE event_id = ?",
+            (event_id,),
+        ).fetchone()
+        payload = json.loads(event["payload_json"])
+        parent_status_id = next(
+            reference["id"]
+            for reference in payload["referenced_tweets"]
+            if reference["type"] == "replied_to"
+        )
+        base_history = {
+            "chain_id": event["conversation_id"],
+            "root_status_id": event["conversation_id"],
+            "provenance": "pro",
+            "turns": [
+                {
+                    "status_id": event_id,
+                    "parent_status_id": parent_status_id,
+                    "actor": "user",
+                    "url": f"https://x.com/i/status/{event_id}",
+                    "exact_text": "Pro follow-up",
+                }
+            ],
+        }
+        watcher.import_history_snapshot(
+            self.connection,
+            base_history,
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "exact ChatGPT conversation URL",
+        ):
+            watcher.resolve_event(
+                self.config,
+                self.connection,
+                event_id,
+                disposition="blocked",
+                reason="legacy Pro model is pinned",
+                reply_url=None,
+                blocker_code="required_pro_model_unavailable",
+            )
+
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                **base_history,
+                "chatgpt_conversation_url": (
+                    "https://chatgpt.com/g/example/c/pro-history"
+                ),
+            },
+        )
+        with self.assertRaisesRegex(
+            ValueError,
+            "exact imported Pro-generated Alex parent",
+        ):
+            watcher.resolve_event(
+                self.config,
+                self.connection,
+                event_id,
+                disposition="blocked",
+                reason="legacy Pro model is pinned",
+                reply_url=None,
+                blocker_code="required_pro_model_unavailable",
+            )
+
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": event["conversation_id"],
+                "root_status_id": event["conversation_id"],
+                "provenance": "pro",
+                "chatgpt_conversation_url": (
+                    "https://chatgpt.com/g/example/c/pro-history"
+                ),
+                "turns": [
+                    {
+                        "status_id": parent_status_id,
+                        "actor": "alex",
+                        "url": (
+                            "https://x.com/axrbarsic/status/"
+                            f"{parent_status_id}"
+                        ),
+                        "exact_text": "Exact prior Pro answer",
+                        "provenance": "pro",
+                    }
+                ],
+            },
+        )
+        result = watcher.resolve_event(
+            self.config,
+            self.connection,
+            event_id,
+            disposition="blocked",
+            reason="legacy Pro model is pinned",
+            reply_url=None,
+            blocker_code="required_pro_model_unavailable",
+        )
+        self.assertEqual(
+            result["blocker_code"],
+            "required_pro_model_unavailable",
+        )
+
+    def test_chatgpt_branch_migration_preserves_exact_custom_gpt(self) -> None:
+        chain_id = "2078353040654938170"
+        parent_status_id = "2082479795108008300"
+        source_url = (
+            "https://chatgpt.com/g/g-example-poiasnitelnaia/"
+            "c/legacy-conversation"
+        )
+        target_url = (
+            "https://chatgpt.com/g/g-example-poiasnitelnaia/"
+            "c/pro-conversation"
+        )
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": chain_id,
+                "root_status_id": chain_id,
+                "provenance": "pro",
+                "chatgpt_conversation_url": source_url,
+                "turns": [
+                    {
+                        "status_id": parent_status_id,
+                        "actor": "alex",
+                        "url": (
+                            "https://x.com/axrbarsic/status/"
+                            f"{parent_status_id}"
+                        ),
+                        "exact_text": "Exact prior Pro answer",
+                        "provenance": "pro",
+                    }
+                ],
+            },
+        )
+        record = {
+            "snapshot_type": "chatgpt_conversation_migration",
+            "chain_id": chain_id,
+            "source_chatgpt_conversation_url": source_url,
+            "target_chatgpt_conversation_url": target_url,
+            "source_model": "GPT-5.5",
+            "target_model": "ChatGPT 5.6 Pro",
+            "branch_from_status_id": parent_status_id,
+            "method": "branch_in_new_chat",
+            "reason": "Legacy conversation is pinned to an older model",
+            "evidence": [
+                "source exact history visible",
+                "same custom GPT visible",
+                "target model label visible",
+            ],
+            "verified_at": "2026-07-29T16:00:00Z",
+        }
+        first = watcher.import_chatgpt_conversation_migration(
+            self.connection,
+            record,
+        )
+        second = watcher.import_chatgpt_conversation_migration(
+            self.connection,
+            record,
+        )
+        self.assertTrue(first["inserted"])
+        self.assertFalse(second["inserted"])
+        stored = watcher.history_chain_for_status(
+            self.connection,
+            chain_id,
+        )
+        self.assertEqual(stored["chatgpt_conversation_url"], target_url)
+        self.assertEqual(
+            stored["chatgpt_conversation_migrations"][0][
+                "source_chatgpt_conversation_url"
+            ],
+            source_url,
+        )
+        self.assertEqual(
+            stored["chatgpt_conversation_migrations"][0]["target_model"],
+            "ChatGPT 5.6 Pro",
+        )
+
+        invalid = {
+            **record,
+            "target_chatgpt_conversation_url": (
+                "https://chatgpt.com/g/g-other/c/pro-conversation"
+            ),
+        }
+        with self.assertRaisesRegex(
+            ValueError,
+            "preserve the exact custom GPT identity",
+        ):
+            watcher.import_chatgpt_conversation_migration(
+                self.connection,
+                invalid,
+            )
+
+    def test_local_skill_requeues_legacy_model_blocker_without_migration(
+        self,
+    ) -> None:
+        chain_id = "2078353040654938170"
+        parent_status_id = "2082479795108008300"
+        event_id = "2082484753454797103"
+        source_url = (
+            "https://chatgpt.com/g/g-example-poiasnitelnaia/"
+            "c/legacy-conversation"
+        )
+        pro_config = replace(
+            self.config,
+            mandatory_response_mode=True,
+        )
+        self.insert_direct_event(
+            event_id=event_id,
+            created_at="2026-07-29T15:13:50.000Z",
+            conversation_id=chain_id,
+            parent_status_id=parent_status_id,
+            text="@axrbarsic Follow-up",
+        )
+        watcher.import_history_snapshot(
+            self.connection,
+            {
+                "chain_id": chain_id,
+                "root_status_id": chain_id,
+                "provenance": "pro",
+                "chatgpt_conversation_url": source_url,
+                "turns": [
+                    {
+                        "status_id": parent_status_id,
+                        "actor": "alex",
+                        "url": (
+                            "https://x.com/axrbarsic/status/"
+                            f"{parent_status_id}"
+                        ),
+                        "exact_text": "Exact prior Pro answer",
+                        "provenance": "pro",
+                    },
+                    {
+                        "status_id": event_id,
+                        "parent_status_id": parent_status_id,
+                        "actor": "user",
+                        "url": f"https://x.com/example/status/{event_id}",
+                        "exact_text": "@axrbarsic Follow-up",
+                        "provenance": "pro",
+                    },
+                ],
+            },
+        )
+        watcher.resolve_event(
+            pro_config,
+            self.connection,
+            event_id,
+            disposition="blocked",
+            reason="Legacy conversation is pinned to an older model",
+            reply_url=None,
+            blocker_code="required_pro_model_unavailable",
+        )
+        preview = watcher.requeue_recovered_pro_model_blockers(
+            pro_config,
+            self.connection,
+            dry_run=True,
+        )
+        applied = watcher.requeue_recovered_pro_model_blockers(
+            pro_config,
+            self.connection,
+            dry_run=False,
+        )
+        self.assertEqual(preview["candidate_event_ids"], [event_id])
+        self.assertEqual(applied["candidate_event_ids"], [event_id])
+        stored = self.connection.execute(
+            """
+            SELECT e.delivery_state, r.disposition, r.blocker_code
+            FROM events e
+            JOIN event_resolutions r ON r.event_id = e.event_id
+            WHERE e.event_id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(stored["delivery_state"], "queued")
+        self.assertEqual(stored["disposition"], "blocked")
+        self.assertEqual(
+            stored["blocker_code"],
+            "required_pro_model_unavailable",
+        )
+        audit = self.connection.execute(
+            """
+            SELECT reason
+            FROM response_policy_requeues
+            WHERE event_id = ?
+            """,
+            (event_id,),
+        ).fetchone()
+        self.assertEqual(
+            audit["reason"],
+            "local_poyasnitelnaya_brigada_skill_recovery",
         )
 
     def test_legacy_blocked_resolution_requires_audited_code_revision(
@@ -2691,7 +3416,7 @@ class WatcherTests(unittest.TestCase):
         )
         self.assertEqual(result["resolved_event_ids"], [event_id])
 
-    def test_database_open_backfills_published_alex_parent_link(self) -> None:
+    def test_schema_migration_backfills_published_alex_parent_link(self) -> None:
         watcher.ingest_response(
             self.config,
             self.connection,
@@ -2747,6 +3472,9 @@ class WatcherTests(unittest.TestCase):
                 WHERE status_id = ?
                 """,
                 (reply_id,),
+            )
+            self.connection.execute(
+                f"PRAGMA user_version={watcher.SCHEMA_VERSION - 1}"
             )
         self.connection.close()
         self.connection = watcher.connect_database(self.config.database)
@@ -3264,6 +3992,14 @@ class WatcherTests(unittest.TestCase):
 
     def test_native_keychain_helper_is_preferred_when_executable(self) -> None:
         helper = self.root / "keychain-helper"
+        verified_helper = (
+            self.root
+            / "signed"
+            / "XMentionKeychainHelper.app"
+            / "Contents"
+            / "MacOS"
+            / "XMentionKeychainHelper"
+        )
         helper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
         helper.chmod(0o700)
         raw = json.loads(self.config.source_path.read_text(encoding="utf-8"))
@@ -3275,6 +4011,13 @@ class WatcherTests(unittest.TestCase):
         with (
             mock.patch.dict(os.environ, {}, clear=True),
             mock.patch(
+                "xmention_watcher.keychain_bundle.verify_bundle",
+                return_value=SimpleNamespace(
+                    ok=True,
+                    executable_path=str(verified_helper),
+                ),
+            ) as verify,
+            mock.patch(
                 "xmention_watcher.subprocess.run",
                 return_value=SimpleNamespace(stdout="helper-token\n"),
             ) as run,
@@ -3284,8 +4027,74 @@ class WatcherTests(unittest.TestCase):
         self.assertEqual(source, "keychain_helper")
         self.assertEqual(
             run.call_args.args[0],
-            [str(helper), "get", "test-service", "test-account"],
+            [
+                str(verified_helper),
+                "get",
+                "test-service",
+                "test-account",
+            ],
         )
+        verify.assert_called_once_with(helper)
+
+    def test_unverified_native_keychain_helper_is_never_executed(self) -> None:
+        helper = self.root / "keychain-helper"
+        marker = self.root / "helper-was-executed"
+        helper.write_text(
+            "#!/bin/sh\n"
+            f"touch '{marker}'\n",
+            encoding="utf-8",
+        )
+        helper.chmod(0o700)
+        raw = json.loads(self.config.source_path.read_text(encoding="utf-8"))
+        raw["keychain_helper"] = str(helper)
+        raw["keychain_service"] = "test-service"
+        raw["keychain_account"] = "test-account"
+        self.config.source_path.write_text(json.dumps(raw), encoding="utf-8")
+        configured = watcher.load_config(self.config.source_path)
+
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch(
+                "xmention_watcher.keychain_bundle.verify_bundle",
+                return_value=SimpleNamespace(ok=False),
+            ),
+            mock.patch("xmention_watcher.subprocess.run") as run,
+            self.assertRaisesRegex(
+                RuntimeError,
+                "Refusing an unverified Keychain helper",
+            ),
+        ):
+            watcher.bearer_token_with_source(configured)
+
+        run.assert_not_called()
+        self.assertFalse(marker.exists())
+
+    def test_keychain_helper_verifier_error_fails_closed(self) -> None:
+        helper = self.root / "keychain-helper"
+        helper.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        helper.chmod(0o700)
+        raw = json.loads(self.config.source_path.read_text(encoding="utf-8"))
+        raw["keychain_helper"] = str(helper)
+        raw["keychain_service"] = "test-service"
+        raw["keychain_account"] = "test-account"
+        self.config.source_path.write_text(json.dumps(raw), encoding="utf-8")
+        configured = watcher.load_config(self.config.source_path)
+
+        with (
+            mock.patch.dict(os.environ, {}, clear=True),
+            mock.patch(
+                "xmention_watcher.keychain_bundle.verify_bundle",
+                side_effect=ValueError("broken verifier"),
+            ),
+            mock.patch("xmention_watcher.subprocess.run") as run,
+            self.assertRaisesRegex(
+                RuntimeError,
+                "Unable to verify the configured Keychain helper",
+            ),
+        ):
+            watcher.bearer_token_with_source(configured)
+
+        run.assert_not_called()
 
     def test_preflight_reports_source_without_token_value(self) -> None:
         secret = "preflight-secret"
@@ -3348,7 +4157,7 @@ class WatcherTests(unittest.TestCase):
             self.config.source_path,
             output,
         )
-        self.assertEqual(len(rendered), 3)
+        self.assertEqual(len(rendered), 4)
         for path in rendered:
             payload = plistlib.loads(path.read_bytes())
             arguments = payload["ProgramArguments"]
@@ -3361,8 +4170,10 @@ class WatcherTests(unittest.TestCase):
                 expected_interval = self.config.poll_interval_seconds
             elif path.name.endswith(".watchdog.plist"):
                 expected_interval = self.config.watchdog_interval_seconds
+            elif path.name.endswith(".codex-update.plist"):
+                expected_interval = 21600
             else:
-                expected_interval = 300
+                expected_interval = 60
             self.assertEqual(payload["StartInterval"], expected_interval)
         self.assertFalse(
             (output / "com.axrbarsic.xmention.autopilot.plist").exists()

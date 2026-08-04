@@ -31,6 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exact", type=int)
     parser.add_argument("--min", dest="minimum", type=int)
     parser.add_argument("--max", dest="maximum", type=int)
+    parser.add_argument("--non-empty", action="store_true")
     parser.add_argument("--single-paragraph", action="store_true")
     parser.add_argument("--strip-one-final-newline", action="store_true")
     return parser.parse_args()
@@ -76,6 +77,8 @@ def main() -> int:
             )
 
     length = len(value)
+    if args.non_empty and length == 0:
+        errors.append("expected a non-empty reply")
     if args.exact is not None and length != args.exact:
         errors.append(f"expected exactly {args.exact} code points, got {length}")
     if args.minimum is not None and length < args.minimum:

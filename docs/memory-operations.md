@@ -2,108 +2,129 @@
 
 [English](memory-operations.md) | [Русский](memory-operations.ru.md)
 
-## Root cause
+## Proven root cause
 
-The standalone Codex scheduled task created a new Codex task every five
-minutes. The old lease protected only event IDs that were already claimed. If
-a new X reply arrived during an active publication, the next scheduled run
-claimed the new ID and started a second Sol High Browser owner. Electron
-renderers, app-server, `node_repl`, MCP helpers, and sidebar tasks accumulated.
+The standalone Codex scheduled task created a new task every five minutes. Even
+after completion, child `node_repl` and MCP helpers remained attached to the
+long-lived Codex Desktop runtime. Process ages formed an exact five-minute
+staircase. The sidebar filled with duplicate tasks while Electron redraw cost,
+RSS, and swap grew.
 
-Real run logs from July 26, 2026 proved the overlap:
+Archiving reduced visual noise but did not remove the source. The five-minute
+Codex automation is therefore retired.
 
-- the 07:24 run was still active until 07:31;
-- the 07:29 run claimed another event;
-- the 07:34 run started before the second owner completed.
+## New low-memory contract
 
-## New contract
+1. Polling, watchdog, and the Desktop supervisor are plain Python.
+2. An idle cycle spends zero model tokens, creates no task, and starts no
+   Desktop or Browser.
+3. A ready queue launches Codex Desktop only when it is absent.
+4. One existing Sol Max owner heartbeat atomically reserves the handoff and
+   executes the matching claim in the same task.
+5. An adjacent heartbeat cannot hand off the same queue again.
+6. The Browser owner claims atomically and remains the sole owner.
+7. A production claim holds at most three oldest events. The current resource
+   profile caps independent read-only X tabs at one, two or three before
+   preflight. All mutations remain one ordered writer lane.
+8. Short and local-max share one ordered composer and publication lane. The
+   local explainer opens no ChatGPT tab.
+9. Every task-owned tab closes on a terminal outcome.
+10. The dispatcher verifies that every original event ID left the queue.
+11. A released unresolved claim is failure, not success.
+12. Voice input does not pause Browser, polling, or the durable queue.
+13. Owner rotation archives the exact retired task through the official Codex
+    task API. Doctor requires exactly one unarchived canonical owner.
+14. After the queue empties, the supervisor closes only the exact Desktop PID
+    it launched. It never closes a Desktop instance opened by Alex.
 
-1. The dispatcher holds one global owner lease.
-2. A new event waits for the active owner even when its ID was never leased.
-3. Idle runs own zero Browser tabs.
-4. Short work uses one X tab.
-5. ChatGPT opens only after a Pro route is proven.
-6. Pro work uses at most one X tab, one ChatGPT tab, and one generation.
-7. Every task-owned tab closes on a terminal outcome.
-8. Every run claims before loading skills.
-9. The resource guard runs before Browser. `memory_deferred` preserves the
-   queue unchanged.
-10. A separate model-free LaunchAgent archives completed service tasks through
-    the local Codex app-server. It creates no task and consumes no tokens.
-11. The same LaunchAgent releases an orphaned claim only when its owning task
-    is inactive and has not updated for at least five minutes.
-12. After a scheduled run completes, the janitor correlates the exact task
-    creation time with its `node_repl` and MCP helper bundle. After 120 seconds
-    it sends `SIGTERM` only to helpers owned by that inactive task. The current
-    owner, protected tasks, and processes without an exact time match are never
-    touched.
+## Automatic profiles
 
-## Automatic resource modes
-
-`resource_mode: auto` chooses a profile before each non-empty claim. It changes
-only whether Browser work may start. Sol High, fact checking, and publication
-quality remain unchanged.
+`resource_mode: auto` changes only Browser admission. Sol Max, source checking,
+and publication rules remain unchanged.
 
 | Mode | Condition | Codex RSS | Renderers | Free memory | Swap |
-| --- | --- | ---: | ---: | ---: | ---: |
-| Efficiency | memory pressure | 2200 MiB | 5 | at least 20% | up to 896 MiB |
-| Balanced | user is active | 2350 MiB | 6 | at least 14% | up to 1024 MiB |
-| Performance | idle 15 minutes on AC power | 2500 MiB | 7 | at least 12% | up to 1152 MiB |
+| --- | --- | ---: | ---: | ---: | --- |
+| Efficiency | voice or pressure | 2200 MiB | 5 | at least 20% | telemetry |
+| Balanced | user active | 2350 MiB | 6 | at least 14% | telemetry |
+| Performance | idle 15 minutes, AC, at least 35% free | 2500 MiB | 7 | at least 12% | telemetry |
 
-Every mode also obeys hard caps: 2700 MiB RSS, 8 renderers, 10 `node_repl`,
-20 MCP helpers, at least 10% free memory, and no more than 1280 MiB swap.
-Crossing a cap defers the next Browser owner and leaves every event durable.
+Hard caps always apply: 3200 MiB RSS, 8 renderers, at least 10% free memory,
+and strict helper-process limits.
 
-Helper counts are early signals, not standalone proof of a leak. Their limits
-stay above measured normal active state. If an individual system measurement
-is unavailable, the guard records the error in `var/resource-health.json` and
-never loses an event.
+Swap remains measured and stored for diagnosis, but by default it neither
+selects a mode nor blocks Browser by itself. Its size includes historical
+memory pressure and can remain high after RAM recovers. Only current low free
+memory, excessive RSS, excessive renderers, or heavy helpers defer work.
+The system never attempts a forced swap purge.
 
-## Why completed runs are archived
+A high count of old lightweight helpers does not block forever when free
+memory, Codex RSS, aggregate helper RSS, and renderer count are all inside the
+recovery envelope. The default recovery ceilings are 3200 MiB Codex RSS and 8
+renderer equivalents.
+This exception exists only for already accumulated legacy processes. After
+stale tasks are archived and Codex Desktop restarts once, legacy helpers should
+disappear and stop accumulating.
 
-The official Codex documentation states that every standalone scheduled run
-starts a new chat. Self-archiving an active task can leave it in `active`. A
-model-based housekeeping automation also failed because it created more tasks.
-Instead, `scripts/session_janitor.py` runs as an ordinary LaunchAgent every
-five minutes. It archives exact matching tasks older than 15 minutes, protects
-the pinned task, and retains restorable history.
+## Voice input
 
-The latest result overwrites `var/session-janitor-health.json`, so diagnostics
-do not grow without bound. The owning task is matched by creation time before
-the claim and its last update. Later empty scheduled runs cannot hide an
-orphaned owner.
+Voice input is not a resource-guard signal. It does not change the selected
+profile and does not pause Browser work. Memory pressure and system sleep keep
+their independent safeguards.
 
-Each scheduled run may leave a child bundle of `node_repl`, Node MCP, and
-Python MCP processes after the task itself completes. The janitor reaps only a
-bundle whose start time matches one exact completed X task within two seconds.
-It uses graceful `SIGTERM` only. A survivor is reported in the health state and
-is never force-killed. This preserves fail-closed ownership when evidence is
-ambiguous while preventing helper accumulation every five minutes.
+## Measured cost
+
+The historical Luna scheduled task averaged 49,064 processed tokens per empty
+or deferred run. At five-minute cadence this was about 588,768 processed tokens
+per hour.
+
+The new idle path:
+
+| Stage | Model tokens | New task | Browser |
+| --- | ---: | ---: | ---: |
+| X poll | 0 | 0 | no |
+| Watchdog | 0 | 0 | no |
+| Resource gate | 0 | 0 | no |
+| Idle dispatcher | 0 | 0 | no |
+
+In normal unattended idle, supervisor-owned Desktop is closed and the heartbeat
+does not run. A ready queue starts the existing Sol Max owner directly, without
+a second model turn for transport. If Alex intentionally keeps Desktop open,
+the self-owned heartbeat continues its small scheduled gate. Substantive Sol
+Max cost follows the number and complexity of real replies.
+
+## Archiving and process lifecycle
+
+There is one persistent Browser-owner task. Rotation creates one replacement,
+commits the relay target, archives the exact previous task with the official
+Codex task API, and only then closes the transaction. Doctor queries the
+read-only Codex registry and fails unless the canonical title and working
+directory identify exactly the configured unarchived owner.
+
+The project does not terminate MCP or Browser helpers by PID. Codex App Server
+owns loaded-task process lifetime and unloads a task after subscriptions and
+activity end. Resource guard defers new Browser work while that grace period
+still consumes memory. Historical helpers are reclaimed by one Codex Desktop
+restart at a safe boundary, not by timestamp heuristics.
+
+## Post-update proof
+
+1. Run the unit test suite.
+2. Run an idle dispatcher cycle and confirm zero new tasks.
+3. Compare helper PID and RSS before and after idle, with no growth.
+4. Wait for one real X event.
+5. Confirm one self-owned Sol Max heartbeat and owner turn.
+6. Verify the X URL, exact history, and durable resolution.
+7. Confirm the original event leaves the queue.
+8. Confirm an adjacent heartbeat is blocked by the reservation.
+9. Delete the old paused automation through the official API only after the
+   full new cycle is accepted.
+10. Restart Codex Desktop once and record baseline RSS without legacy helpers.
 
 References:
 
-- [OpenAI Scheduled tasks](https://learn.chatgpt.com/docs/automations.md)
-- [OpenAI Built-in browser](https://learn.chatgpt.com/docs/browser.md)
-- [Apple: View memory usage in Activity Monitor](https://support.apple.com/en-au/guide/activity-monitor/-actmntr1004/mac)
-- [Chromium: Memory Saver](https://developer.chrome.com/blog/memory-and-energy-saver-mode)
-- [Codex issue 12491: MCP child process cleanup](https://github.com/openai/codex/issues/12491)
-- [Codex issue 11324: MCP server accumulation](https://github.com/openai/codex/issues/11324)
-
-## Post-update canary
-
-1. Run the full unit test suite.
-2. Run an empty schedule and confirm no Browser tab opened and the task
-   completed normally.
-3. Confirm the model-free janitor archives it after the minimum age without
-   creating another task.
-4. Wait for a real X event and confirm one global claim.
-5. Let a second event arrive while the first claim is active.
-6. Confirm the second run returns `owner_busy`, opens no Browser, and preserves
-   `work_in_progress`.
-7. After the first owner completes, confirm the second event can be claimed.
-8. Compare `var/resource-health.json`, RSS, and renderer count before and after.
-9. Interrupt a test owner and confirm recovery only after its related task
-   becomes stale, without releasing a live `notLoaded` run.
-10. After the canary completes, confirm its helper count drops, no current
-    owner PID appears among targets, and the result is recorded in
-    `var/session-janitor-health.json`.
+- [OpenAI Codex app-server](https://learn.chatgpt.com/docs/app-server)
+- [OpenAI Scheduled tasks](https://learn.chatgpt.com/docs/automations)
+- [OpenAI project config](https://learn.chatgpt.com/docs/config-file/config-advanced#project-config-files-codexconfigtoml)
+- [Apple Activity Monitor](https://support.apple.com/en-au/guide/activity-monitor/-actmntr1004/mac)
+- [Codex issue 12491](https://github.com/openai/codex/issues/12491)
+- [Codex issue 11324](https://github.com/openai/codex/issues/11324)

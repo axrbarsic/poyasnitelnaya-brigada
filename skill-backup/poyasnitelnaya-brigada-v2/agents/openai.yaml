@@ -1,0 +1,6 @@
+interface:
+  display_name: "Пояснительная бригада v2"
+  short_description: "Удерживает тезис, бремя и логику в споре X"
+  default_prompt: "Use $poyasnitelnaya-brigada-v2 to продолжить этот спор в X, проверить логический переход и бремя доказательства, удержать исходный тезис и ответить на последнее возражение."
+policy:
+  allow_implicit_invocation: true

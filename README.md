@@ -14,11 +14,16 @@
 индикатора непрочитанных уведомлений X, защищается от дублей и передает сильной
 модели только реальные события.
 
-<p align="center">
-  <img src="docs/assets/system-flow-ru.png"
-       alt="Схема работы Пояснительной бригады"
-       width="430">
-</p>
+> Статус deployment на 2026-08-01: входящий terminal-first контур работает
+> через self-owned heartbeat единственного Sol Max service worker. Маршрут
+> «Пояснительной бригады» перенесен из custom GPT в локальный versioned skill.
+> Генерация больше не открывает ChatGPT, использует Sol Max, точную SQLite
+> history и детерминированный верхний предел 4000 Unicode code points без
+> искусственного увеличения текста.
+> Периодический outbound теперь резервирует существующий минутный `x-relay`.
+> Он запускает не более одной цели в текущем 10-минутном окне только при
+> полностью пустой входящей очереди. Standalone cron `x-15` остаётся на паузе,
+> пропущенные из-за входящих сообщений окна не превращаются в backlog.
 
 ## Лицензия и авторство
 
@@ -37,17 +42,35 @@
 2. `since_id` и SQLite не дают одному статусу попасть в очередь дважды.
 3. `wake-request.json` содержит неразрешенные прямые ответы и продолжения любых
    диалогов, где сохранен ход Alex.
-4. Локальный dispatcher выдает всей очереди одну глобальную 30-минутную аренду
+4. После durable записи новых event IDs watcher немедленно выполняет
+   неконфликтующий `launchctl kickstart` локального dispatcher. Минутный
+   LaunchAgent остаётся резервным запуском, поэтому неудачный kick не теряет
+   очередь и не создаёт второго owner.
+5. Локальный dispatcher выдает всей очереди одну глобальную 30-минутную аренду
    владельца.
-5. Запланированная задача Codex Desktop раз в пять минут сначала выполняет
-   механический claim без загрузки skills. Пустой run архивирует предыдущие
-   завершенные служебные задачи, непустой становится Browser owner.
-6. Sol High открывает живую ветку X, анализирует текст и изображения, проверяет
+6. Минутный LaunchAgent выполняет model-free `gate` обычным Python. Пустая,
+   занятая или отложенная очередь завершается без модели, Browser и новой
+   задачи Codex.
+7. Только готовая очередь проверяет Codex Desktop. Если приложение закрыто,
+   terminal supervisor запускает его в каноническом workspace. Ошибка запуска
+   не снимает событие с очереди и вызывает локальное уведомление.
+8. Один существующий in-app heartbeat прикреплён прямо к Sol Max service
+   worker и вызывает `reserve-handoff`. Python атомарно резервирует один
+   маршрут, после чего эта же сессия выполняет claim. Межсессионной отправки,
+   отдельного relay thread и нестабильного `hostId` больше нет. Reservation с
+   TTL и глобальный owner claim не позволяют соседним heartbeat создать двух
+   Browser-owner.
+9. Sol Max открывает живую ветку X, анализирует текст и изображения, проверяет
    первичные источники, историю диалога и отсутствие дубля.
-7. Короткий ответ пишет Sol High. Длинный follow-up может продолжаться только в
-   точной исторической сессии кастомного GPT.
-8. После публикации сохраняются точный URL, текст, источники и durable
+10. Короткий ответ пишет Sol. Маршрут «Пояснительной бригады» выполняется
+    локальным skill в Sol Max и возвращает один непустой ответ не длиннее 4000
+    Unicode code points. Skill не стремится занять весь лимит. ChatGPT и custom
+    GPT для генерации не открываются.
+11. После публикации сохраняются точный URL, текст, источники и durable
    disposition. Только после этого событие исчезает из очереди.
+12. После пустой очереди supervisor закрывает только тот Desktop, который сам
+    запустил, и только после снятия owner claim и защитной паузы. Открытый
+    пользователем Desktop он не закрывает.
 
 При `mandatory_response_mode=true` каждое доступное eligible-событие в
 заданном временном окне получает ровно один ответ. Поддержка, сарказм, шутка,
@@ -60,51 +83,112 @@
 история больше не может скрыть такую ветку.
 
 Watcher и dispatcher сами никогда ничего не публикуют. Авторизованным Browser
-управляет только одна задача Sol High.
+управляет только одна задача Sol Max.
 
 ## Зачем такое разделение
 
 - Получение и дедупликация X выполняются Python без токенов модели.
-- Пустой Sol High run завершается до Browser и содержательной работы.
+- Событийный kick запускает terminal dispatcher сразу после обнаружения
+  нового ответа. Минутный интервал остаётся независимым fallback.
+- Пустой terminal цикл не использует модель и расходует ноль токенов. В
+  штатном unattended режиме Desktop закрыт; при готовой очереди он запускается,
+  self-owned Sol Max heartbeat делает claim, а после работы managed Desktop
+  закрывается.
 - Ручное открытие уведомлений X не ломает обнаружение, потому что watcher
   использует ID статусов API, а не синий индикатор интерфейса.
+- Ручной ответ Alex считается обычным ходом `alex`. Если собеседник продолжит
+  ветку, Browser owner восстановит этот ручной ответ и весь живой контекст,
+  сохранит их в историю и только затем подготовит продолжение.
 - Глобальная аренда dispatcher не позволяет новому событию поднять второго
-  Browser owner, пока идет обработка или генерация Pro.
+  Browser owner, пока идет обработка или локальная генерация.
 - Если задача упала, событие снова станет доступно после окончания аренды.
 - SQLite, ledger и история ветки защищают от повторной публикации.
-- Каждый непустой scheduled run является единственным Browser owner своего
-  batch. Аренда блокирует весь следующий run, а не только уже известный ID.
+- Каждый непустой Sol turn в выделенном service worker является единственным Browser
+  owner своего batch. Аренда блокирует следующий claim, а не только уже
+  известный ID.
 - Resource guard проверяет общий RSS Codex, рендереры, helper-процессы и
-  свободную память до Browser. При перегрузке очередь остается нетронутой.
+  свободную память до Browser. Swap сохраняется как телеметрия и сам по себе
+  не останавливает очередь. При реальной перегрузке очередь остается
+  нетронутой.
 - Автоматический профиль выбирает экономный, сбалансированный или
-  производительный режим, но не снижает качество Sol High и фактчекинга.
-- Безмодельный session janitor через локальный Codex app-server архивирует
-  завершенные служебные задачи и восстанавливает осиротевший claim. Он не
-  создаёт новых задач и не расходует токены.
-- Тот же janitor мягко завершает только точно сопоставленные helper-процессы
-  завершенного scheduled run, не затрагивая текущего Browser owner.
+  производительный режим, но не снижает качество Sol Max и фактчекинга.
+- Голосовой ввод не влияет на dispatch, профиль ресурсов или Browser-работу.
+  Guard реагирует только на измеренное давление памяти и системный сон.
+- Система использует одну постоянную Browser-owner задачу. Ротация архивирует
+  только точную старую задачу через официальный Codex archive, а doctor требует
+  единственность незархивированного owner. Отдельного process janitor нет.
+- Безмодельный supervisor раз в минуту запускает системный doctor. Зеленое
+  состояние никого не будит. Stale poll получает один allowlisted
+  `launchctl kickstart`; повторный провал создает один durable incident и
+  передает его self-owned heartbeat существующей Sol Max owner-сессии.
+- `HTTP 402 Payment Required` никогда не получает `kickstart`. Supervisor один
+  раз выгружает poll LaunchAgent, фиксирует `external_action_required` и не
+  создаёт повторные модельные пробуждения. Уже накопленная X очередь при этом
+  остаётся доступна owner-сессии. После пополнения X API credits оператор
+  загружает poll LaunchAgent и подтверждает один успешный live poll.
+- Repair incident имеет reservation, claim token, cooldown и обязательный
+  отчет. Одинаковая поломка не создает минутный шторм модельных пробуждений.
+- Событийный relay является heartbeat самого выделенного service worker.
+  Новая или промежуточная сессия на цикл не создается.
+- Heartbeat не отправляет сообщения в другую задачу. Codex сериализует его с
+  активным owner turn, а reservation и claim закрывают гонки соседних запусков.
+  Mobile Remote, локальный Desktop и автоматический Browser owner используют
+  один durable thread по очереди.
+- Doctor handoff также ждёт завершения активного X claim. Повторная проверка
+  owner после repair reservation освобождает только repair token, если X успел
+  выиграть гонку старта.
+- Если repair терминально доказал, что текущий Browser-owner нарушает контракт
+  задачи и безопасно не исправляется на месте, relay принудительно запускает
+  ту же транзакционную ротацию ниже обычного порога запусков. Failed incident
+  больше не может оставить сохранённую входящую очередь без владельца.
+- Блокировка экрана не является отказом Browser. Если Mac awake и read-only
+  Browser preflight проходит, owner продолжает работу. Системный сон отключен.
+- Отдельный updater проверяет официальные Codex CLI releases только на idle
+  boundary, запрещает downgrade, проверяет SHA-256 и `codex doctor`, уведомляет
+  только после успеха и ведет русскую хронологию локально и в GitHub issue.
 
 ## Быстрый старт
 
 Требуются macOS, Python 3.9 или новее, Codex Desktop с встроенным Browser,
-X Developer App и Bearer Token с доступом к user mentions.
+X Developer App и Bearer Token с доступом к user mentions и recent search.
 
 ```bash
 cp config.example.json config.json
 ```
 
 Укажите в `config.json` числовой X user ID. Токен не записывайте в файл.
-Сохраните его в macOS Keychain с помощью bundled helper:
+Добавьте Apple Account в Xcode. Затем соберите и установите подписанный
+app-like Keychain helper с Mac provisioning profile:
 
 ```bash
-mkdir -p var
-xcrun swiftc -framework Security \
-  scripts/keychain_helper.swift \
-  -o var/keychain-helper
+scripts/install_keychain_helper.sh
+```
 
+Сохраните Bearer Token через установленный helper:
+
+```bash
 printf '%s' "$X_BEARER_TOKEN" | \
   var/keychain-helper set axrbarsic-x-mention-watcher axrbarsic
 ```
+
+Helper сохраняет Bearer item в macOS Data Protection Keychain с доступностью
+`AfterFirstUnlockThisDeviceOnly`. После первого входа в macOS LaunchAgent
+продолжает читать его при заблокированном экране, но не получает доступ до
+первого входа после перезагрузки. Item не переносится на другое устройство.
+Старый login-keychain item мигрирует в DP-копию автоматически и не удаляется.
+Standalone CLI для этого недостаточен: Apple требует app-like bundle,
+подпись и provisioning profile, который разрешает Keychain access group.
+Installer проверяет подпись, entitlements, профиль, срок его действия и
+миграцию существующего item до атомарного переключения
+`var/keychain-helper`. При первой миграции macOS может один раз запросить
+разрешение подписанному helper на чтение старого login-keychain item. Разрешите
+доступ в системном окне: токен не выводится, DP-копия создаётся внутри
+Keychain, а последующие фоновые чтения обходятся без этого запроса. Это
+соответствует
+[`TN3137`](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)
+и рекомендациям Apple для
+[`kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`](https://developer.apple.com/documentation/security/ksecattraccessibleafterfirstunlockthisdeviceonly)
+в фоновых процессах.
 
 Проверьте готовность и тесты:
 
@@ -122,36 +206,67 @@ python3 xmention_watcher.py --config config.json poll
 python3 xmention_watcher.py --config config.json status
 ```
 
-После этого установите три LaunchAgent и создайте запланированную задачу Codex
-Desktop на Sol High по
-[русскому руководству автопилота](docs/autopilot-setup.ru.md) и
+При включенном `conversation_tail_enabled` тот же безмодельный poll проверяет
+только недавние conversation ID, где уже сохранен точный ход Alex. Поэтому
+боковой ответ другому участнику не теряется даже без повторного
+`@axrbarsic`. У mentions и conversation tail разные курсоры. Первый tail
+проход ограничен `conversation_tail_initial_lookback_hours`, обычные проходы
+используют короткое перекрытие и дедупликацию по неизменяемому X ID.
+Расширенные ресурсы User и Media в этих poll не запрашиваются. Широкий tail
+ограничен параметрами `conversation_tail_daily_post_read_limit` и
+`conversation_tail_max_post_reads_per_poll`; его исчерпание не блокирует
+дешевую ленту собственных упоминаний. Незавершенный проход сохраняет позицию и
+продолжается со следующей порции без повторного чтения уже пройденных страниц.
+Причины и дальнейшая webhook-миграция описаны в
+[`docs/x-api-cost-control.ru.md`](docs/x-api-cost-control.ru.md).
+
+После этого установите четыре LaunchAgent и один выделенный Sol Max service
+worker с self-owned heartbeat по
+[русскому руководству автопилота](docs/autopilot-setup.ru.md),
+[контракту локального skill](docs/local-explainer-skill.ru.md) и
 [deployment checklist](docs/deployment-checklist.md). Для iMac с 8 ГБ отдельно
 прочитайте [контракт памяти и жизненного цикла](docs/memory-operations.ru.md).
 
 ## Важные контракты
 
-- Idle run не открывает Browser. Short использует одну X-вкладку. ChatGPT
-  открывается только после доказанного Pro route.
-- На iMac с 8 GB памяти одновременно работает максимум одна Pro generation.
-- Публикационные решения принимает только Sol High.
-- Новая Pro-цель начинает новую conversation.
-- Follow-up к Pro продолжает точную историческую conversation.
-- В custom GPT отправляется только screenshot цели и 0 символов текста.
-- Ответ custom GPT переносится без смыслового редактирования.
-- Разрешенная длина X ответа: от 1 до 4000 Unicode code points.
+- Idle run не открывает Browser. Любой ответ использует не более одной
+  task-owned X-вкладки.
+- Публикационные решения принимает только Sol. Локальный skill
+  `poyasnitelnaya-brigada-v2` используется по умолчанию и всегда требует
+  `gpt-5.6-sol` и effort `max`. V1 сохранён без изменений и запускается только
+  по прямой просьбе Alex.
+- Новая local-max цель и каждый local-max follow-up получают полную точную
+  историю из SQLite и append-only JSONL. Browser-сессия ChatGPT для памяти не
+  нужна.
+- Ручной ответ Alex тоже продолжается локально. Origin provenance сохраняется
+  отдельно, а содержательный exact parent автоматически выбирает local-max по
+  детерминированному профилю claim payload.
+- Старые `chatgpt_conversation_url` и migration records сохраняются только как
+  исторический audit trail и больше не являются runtime dependency.
+- Команда `pro-model-recovery-requeue` сохранена для совместимости. Теперь она
+  возвращает в очередь старые model, conversation и screenshot blockers,
+  которые устранил локальный skill, без ручной передачи event ID.
+- Ответ локальной «Пояснительной бригады» непустой, содержит не более 4000
+  Unicode code points, проходит `validate_reply.py --non-empty --max 4000` и
+  публикуется без смыслового редактирования.
+- Параллельная подготовка фактов и черновиков допустима, но X Browser,
+  публикация, верификация и durable resolve всегда принадлежат одному owner и
+  выполняются последовательно.
+- Автоматика `x-15` остаётся на паузе. Self-owned `x-relay` автоматически
+  разрешает одну outbound-попытку в текущем 10-минутном окне только при нулевой
+  входящей очереди и свободном writer. Любое новое входящее событие отменяет
+  outbound до публикации, а пропущенные окна не накапливаются.
 - Перед публикацией проверяются дубль, parent status, composer и фактический URL.
 - Media-only ответ классифицируется относительно точного parent, а незнакомый
   мем проверяется по интернет-источникам.
 - `blocked` не подменяется `skip`, если обязательная историческая сессия или
   другой контрактный ресурс недоступен.
 - Terminal `blocked` требует точного `blocker_code`. Временная ошибка Browser,
-  Pro, rate limit или валидации остается в очереди для повтора.
-- `required_pro_model_unavailable` используется, только если точная
-  историческая conversation существует, но требуемая Pro-модель в ней
-  недоступна.
-- `target_screenshot_unavailable` используется только после повторных
-  проверенных попыток, когда обязательный чистый screenshot цели невозможно
-  получить и безопасного контрактного обхода нет.
+  local-max генерации, rate limit или валидации остается в очереди для повтора.
+- `required_pro_model_unavailable`, `missing_historical_pro_conversation` и
+  `target_screenshot_unavailable` являются историческими blocker codes.
+  Локальный skill устранил эти runtime-зависимости и адресно requeue старые
+  записи.
 - `memory-audit` проверяет целостность SQLite, foreign keys, стабильные X user
   ID, точную историю, resolutions и карантин candidate corpus. Пока официальный
   архив готовится, нормальный статус равен `archive_pending`.
@@ -189,8 +304,9 @@ CLI всегда пишет только в канонический `var/eviden
   официальных архивов. Настройка Keychain, preflight, retention, проверки
   repository и restore drills описаны в документе о хранении.
 - На оскорбление публикуется спокойный умный ответ без встречного оскорбления.
-  Экспериментальный media-маршрут может использовать одного бота `377` или
-  `Ложкин`, но картинка высмеивает аргумент, а не внешность или достоинство.
+  Экспериментальный media-маршрут может использовать локальный skill `377` или
+  web bot `Ложкин`, но картинка высмеивает аргумент, а не внешность или
+  достоинство.
 - Перед ответом Sol получает компактную межветочную память автора по стабильному
   X user ID: точные публичные реплики, даты, URL и наши точные ответы.
   `commenter-history` позволяет поднять более глубокую историю без ограничения
@@ -327,11 +443,23 @@ python3 xmention_watcher.py --config config.json mandatory-response-requeue \
 ```
 
 Эта же команда используется для чистого эксперимента после исправления слабого
-звена. Dry-run и apply получают один и тот же `as-of`, после чего обычная
-запланированная задача Sol сама должна найти событие. Известный event ID нельзя
-вручную подставлять в очередь или prompt. Полный переносимый протокол находится
-в
+звена. Dry-run и apply получают один и тот же `as-of`, после чего безмодельный
+dispatcher при необходимости запускает Desktop, а self-owned heartbeat Sol
+owner делает claim. Известный event ID нельзя вручную подставлять в очередь
+или prompt. Полный переносимый протокол находится в
 [`reliability-debugging.md`](skill-backup/x-twitter-operator/references/reliability-debugging.md).
+
+## Внешний read-only worker Lightpanda
+
+Опциональный Lightpanda worker читает разрешенные внешние HTTPS-источники,
+возвращает Markdown или accessibility tree и запускает проверенные PandaScript
+без LLM и runtime-токенов. Он не получает cookie X, не выполняет поиск X и не
+публикует. `partial`, login wall, robots block и ложный HTTP 200 автоматически
+требуют fallback во встроенный Browser.
+
+Архитектура, threat model, version pinning, команды и результаты живых canary
+описаны в
+[docs/lightpanda-integration.ru.md](docs/lightpanda-integration.ru.md).
 
 ## Состояние и восстановление
 
@@ -362,3 +490,6 @@ python3 xmention_watcher.py --config config.json history-export \
 ```
 
 Подробная архитектура находится в [docs/architecture.md](docs/architecture.md).
+Причины пропусков, принятые промышленные паттерны, Browser 26.727 и безопасная
+граница обновления описаны в
+[аудите надёжности](docs/reliability-audit-2026-08-01.ru.md).

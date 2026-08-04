@@ -15,7 +15,7 @@ x-mention-watcher/
   docs/                    English and Russian documentation
   macos/                   source LaunchAgent templates
   scripts/                 dispatcher, bridge, and service utilities
-  skill-backup/            restorable X skill source
+  skill-backup/            restorable source for all four skills
   tests/                   complete test suite
   var/                     mutable local state, excluded from Git
   *.py                     watcher, importer, and snapshot tools
@@ -23,15 +23,33 @@ x-mention-watcher/
   config.example.json      safe configuration template
 ```
 
+The watcher entrypoint is only the composition root. Durable domains live in
+the `scripts/watcher_*.py` modules, and every tracked runtime module is listed
+in `recovery/system-contract.json`. This keeps deployment drift detectable
+without duplicating source trees.
+
+Public control-plane scripts are compatibility facades as well. Their Desktop
+lifecycle, incident store, recovery route, and doctor runtime modules live in
+the same `scripts/` tree and are listed in the system contract.
+
 `browser_owner_cwd` is `.`. The Browser owner therefore runs in the same
 canonical directory and does not require a second project under
 `Documents/Codex`. New screenshots, ledgers, payloads, and other evidence must
 be stored below `var/evidence/browser-owner/<session-id>/`.
 
-No separate manual step is required after durable synchronization.
-`browser-handoff-sync` automatically creates and verifies `manifest.json`
-when both input JSONL files are in the same canonical evidence directory. An
-incomplete or inconsistent set fails closed and blocks the backup plan.
+For each claimed event, the Browser owner writes only
+`<EVENT_ID>/evidence.json` plus the exact files referenced by that record.
+`commit_browser_owner_event.py` validates that terminal record, derives both
+generated JSONL records and the authorized handoff route, imports the exact
+history, and durably resolves the event. Manual JSONL construction, direct
+history import, and a separate resolve are forbidden.
+
+After all events report `status=committed`,
+`finalize_browser_owner_session.py` verifies that all event directories match
+the active claim, atomically builds the two aggregate JSONL files from those
+generated records, invokes the idempotent `browser-handoff-sync`, and requires
+a verified `manifest.json`. An incomplete or inconsistent set fails closed
+before claim completion.
 
 Import legacy evidence without modifying its source:
 
@@ -51,15 +69,20 @@ the canonical `var/evidence/browser-owner` tree.
 
 Only required deployment points remain outside the directory:
 
-- `~/.codex/skills/x-twitter-operator`, the installed skill copy;
+- `~/.codex/skills/x-twitter-operator`, the installed X skill copy;
+- `~/.codex/skills/poyasnitelnaya-brigada`, the installed local generator;
+- `~/.codex/skills/poyasnitelnaya-brigada-v2`, the installed default reply and
+  continuation generator;
+- `~/.codex/skills/377`, the installed local visual skill;
 - `~/Library/LaunchAgents/com.axrbarsic.xmention.*.plist`, the loaded macOS
   services;
-- macOS Keychain, which holds secrets;
+- macOS Data Protection Keychain, which holds secrets. Its signed helper bundle
+  is rebuilt from `macos/XMentionKeychainHelper*` and installed below `var/`;
 - a separate archive vault for original X archive ZIP files.
 
-These are not additional source trees. The skill is restored from
-`skill-backup/`, LaunchAgents are rendered from `macos/`, and secrets are never
-copied into the repository.
+These are not additional source trees. All four skills are restored from
+`skill-backup/`, LaunchAgents are rendered from `macos/`, and secrets are
+never copied into the repository.
 
 ## Git boundary
 

@@ -6,11 +6,13 @@
   <string>com.axrbarsic.xmention.watchdog</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/usr/bin/python3</string>
-    <string>REPLACE_PROJECT_DIR/xmention_watcher.py</string>
+    <string>REPLACE_PYTHON_PATH</string>
+    <string>REPLACE_PROJECT_DIR/scripts/autopilot_supervisor.py</string>
     <string>--config</string>
     <string>REPLACE_CONFIG_PATH</string>
-    <string>watchdog</string>
+    <string>--contract</string>
+    <string>REPLACE_PROJECT_DIR/recovery/system-contract.json</string>
+    <string>run</string>
   </array>
   <key>StartInterval</key>
   <integer>REPLACE_WATCHDOG_INTERVAL</integer>

@@ -4,78 +4,167 @@
 
 ## Назначение
 
-Watcher обнаруживает ответы X без токенов модели. Локальная automation Codex
-Desktop каждые пять минут проверяет durable очередь. При пустой очереди запуск
-завершается до открытия Browser. Непустая очередь атомарно арендуется и
-обрабатывается в этом же scheduled run на Sol High.
+Система разделяет бесплатную механику и содержательную работу:
 
-Каждый непустой claim получает до `commenter_memory_limit` точных публичных
-взаимодействий с тем же стабильным X user ID. Более глубокая сохраненная история
-доступна Sol через `commenter-history`, только когда она полезна текущему ответу.
-Та же память может содержать до трех карантинных подсказок из внешнего корпуса.
-Их запрещено использовать как доказательство до проверки точного публичного
-поста в живом X или через официальный X API.
+1. X watcher раз в минуту получает упоминания через официальный X API и
+   проверяет хвост недавних conversation ID с точным ходом Alex. Затем он
+   дедуплицирует события и обновляет SQLite с очередью.
+2. Token-free supervisor контролирует свежесть poll, системный контракт и
+   ошибки API. Однозначную stale-poll поломку он один раз ремонтирует сам.
+3. Python dispatcher раз в минуту сначала выполняет repair gate, затем X gate.
+4. Пустая, занятая или отложенная очередь завершается без модели, Browser и
+   новой задачи Codex.
+5. Готовая очередь запускает Codex Desktop в каноническом workspace, если
+   приложение закрыто. При неудаче очередь сохраняется, запуск повторяется, а
+   Alex получает локальное уведомление.
+6. Один существующий in-app heartbeat закреплён прямо за Sol Max owner и
+   выполняет один `relay-reserve-handoff`. Python сам проверяет durable repair
+   incident, X queue и idle-only outbound, затем атомарно резервирует один
+   маршрут. Эта же сессия делает claim, без межсессионной отправки.
+7. Сессия Sol Max восстанавливает живую
+   ветку, публикует и сохраняет точную историю.
+8. После завершения supervisor может закрыть только тот Desktop, который
+   запустил сам. Пользовательский Desktop он не закрывает.
 
-Codex CLI намеренно исключен из Browser-работы. Официальное руководство Codex
-указывает, что встроенный Browser недоступен в Codex CLI и IDE extension.
-`scripts/autopilot_resume.py` является fail-closed защитой старой установки.
-Смотрите официальную документацию
-[Built-in browser](https://learn.chatgpt.com/docs/browser?surface=app) и
-[Scheduled tasks](https://learn.chatgpt.com/docs/automations.md).
+Старый внешний app-server relay полностью удалён из runtime. Dispatcher
+принимает только `in_app_heartbeat`, а Browser всегда принадлежит постоянной
+owner-сессии внутри приложения.
+
+> Текущее состояние deployment на 2026-08-01: постоянный Sol Max owner и его
+> self-owned heartbeat проходят doctor без FAIL. Маршрут «Пояснительной бригады»
+> выполняется локальным skill без ChatGPT, использует exact durable history и
+> проверяет непустой ответ не длиннее 4000 Unicode code points без искусственного
+> увеличения текста.
+>
+> В том же live checkpoint изолированный пустой цикл прошёл через настоящий
+> entry point dispatcher и вернул `idle`. Task IDs, relay и owner turns,
+> количество app-server, node helper, renderer и dispatcher до и после не
+> изменились.
+
+Официальные основания архитектуры:
+
+- [Codex app-server](https://learn.chatgpt.com/docs/app-server)
+- [Scheduled tasks](https://learn.chatgpt.com/docs/automations)
+- [Project config files](https://learn.chatgpt.com/docs/config-file/config-advanced#project-config-files-codexconfigtoml)
+- [Built-in Browser](https://learn.chatgpt.com/docs/browser?surface=app)
 
 ## Компоненты
 
 | Компонент | Частота | Модель | Ответственность |
 | --- | --- | --- | --- |
-| X watcher LaunchAgent | 1 минута | нет | Получение, дедупликация, SQLite, очередь |
-| Watchdog LaunchAgent | 1 минута | нет | Контроль polling и ошибок API |
-| Session janitor LaunchAgent | 5 минут | нет | Архив задач и recovery осиротевшего claim |
-| Automation Codex Desktop | 5 минут | Sol High | Claim непустой очереди, Browser, решение, публикация, проверка |
-| Кастомный GPT | только Pro | настроенный Pro | Длинный ответ в точной исторической conversation |
+| X watcher LaunchAgent | 1 минута | нет | Упоминания, хвост разговоров, дедупликация, SQLite, очередь |
+| Supervisor LaunchAgent | 1 минута | нет | Doctor, allowlist ремонта, durable incident |
+| Event dispatcher LaunchAgent | 1 минута | нет при idle | Gate, запуск и managed shutdown Desktop |
+| Self-owned heartbeat | пока Desktop открыт | Sol Max | Reservation и claim в той же сессии |
+| Browser owner | по событию | Sol Max | Browser, фактчек, публикация |
+| Локальный skill «Пояснительная бригада» | только local-max | Sol Max | Не более 4000 code points, история, источники |
+| Codex CLI updater | 6 часов | нет без update | Version check, SHA-256, doctor, журнал |
 
-Минутный poll не использует токены. Пустой scheduled run расходует небольшой
-контекст Sol, но не открывает Browser и не выполняет содержательную работу,
-пока `dispatch` не равен `true`. Claim выполняется до чтения skills и references.
-Архивация не входит в prompt automation и не расходует модель. Ее выполняет
-локальный app-server janitor.
+Пустой terminal monitoring не расходует model tokens и не создает задач.
+Штатный unattended режим держит Desktop закрытым. При событии supervisor
+поднимает его, existing owner получает heartbeat-turn, а после завершения
+managed Desktop закрывается. Если Desktop открыт самим Alex, supervisor его не
+закрывает. Отдельного модельного turn на транспорт больше нет.
 
 ## Конфигурация
 
-Добавьте локальные значения в игнорируемый `config.json`:
+Проект должен быть trusted, иначе локальный `.codex/config.toml` игнорируется.
+Добавьте в `~/.codex/config.toml`:
+
+```toml
+[projects."/absolute/path/to/x-mention-watcher"]
+trust_level = "trusted"
+```
+
+Создайте `config.json` из примера и задайте:
 
 ```json
 {
-  "autopilot_state_file": "var/autopilot-dispatch.json",
-  "autopilot_health_file": "var/autopilot-health.json",
   "browser_owner_cwd": ".",
-  "memory_guard_enabled": true,
-  "memory_guard_state_file": "var/resource-health.json",
+  "browser_owner_thread_id": "PINNED_SOL_OWNER_THREAD_ID",
+  "codex_project_id": "CODEX_PROJECT_ID",
+  "autopilot_owner_rotation_after_runs": 3,
+  "autopilot_owner_rotation_state_file": "var/browser-owner-rotation.json",
+  "desktop_relay_mode": "in_app_heartbeat",
+  "desktop_auto_quit_after_work": true,
+  "desktop_auto_quit_grace_seconds": 180,
+  "relay_handoff_reservation_seconds": 180,
+  "app_server_dispatch_interval_seconds": 60,
+  "app_server_dispatch_state_file": "var/app-server-dispatch.json",
+  "app_server_dispatch_lock_file": "var/app-server-dispatch.lock",
+  "autopilot_supervisor_state_file": "var/autopilot-supervisor.json",
+  "autopilot_supervisor_repair_cooldown_seconds": 90,
+  "autopilot_supervisor_escalation_retry_seconds": 1800,
+  "codex_cli_update_channel": "preview",
+  "codex_cli_update_interval_seconds": 21600,
   "resource_mode": "auto",
-  "resource_mode_idle_seconds": 900,
-  "session_janitor_interval_seconds": 300,
-  "session_janitor_orphan_owner_seconds": 300,
-  "session_janitor_reap_helpers": true,
-  "session_janitor_helper_grace_seconds": 120,
+  "memory_guard_enabled": true,
+  "memory_guard_swap_blocks_dispatch": false,
   "commenter_memory_limit": 12,
+  "conversation_tail_enabled": true,
+  "conversation_tail_poll_interval_seconds": 300,
+  "conversation_tail_watch_hours": 24,
+  "conversation_tail_initial_lookback_hours": 2,
+  "conversation_tail_overlap_seconds": 120,
+  "conversation_tail_max_conversations": 80,
+  "conversation_tail_daily_post_read_limit": 200,
+  "conversation_tail_max_post_reads_per_poll": 50,
   "poll_interval_seconds": 60,
   "watchdog_interval_seconds": 60
 }
 ```
 
-Точка означает каталог рядом с `config.json`, то есть канонический корень
-этого проекта. Не создавайте отдельный Browser owner workspace.
+Лента собственных упоминаний продолжает проверяться раз в минуту. Более
+дорогой Recent Search по хвостам цепочек запускается раз в пять минут, не
+запрашивает расширенные ресурсы User и Media и имеет отдельный лимит чтения.
+Исчерпание лимита хвостов не останавливает собственные упоминания. Текущие
+счетчики доступны в `python3 xmention_watcher.py --config config.json status`.
 
-Вложенные ответы отслеживаются автоматически, как только в точной истории
-диалога появляется ход `alex`. Список тематических ID корневых постов не нужен.
-Вложенный комментарий всё равно требует живой классификации контекста перед
-ответом автора.
+`browser_owner_thread_id` принадлежит одной текущей Browser-owner задаче на Sol
+Max. `x-relay` является heartbeat этой же задачи, а не standalone automation и
+не отдельным relay thread. После заданного числа завершённых запусков задача
+транзакционно заменяется одной чистой задачей, heartbeat официально
+переназначается, новая задача проверяется по read-only состоянию Codex, старая
+задача архивируется. Токен ротации в инициализационном prompt позволяет после
+сбоя найти ту же замену вместо создания дубля. Статический ID задачи не
+хранится в Git-контракте. `reserve-handoff` не claim события, но атомарно
+блокирует соседний запуск на 180 секунд. Та же сессия сразу выполняет
+соответствующий claim. Межсессионной отправки, чтения owner thread и зависимости
+от process-local `hostId` нет. Atomic reservation и глобальный owner claim не
+допускают двух Browser-owner. Восстановимый prompt heartbeat хранится в
+[`macos/x-relay.prompt.txt`](../macos/x-relay.prompt.txt).
 
-Храните runtime state в игнорируемом `var/`. Не коммитьте `config.json`,
-токены, cookies, SQLite, очередь или локальную историю.
+Repair handoff не прерывает активный X claim. Relay проверяет глобальный owner
+до repair reservation и сразу после неё. Если X owner успел стать активным,
+relay освобождает только repair reservation и ждёт durable завершения X.
 
-## Установка сервисов без токенов
+Ручной ответ Alex считается ходом `alex`. Если на него отвечают, Browser owner
+поднимает точную живую ветку, сохраняет ранее не импортированный ручной ответ и
+использует его вместе со всей историей до подготовки продолжения.
+Происхождение хода и способ продолжения разделены. Claim payload содержит
+профиль `manual_parent_continuation`, построенный по точному сохраненному
+parent. Доказанный local-max origin, 500 или больше Unicode code points, три
+или больше абзацев либо хотя бы одна source URL выбирают локальный skill.
+Краткий parent без этих признаков может остаться Sol short. Неизвестное ручное
+происхождение остается неизвестным, и ни один маршрут не открывает ChatGPT web.
 
-Сгенерируйте три LaunchAgent:
+История local-max ветки теперь восстанавливается из SQLite и append-only JSONL.
+Старые custom-GPT URL и migration records сохраняются только как audit trail.
+Команда совместимости `pro-model-recovery-requeue` без event ID возвращает в
+durable очередь старые model, conversation и screenshot blockers, устраненные
+локальным skill.
+
+Событие от настроенного `user_id` является собственным ходом Alex, а не
+входящей работой. Watcher импортирует точный текст и метаданные цепочки как ход
+`alex`, устанавливает `delivery_state=self_authored` и не ставит такое событие
+в очередь и не выполняет для него resolve. Старые unresolved собственные строки
+идемпотентно исправляются командой
+`python3 xmention_watcher.py --config config.json self-authored-reconcile`.
+Команда не создаёт строку `event_resolutions` и ничего не меняет в X.
+
+## Установка LaunchAgent
+
+Сгенерируйте пять plist:
 
 ```bash
 python3 scripts/render_launchd.py \
@@ -83,92 +172,140 @@ python3 scripts/render_launchd.py \
   --output-dir /absolute/path/to/staging
 ```
 
-Установите и загрузите:
+Установите:
 
 - `com.axrbarsic.xmention.poll.plist`
 - `com.axrbarsic.xmention.watchdog.plist`
-- `com.axrbarsic.xmention.janitor.plist`
+- `com.axrbarsic.xmention.dispatch.plist`
+- `com.axrbarsic.xmention.codex-update.plist`
 
-Не устанавливайте устаревший `com.axrbarsic.xmention.autopilot.plist`.
+Renderer берет абсолютный `launchagent_python_executable` из локального
+config. На текущем хосте Alex это стабильная ссылка Homebrew
+`/opt/homebrew/bin/python3`. Рендеринг запрещен, если интерпретатор отсутствует
+либо версии Python или SQLite ниже настроенного минимума. Текущий порог SQLite:
+3.51.3. `system_doctor` повторяет точный `--help` import-probe каждого
+entrypoint и проверяет, что все plist используют один безопасный runtime.
 
-## Создание automation Codex Desktop
+Не создавайте пятиминутную Codex automation для X. Каждый standalone
+scheduled run создает отдельную задачу и может оставлять helper-процессы в
+долгоживущем Codex Desktop runtime. Старую automation нужно сначала поставить
+на паузу, проверить новый dispatcher, затем удалить через официальный
+`automation_update`.
 
-Создайте одну локальную запланированную задачу:
+## Машина состояний
 
-- модель: `gpt-5.6-sol`
-- reasoning effort: `high`
-- частота: каждые пять минут
-- уведомления: только при неудачных запусках
+1. Supervisor LaunchAgent выполняет doctor и при необходимости один
+   allowlisted ремонт без модели.
+2. LaunchAgent вызывает `scripts/app_server_dispatch.py`.
+3. Python сначала выполняет model-free repair gate, затем X gate.
+4. `idle`, `work_in_progress` и `deferred_resources` записываются в state и
+   завершаются без app-server.
+5. При `ready` supervisor проверяет main process Codex Desktop и запускает
+   `codex app CANONICAL_ROOT`, если процесс отсутствует.
+6. Self-owned heartbeat выполняет один `relay-reserve-handoff`. Python сам
+   резервирует repair incident либо, при его отсутствии, X queue и возвращает
+   единственный `dispatch` вместе с точным `route`.
+7. Если owner достиг порога запусков, route `rotation` создаёт одну чистую
+   local Sol Max задачу, официально переносит существующий `x-relay`, атомарно
+   меняет runtime-указатель и архивирует старую задачу. Прерванная ротация
+   продолжается с сохранённого этапа и не создаёт ещё одну задачу.
+8. Та же Sol Max задача выполняет соответствующий claim. Если старт claim не
+   состоялся, она делает `release-handoff` с точным reservation token. Очередь
+   остаётся pending.
+9. Соседний heartbeat получает `handoff_reserved`, а глобальный owner claim не
+   допускает двух Browser-owner.
+10. Repair owner выполняет doctor claim и started, чинит минимально и закрывает
+   incident только после нулевого FAIL и отчета. X owner выполняет X claim и
+   started.
+11. X owner загружает `x-twitter-operator`, открывает минимум вкладок, выполняет
+   double dedupe и publication transaction.
+12. После exact history и durable resolution owner выполняет `completed`.
+    Если dispatcher уже снял lease, `completed` автоматически завершает
+    reconciliation только после проверки нулевой pending queue и durable
+    SQLite resolution для каждого claimed event.
+13. Если Desktop был запущен supervisor, пустая очередь и owner=null запускают
+    grace timer, после которого завершается только сохраненный managed PID.
 
-Её постоянный prompt должен реализовывать эту машину состояний:
+Пока Desktop готов, а owner отсутствует, dispatcher сохраняет один
+`waiting_since` между минутными тиками. `system_doctor` поднимает
+`runtime.relay_progress` только когда ожидание без owner превышает версионный
+контракт `max_relay_wait_seconds`. Resource deferral и активный owner не
+считаются остановкой relay.
 
-1. До чтения automation memory, skills и references выполнить
-   `autopilot_bridge.py ... claim`.
-2. Если статус равен `memory_deferred` либо `dispatch` равен `false`, оставить
-   очередь без изменений и не открывать Browser.
-3. Нормально завершить пустой run без `list_threads`, Browser и самоархивации.
-4. Если `dispatch` равен `true`, выполнить `started --claim-token ...`.
-5. Исполнить возвращенный prompt в текущем запуске как единственный Browser
-   owner.
-6. После exact history и durable resolution всех заявленных событий убедиться,
-   что они исчезли из `wake-request.json`, затем выполнить
-   `completed --claim-token ...`.
-7. При ошибке до durable resolution выполнить
-   `failed --claim-token ... --error ...`.
-8. Закрыть все принадлежащие run Browser-вкладки и завершить задачу обычным
-   финальным ответом. Не архивировать текущую задачу изнутри нее.
-9. Не запускать X API postflight poll внутри automation. Polling и доступ к
-   Keychain принадлежат LaunchAgent.
+Production-граница ожидания relay равна 300 секундам. Она покрывает один
+пропущенный или задержанный heartbeat tick и обязательный skill preflight до
+durable claim. Event dispatcher сохраняет исходный `waiting_since`, поэтому
+настоящая остановка становится FAIL сразу после этой ограниченной границы.
+Возраст очереди всё это время остаётся видимым как WARN и не сбрасывается
+повторными kick.
 
-Сохраняйте следующие инварианты prompt:
+Отдельная проверка `runtime.queue_latency` измеряет `first_seen_at` самого
+старого события независимо от свежести poll и dispatcher. Превышение
+`max_queue_age_seconds` без owner является FAIL. Если именно старейшее событие
+уже находится в активном claim, doctor возвращает WARN и требует проверить
+renew и durable завершение.
 
-- один claim token на один pending batch;
-- idle: ноль Browser-вкладок;
-- short: одна X-вкладка;
-- Pro: одна X, одна ChatGPT и одна активная generation;
-- все принадлежащие run вкладки закрываются перед завершением;
-- каждый короткий ответ пишет и проверяет Sol High;
-- никаких тематических исключений;
-- postflight warning не откатывает durable resolution.
+## Контракты памяти и качества
 
-## Поведение при сбоях
-
-- Ошибка API не двигает cursor X.
-- Очередь и dispatcher state используют file locks и atomic writes.
-- Глобальная аренда одного владельца подавляет overlapping scheduled runs,
-  включая новый event, который появился во время уже активного claim.
-- Повторный запуск сохраняет `work_in_progress` и не заменяет активный claim.
-- Новый процесс Codex с другим runtime ID немедленно может reclaim очередь
-  после перезапуска приложения.
-- Janitor освобождает claim после обрыва stream только если связанная задача
-  устарела. Статус `notLoaded` сам по себе не считается доказательством смерти.
-- Janitor завершает только helper bundle, точно сопоставленный с уже
-  завершенной X-задачей. Текущий владелец и неоднозначные процессы остаются
-  нетронутыми.
-- Resource guard до Browser откладывает работу при критической памяти, но не
-  удаляет event и не двигает очередь.
-- Ошибка до durable resolution освобождает точный claim.
-- `completed` принимается только после исчезновения заявленных ID из wake
-  queue.
-- `reconcile-completed` дополнительно проверяет каждый event в SQLite перед
-  исправлением postflight health state.
-- `blocked_pending_iab` не является успехом и не resolve событие.
-- Старый CLI launcher завершается с ошибкой до claim и расхода модели.
+- Idle: ноль model tokens, ноль Browser-вкладок, ноль новых задач.
+- Ограниченный inbound claim: максимум три старейших события и до трёх
+  task-owned X-вкладок для независимого read-only просмотра.
+- Ротация Browser owner архивирует только точную выведенную из эксплуатации
+  задачу через официальный Codex archive. Doctor требует ровно одну
+  незархивированную owner-задачу с каноническими title и cwd. Проект не угадывает
+  владельца MCP-процесса по времени и не завершает Codex helper напрямую.
+- Short и local-max: одна последовательная полоса composer и публикации,
+  немедленный durable resolve каждого события и ноль ChatGPT-вкладок для
+  local-max.
+- Только Sol принимает публикационные решения. Локальный local-max route всегда
+  требует effort `max`.
+- Отдельная helper-модель не переносит задания, не анализирует X и не
+  формулирует ответы. Self-owned Sol Max задача читает deterministic route и
+  сама выполняет его.
+- Ресурсный guard ставит Browser на паузу, но не удаляет очередь.
+- Явный временный фокус на одном авторе включается командой
+  `python3 scripts/autopilot_bridge.py --config config.json
+  start-author-focus --author-id <IMMUTABLE_X_USER_ID>`. В claim попадают
+  только совпавшие события. Все остальные остаются queued и unresolved.
+  Команда `stop-author-focus` возвращает обычный FIFO. Выбирать автора по
+  handle или display name запрещено.
+- Каждый claim содержит компактную свежую `commenter_memory` и контекстное
+  `author_dossier`. Досье служит только source-linked навигацией. Перед цитатой
+  или заявлением о противоречии нужно заново открыть точную публичную запись.
+- Лимиты renderer считаются эквивалентами по 256 МиБ RSS, при этом сырое
+  количество процессов и суммарный renderer RSS остаются видимыми. Легкие
+  кэшированные renderer не блокируют Browser только из-за изменений
+  внутренней архитектуры Codex.
+- `node_repl_count` и `mcp_process_count` считаются эквивалентами по 64 МиБ
+  RSS. Сырые количества остаются видны как `node_repl_process_count` и
+  `mcp_raw_process_count`, поэтому пустые helper-процессы не исчерпывают лимиты.
+- Голосовой ввод не меняет профиль ресурсов и не откладывает Browser-работу.
+- Блокировка дисплея не является ошибкой. При awake Mac owner выполняет один
+  read-only Browser preflight и продолжает, если `iab` доступен.
+- `reserve-handoff` и глобальный owner lease предотвращают перекрывающиеся
+  relay и Browser-owner запуски.
+- Python не создает reservation, пока durable канонический owner активен. Если
+  другой turn начался во время доставки, Codex ставит direct follow-up в
+  очередь или направляет его в активный turn. Mobile Remote, локальный Desktop
+  и автоматический Browser owner используют один durable thread, а глобальный
+  owner claim сериализует публикацию.
+- Отдельного process janitor нет. Завершением helper-процессов управляет Codex
+  App Server, а протухший owner lease атомарно возвращается в работу следующим
+  claim. Неоднозначные PID никогда не завершаются по эвристике времени запуска.
 
 ## Живой canary
 
-Используйте один или несколько реальных unresolved replies:
+1. Поставьте старую X automation на паузу.
+2. Запустите один реальный unresolved event без передачи его ID модели.
+3. Подтвердите естественное обнаружение watcher.
+4. Подтвердите один self-owned heartbeat и Sol Max owner-turn.
+5. Проверьте verified X URL, exact history и durable resolution.
+6. Проверьте, что event исчез из очереди.
+7. Выполните пустой цикл dispatcher и убедитесь, что число задач и helper
+   процессов не выросло.
+8. Только после этого удалите старую automation и оставьте LaunchAgent.
 
-1. Поставьте Desktop automation на паузу и выгрузите poll/watchdog.
-2. Сохраните backup SQLite и runtime JSON.
-3. Удалите только canary events и открутите `since_id` до непосредственно
-   предыдущего наблюдаемого ID.
-4. Подтвердите, что очередь, dispatch state, история и resolutions больше не
-   знают эти события.
-5. Загрузите poll/watchdog и активируйте Desktop automation, не передавая ей
-   event ID.
-6. Требуйте естественное повторное обнаружение через API, один атомарный claim,
-   одну verified publication на событие, exact history и durable resolution.
-7. Подтвердите пустую очередь и пустой dispatch state.
-
-Нельзя имитировать успех прямой вставкой resolution.
+Успех нельзя имитировать прямой вставкой resolution. Любая проверка после
+перезапуска должна начинаться с живого состояния очереди и точной ветки X.
+Event ID, ссылку и готовый ответ модели заранее не передавать. Watcher обязан
+сам обнаружить органическое неотвеченное событие.

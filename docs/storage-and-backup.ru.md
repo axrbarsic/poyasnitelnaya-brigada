@@ -143,8 +143,9 @@ backup. Под этим service сохраняются четыре generic-pass
 | `aws-secret-access-key` | ограниченный bucket B2 application key |
 
 Значения не должны попадать в JSON, Git, shell history или аргументы команд.
-Для сохранения используется bundled Keychain helper, значение передаётся через
-standard input.
+Для сохранения используется подписанный helper, установленный командой
+`scripts/install_keychain_helper.sh`, значение передаётся через standard input.
+Backup проверяет bundle, подпись, профиль и access group до его исполнения.
 
 До первой remote-записи:
 

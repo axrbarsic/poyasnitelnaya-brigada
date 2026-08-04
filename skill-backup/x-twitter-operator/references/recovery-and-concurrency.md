@@ -106,13 +106,18 @@ Allowed parallel work:
 Single-owner work:
 
 - authenticated tab discovery and claiming;
-- navigation of X and ChatGPT tabs;
+- navigation of X and any separately authorized visual-bot tab;
 - typing into composers;
 - clicking reply, delete, follow, like, or message controls;
-- reading final Pro output from its authenticated conversation;
 - publication verification.
 
-If Pro is thinking, the same Browser owner may switch to X and process short targets. Additional research sessions must return data to the owner instead of operating the tabs.
+The local `poyasnitelnaya-brigada-v2` route is the default and never opens
+ChatGPT or a custom GPT. Keep `poyasnitelnaya-brigada` v1 unchanged and use it
+only when Alex explicitly asks for v1. Its non-empty output, capped at 4000
+code points, is generated inside the Sol High owner turn without padding toward
+the limit.
+Additional research sessions must return data to the owner instead of operating
+authenticated tabs.
 
 ## 5. Recovery decision table
 

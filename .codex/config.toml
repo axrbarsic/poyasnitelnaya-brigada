@@ -1,5 +1,5 @@
-model = "gpt-5.6-sol"
-model_reasoning_effort = "high"
+model = "gpt-5.6-luna"
+model_reasoning_effort = "medium"
 
 [agents]
 enabled = false
@@ -34,8 +34,39 @@ enabled = false
 [plugins."viktor-knowledge-bank@personal"]
 enabled = false
 
+[plugins."openai-developers@openai-curated-remote"]
+enabled = false
+
 [plugins."browser@openai-bundled"]
 enabled = true
 
 [mcp_servers.openaiDeveloperDocs]
 enabled = false
+
+[mcp_servers.lightpandaReadonly]
+command = "python3"
+args = ["/Users/alexlane/Developer/x-mention-watcher/scripts/lightpanda_mcp.py"]
+cwd = "/Users/alexlane/Developer/x-mention-watcher"
+enabled = true
+required = false
+enabled_tools = ["lightpanda_preflight", "lightpanda_public_fetch"]
+default_tools_approval_mode = "auto"
+startup_timeout_sec = 10
+tool_timeout_sec = 40
+
+[mcp_servers.lightpandaReadonly.env]
+PYTHONUTF8 = "1"
+
+[mcp_servers.cloudBrowser]
+command = "python3"
+args = ["/Users/alexlane/Developer/x-mention-watcher/scripts/browserbase_mcp.py", "--config", "/Users/alexlane/Developer/x-mention-watcher/config.json"]
+cwd = "/Users/alexlane/Developer/x-mention-watcher"
+enabled = true
+required = false
+enabled_tools = ["cloud_browser_preflight", "cloud_browser_start", "cloud_browser_call", "cloud_browser_end"]
+default_tools_approval_mode = "auto"
+startup_timeout_sec = 10
+tool_timeout_sec = 180
+
+[mcp_servers.cloudBrowser.env]
+PYTHONUTF8 = "1"

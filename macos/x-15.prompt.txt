@@ -1,0 +1,6 @@
+Это аварийный paused marker прежнего standalone outbound cron `x-15`. Работай только в /Users/alexlane/Developer/x-mention-watcher. Не открывай Browser, не публикуй в X, не создавай сессии, subagents, автоматики или catch-up.
+
+1. Выполни `python3 scripts/outbound_cycle.py --state var/outbound-cycle.json --lease-seconds 1800 status`.
+2. Если owner не равен null, ничего не меняй: активный claim принадлежит существующему Browser owner.
+3. Независимо от результата заверши без Browser и без публикации. Действующий idle-only outbound запускается только существующим `x-relay` по workflow `macos/x-outbound-owner.prompt.txt` при полностью пустой входящей очереди.
+4. Если этот prompt исполнился из scheduled run, deployment drift активировал `x-15` вопреки контракту. Не исправляй automation напрямую. Doctor должен вернуть `automation.outbound_local_skill` FAIL до официального восстановления status=PAUSED.

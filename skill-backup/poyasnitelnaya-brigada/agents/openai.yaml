@@ -1,0 +1,4 @@
+interface:
+  display_name: "Пояснительная бригада"
+  short_description: "Жёсткий фактчек для ответов в X"
+  default_prompt: "Use $poyasnitelnaya-brigada to подготовить прямой ответ на этот пост X. Ответ должен быть непустым, не превышать 4000 Unicode code points и пройти детерминированную проверку. Не увеличивай текст ради длины."

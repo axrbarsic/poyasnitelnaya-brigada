@@ -144,7 +144,9 @@ these four generic-password items under that service:
 | `aws-secret-access-key` | bucket-scoped B2 application key |
 
 The values never belong in JSON, Git, shell history, or command arguments.
-Use the bundled Keychain helper and provide each value on standard input.
+Use the signed helper installed by `scripts/install_keychain_helper.sh` and
+provide each value on standard input. Backup commands verify its bundle,
+signature, profile, and access group before executing it.
 
 Before any remote write:
 

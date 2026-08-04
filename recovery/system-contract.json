@@ -1,0 +1,229 @@
+{
+  "schema_version": 2,
+  "system_id": "poyasnitelnaya-brigada-autopilot",
+  "canonical_root": "/Users/alexlane/Developer/x-mention-watcher",
+  "git_origin": "https://github.com/axrbarsic/poyasnitelnaya-brigada.git",
+  "model_routing": {
+    "project_default": {
+      "model": "gpt-5.6-luna",
+      "reasoning_effort": "medium"
+    },
+    "browser_owner": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "high"
+    },
+    "reply_author": {
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "high"
+    },
+    "bounded_research": {
+      "model": "gpt-5.6-terra",
+      "reasoning_effort": "medium"
+    },
+    "skill_scoped_override_available": false
+  },
+  "required_files": [
+    "AGENTS.md",
+    ".codex/config.toml",
+    "config.example.json",
+    "xmention_watcher.py",
+    "scripts/app_server_dispatch.py",
+    "scripts/app_server_desktop.py",
+    "scripts/autopilot_bridge.py",
+    "scripts/autopilot_continuation.py",
+    "scripts/autopilot_contract.py",
+    "scripts/autopilot_dispatch.py",
+    "scripts/inbound_policy.py",
+    "scripts/inbound_route_control.py",
+    "scripts/json_contract.py",
+    "scripts/launchagent_runtime.py",
+    "scripts/browser_owner_claim.py",
+    "scripts/browser_owner_evidence.py",
+    "scripts/browser_handoff_sync.py",
+    "scripts/commit_browser_owner_event.py",
+    "scripts/finalize_browser_owner_session.py",
+    "scripts/autopilot_emulator.py",
+    "scripts/autopilot_state_model.py",
+    "scripts/automation_toml.py",
+    "scripts/autopilot_supervisor.py",
+    "scripts/autopilot_supervisor_incidents.py",
+    "scripts/autopilot_supervisor_routes.py",
+    "scripts/browser_owner_rotation.py",
+    "scripts/codex_thread_state.py",
+    "scripts/system_doctor.py",
+    "scripts/system_doctor_deployment.py",
+    "scripts/system_doctor_foundation.py",
+    "scripts/system_doctor_types.py",
+    "scripts/system_doctor_contract.py",
+    "scripts/system_doctor_rotation.py",
+    "scripts/system_doctor_runtime.py",
+    "scripts/watcher_database.py",
+    "scripts/watcher_events.py",
+    "scripts/watcher_auth.py",
+    "scripts/watcher_history.py",
+    "scripts/watcher_health.py",
+    "scripts/watcher_http.py",
+    "scripts/watcher_polling.py",
+    "scripts/watcher_config.py",
+    "scripts/watcher_io.py",
+    "scripts/watcher_chatgpt.py",
+    "scripts/watcher_cli.py",
+    "scripts/watcher_audit_lifecycle.py",
+    "scripts/watcher_audit_state.py",
+    "scripts/watcher_constants.py",
+    "scripts/watcher_memory.py",
+    "scripts/watcher_resolution.py",
+    "scripts/watcher_time.py",
+    "scripts/watcher_validation.py",
+    "scripts/event_dispatch.py",
+    "scripts/outbound_cycle.py",
+    "scripts/resource_guard.py",
+    "scripts/build_outbound_history.py",
+    "scripts/install_keychain_helper.sh",
+    "scripts/keychain_bundle.py",
+    "macos/XMentionKeychainHelper/main.swift",
+    "macos/XMentionKeychainHelper/Info.plist",
+    "macos/XMentionKeychainHelper/XMentionKeychainHelper.entitlements",
+    "macos/XMentionKeychainHelper.xcodeproj/project.pbxproj",
+    "macos/XMentionKeychainHelper.xcodeproj/xcshareddata/xcschemes/XMentionKeychainHelper.xcscheme",
+    "scripts/personality_policy.py",
+    "personality/policy.json",
+    "lightpanda/runtime-manifest.json",
+    "lightpanda/policy.json",
+    "lightpanda/canaries/public_read.js",
+    "scripts/lightpanda_contract.py",
+    "scripts/lightpanda_worker.py",
+    "scripts/lightpanda_mcp.py",
+    "docs/lightpanda-integration.ru.md",
+    "scripts/browserbase_cloud.py",
+    "scripts/browserbase_mcp.py",
+    "docs/cloud-browser-integration.ru.md",
+    "docs/reliability-audit-2026-08-01.ru.md",
+    "skill-backup/x-twitter-operator/SKILL.md",
+    "skill-backup/poyasnitelnaya-brigada/SKILL.md",
+    "skill-backup/poyasnitelnaya-brigada/agents/openai.yaml",
+    "skill-backup/poyasnitelnaya-brigada-v2/SKILL.md",
+    "skill-backup/poyasnitelnaya-brigada-v2/agents/openai.yaml",
+    "skill-backup/377/SKILL.md",
+    "skill-backup/377/agents/openai.yaml",
+    "macos/x-relay.prompt.txt",
+    "macos/x-browser-owner-init.prompt.txt",
+    "macos/x-outbound-owner.prompt.txt",
+    "macos/x-15.prompt.txt"
+  ],
+  "threads": {
+    "browser_owner": {
+      "id_source": "config.browser_owner_thread_id",
+      "title": "X: Browser owner",
+      "model": "gpt-5.6-sol",
+      "minimum_reasoning_effort": "high",
+      "cwd": "/Users/alexlane/Developer/x-mention-watcher",
+      "must_be_unarchived": true,
+      "unique_unarchived_in_cwd": true,
+      "pin_recommended": false,
+      "project_id_source": "config.codex_project_id",
+      "initial_prompt_source": "macos/x-browser-owner-init.prompt.txt"
+    }
+  },
+  "automations": {
+    "active_relay": {
+      "id": "x-relay",
+      "kind": "heartbeat",
+      "name": "X: единый owner heartbeat",
+      "status": "ACTIVE",
+      "rrule": "FREQ=MINUTELY;INTERVAL=1",
+      "notification_policy": "failed_runs_only",
+      "target_thread_role": "browser_owner",
+      "prompt_source": "macos/x-relay.prompt.txt"
+    },
+    "outbound_local_skill": {
+      "id": "x-15",
+      "kind": "cron",
+      "status": "PAUSED",
+      "rrule": "FREQ=MINUTELY;INTERVAL=10",
+      "model": "gpt-5.6-sol",
+      "reasoning_effort": "high",
+      "execution_environment": "local",
+      "prompt_source": "macos/x-15.prompt.txt"
+    },
+    "retired_outbound_heartbeat": {
+      "id": "x-pro-15",
+      "kind": "heartbeat",
+      "status": "PAUSED"
+    },
+    "retired_dispatcher": {
+      "id": "x",
+      "status": "PAUSED"
+    }
+  },
+  "launch_agents": [
+    "com.axrbarsic.xmention.poll",
+    "com.axrbarsic.xmention.watchdog",
+    "com.axrbarsic.xmention.dispatch",
+    "com.axrbarsic.xmention.codex-update"
+  ],
+  "launch_agent_programs": {
+    "com.axrbarsic.xmention.poll": "xmention_watcher.py",
+    "com.axrbarsic.xmention.watchdog": "scripts/autopilot_supervisor.py",
+    "com.axrbarsic.xmention.dispatch": "scripts/app_server_dispatch.py",
+    "com.axrbarsic.xmention.codex-update": "scripts/codex_cli_updater.py"
+  },
+  "runtime": {
+    "database": "var/watcher.sqlite3",
+    "database_schema_version": 13,
+    "database_application_id": 1481463601,
+    "wake_file": "var/wake-request.json",
+    "keychain_helper": "var/keychain-helper",
+    "health_file": "var/health.json",
+    "dispatch_state_file": "var/app-server-dispatch.json",
+    "event_dispatch_state_file": "var/event-dispatch.json",
+    "event_dispatch_launchagent_label": "com.axrbarsic.xmention.dispatch",
+    "inbound_claim_max_events": 3,
+    "inbound_max_parallel_read_tabs": 3,
+    "owner_rotation_after_runs": 3,
+    "minimum_launchagent_python_version": "3.10.0",
+    "minimum_launchagent_sqlite_version": "3.51.3",
+    "autopilot_state_file": "var/autopilot-dispatch.json",
+    "autopilot_dispatch_state_version": 2,
+    "owner_rotation_state_file": "var/browser-owner-rotation.json",
+    "max_owner_rotation_age_seconds": 900,
+    "max_poll_age_seconds": 180,
+    "max_dispatch_age_seconds": 180,
+    "max_relay_wait_seconds": 300,
+    "max_queue_age_seconds": 300,
+    "healthy_statuses": [
+      "healthy",
+      "healthy_silence_review"
+    ]
+  },
+  "skills": [
+    {
+      "id": "x_skill",
+      "display_name": "X skill",
+      "source": "skill-backup/x-twitter-operator",
+      "installed": ".codex/skills/x-twitter-operator"
+    },
+    {
+      "id": "poyasnitelnaya_brigada_skill",
+      "display_name": "skill «Пояснительная бригада»",
+      "source": "skill-backup/poyasnitelnaya-brigada",
+      "installed": ".codex/skills/poyasnitelnaya-brigada"
+    },
+    {
+      "id": "poyasnitelnaya_brigada_v2_skill",
+      "display_name": "skill «Пояснительная бригада v2»",
+      "source": "skill-backup/poyasnitelnaya-brigada-v2",
+      "installed": ".codex/skills/poyasnitelnaya-brigada-v2"
+    },
+    {
+      "id": "visual_377_skill",
+      "display_name": "skill 377",
+      "source": "skill-backup/377",
+      "installed": ".codex/skills/377"
+    }
+  ],
+  "personality": {
+    "tracked_policy": "personality/policy.json",
+    "runtime_overrides": "var/personality-overrides.json"
+  }
+}
