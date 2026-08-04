@@ -31,7 +31,7 @@ Codex automation is therefore retired.
 9. Every task-owned tab closes on a terminal outcome.
 10. The dispatcher verifies that every original event ID left the queue.
 11. A released unresolved claim is failure, not success.
-12. Active voice pauses only Browser, never polling or the durable queue.
+12. Voice input does not pause Browser, polling, or the durable queue.
 13. Owner rotation archives the exact retired task through the official Codex
     task API. Doctor requires exactly one unarchived canonical owner.
 14. After the queue empties, the supervisor closes only the exact Desktop PID
@@ -65,14 +65,11 @@ This exception exists only for already accumulated legacy processes. After
 stale tasks are archived and Codex Desktop restarts once, legacy helpers should
 disappear and stop accumulating.
 
-## Voice priority
+## Voice input
 
-The minute watcher, SQLite, and queue continue during voice. The resource guard
-blocks only the heavy Browser owner. The last microphone observation holds the
-pause for `voice_priority_hold_seconds`, which defaults to 300 seconds.
-
-Replies remain durable while realtime voice receives memory and CPU first.
-After the hold expires, the ordinary Sol Max owner processes the queue.
+Voice input is not a resource-guard signal. It does not change the selected
+profile and does not pause Browser work. Memory pressure and system sleep keep
+their independent safeguards.
 
 ## Measured cost
 

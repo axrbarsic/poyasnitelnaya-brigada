@@ -148,7 +148,7 @@ an X reply.
    minute launch remains active as a fallback. The kick does not reserve,
    claim, inspect, or remove queue events.
 9. Under explicit standing authority, a one-minute LaunchAgent runs the
-   read-only `autopilot_bridge gate` in Python. Empty, leased, voice-paused, and
+   read-only `autopilot_bridge gate` in Python. Empty, leased, and
    resource-deferred queues use no model and create no Codex task.
 10. A ready gate checks Codex Desktop. If Desktop is absent, the supervisor
    launches it in the canonical repository and records the exact PID it owns.

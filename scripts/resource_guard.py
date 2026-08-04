@@ -7,7 +7,6 @@ import ctypes
 import re
 import subprocess
 from dataclasses import asdict, dataclass, replace
-from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -42,8 +41,6 @@ class ResourceSample:
     user_idle_seconds: int | None = None
     on_ac_power: bool | None = None
     swap_used_mb: float | None = None
-    voice_active: bool = False
-    voice_input_pids: tuple[int, ...] = ()
     node_repl_rss_mb: float = 0.0
     mcp_process_rss_mb: float = 0.0
     renderer_process_count: int = 0
@@ -318,172 +315,6 @@ def collect_native_runtime_id() -> str | None:
     return "|".join(sorted(matches)) if matches else None
 
 
-class AudioObjectPropertyAddress(ctypes.Structure):
-    _fields_ = [
-        ("selector", ctypes.c_uint32),
-        ("scope", ctypes.c_uint32),
-        ("element", ctypes.c_uint32),
-    ]
-
-
-def fourcc(value: str) -> int:
-    if len(value) != 4:
-        raise ValueError("fourcc value must contain exactly four characters")
-    return int.from_bytes(value.encode("ascii"), byteorder="big")
-
-
-def _audio_address(selector: str) -> AudioObjectPropertyAddress:
-    return AudioObjectPropertyAddress(
-        fourcc(selector),
-        fourcc("glob"),
-        0,
-    )
-
-
-def _load_core_audio() -> Any:
-    core_audio = ctypes.CDLL(
-        "/System/Library/Frameworks/CoreAudio.framework/CoreAudio"
-    )
-    core_audio.AudioObjectGetPropertyDataSize.argtypes = [
-        ctypes.c_uint32,
-        ctypes.POINTER(AudioObjectPropertyAddress),
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_uint32),
-    ]
-    core_audio.AudioObjectGetPropertyDataSize.restype = ctypes.c_int32
-    core_audio.AudioObjectGetPropertyData.argtypes = [
-        ctypes.c_uint32,
-        ctypes.POINTER(AudioObjectPropertyAddress),
-        ctypes.c_uint32,
-        ctypes.c_void_p,
-        ctypes.POINTER(ctypes.c_uint32),
-        ctypes.c_void_p,
-    ]
-    core_audio.AudioObjectGetPropertyData.restype = ctypes.c_int32
-    return core_audio
-
-
-def _audio_process_objects(core_audio: Any) -> tuple[int, ...]:
-    process_list = _audio_address("prs#")
-    byte_count = ctypes.c_uint32()
-    status = core_audio.AudioObjectGetPropertyDataSize(
-        1,
-        ctypes.byref(process_list),
-        0,
-        None,
-        ctypes.byref(byte_count),
-    )
-    if status != 0 or byte_count.value == 0:
-        return ()
-    object_count = byte_count.value // ctypes.sizeof(ctypes.c_uint32)
-    objects = (ctypes.c_uint32 * object_count)()
-    status = core_audio.AudioObjectGetPropertyData(
-        1,
-        ctypes.byref(process_list),
-        0,
-        None,
-        ctypes.byref(byte_count),
-        objects,
-    )
-    if status != 0:
-        return ()
-    return tuple(int(object_id) for object_id in objects)
-
-
-def _audio_property_value(
-    core_audio: Any,
-    object_id: int,
-    selector: str,
-    value_type: Any,
-) -> int | None:
-    address = _audio_address(selector)
-    value = value_type()
-    value_size = ctypes.c_uint32(ctypes.sizeof(value))
-    status = core_audio.AudioObjectGetPropertyData(
-        object_id,
-        ctypes.byref(address),
-        0,
-        None,
-        ctypes.byref(value_size),
-        ctypes.byref(value),
-    )
-    return int(value.value) if status == 0 else None
-
-
-def active_audio_input_pids() -> tuple[int, ...]:
-    core_audio = _load_core_audio()
-    active: list[int] = []
-    for object_id in _audio_process_objects(core_audio):
-        running = _audio_property_value(
-            core_audio,
-            object_id,
-            "piri",
-            ctypes.c_uint32,
-        )
-        if not running:
-            continue
-        pid = _audio_property_value(
-            core_audio,
-            object_id,
-            "ppid",
-            ctypes.c_int32,
-        )
-        if pid is not None and pid > 0:
-            active.append(pid)
-    return tuple(sorted(set(active)))
-
-
-def native_process_command(pid: int) -> str:
-    libproc = _load_libproc()
-    path = _native_process_path(libproc, pid)
-    if path is None:
-        return ""
-    return _native_command(_load_libc(), pid, path)
-
-
-def is_codex_audio_command(command: str) -> bool:
-    return (
-        "audio.mojom.AudioService" in command
-        and any(marker in command for marker in CODEX_MARKERS)
-    )
-
-
-def detect_realtime_voice() -> tuple[bool, tuple[int, ...]]:
-    try:
-        matching = tuple(
-            pid
-            for pid in active_audio_input_pids()
-            if is_codex_audio_command(native_process_command(pid))
-        )
-    except (OSError, ValueError):
-        matching = ()
-    return bool(matching), matching
-
-
-def apply_voice_hold(
-    sample: ResourceSample,
-    previous: dict[str, Any],
-    *,
-    now: datetime,
-    hold_seconds: int,
-) -> tuple[ResourceSample, str | None, bool]:
-    observed = sample.voice_active
-    if observed:
-        until = now + timedelta(seconds=hold_seconds)
-        return sample, autopilot_dispatch.isoformat(until), True
-    previous_until = autopilot_dispatch.parse_time(
-        previous.get("voice_priority_until")
-    )
-    if previous_until is not None and previous_until > now:
-        return (
-            replace(sample, voice_active=True),
-            autopilot_dispatch.isoformat(previous_until),
-            False,
-        )
-    return sample, None, False
-
-
 def codex_runtime_id() -> str | None:
     try:
         process_result = subprocess.run(
@@ -573,8 +404,6 @@ def _merge_resource_sample(
     idle_seconds: int | None,
     on_ac_power: bool | None,
     swap_used_mb: float | None,
-    voice_active: bool,
-    voice_input_pids: tuple[int, ...],
 ) -> ResourceSample:
     return replace(
         sample,
@@ -582,8 +411,6 @@ def _merge_resource_sample(
         user_idle_seconds=idle_seconds,
         on_ac_power=on_ac_power,
         swap_used_mb=swap_used_mb,
-        voice_active=voice_active,
-        voice_input_pids=voice_input_pids,
     )
 
 
@@ -591,15 +418,12 @@ def collect() -> ResourceSample:
     sample = _collect_process_sample()
     free_percent = _collect_free_percent()
     idle_seconds, on_ac_power, swap_used_mb = _collect_optional_metrics()
-    voice_active, voice_input_pids = detect_realtime_voice()
     return _merge_resource_sample(
         sample,
         free_percent=free_percent,
         idle_seconds=idle_seconds,
         on_ac_power=on_ac_power,
         swap_used_mb=swap_used_mb,
-        voice_active=voice_active,
-        voice_input_pids=voice_input_pids,
     )
 
 
@@ -611,8 +435,6 @@ def select_mode(sample: ResourceSample, config: dict[str, Any]) -> str:
         return configured
     if configured != "auto":
         raise ValueError(f"Unsupported resource_mode: {configured}")
-    if sample.voice_active:
-        return "efficiency"
     pressure_free = int(config["resource_mode_pressure_free_percent"])
     pressure_rss = float(config["resource_mode_pressure_codex_rss_mb"])
     pressure_swap = float(config["resource_mode_pressure_swap_used_mb"])
@@ -812,54 +634,16 @@ def _assess_limits(
     return reasons
 
 
-def _load_guard_state(state_path: Path) -> dict[str, Any]:
-    if not state_path.exists():
-        return {}
-    try:
-        return autopilot_dispatch.read_json(state_path)
-    except (OSError, ValueError):
-        return {}
-
-
-def _apply_voice_priority(
-    sample: ResourceSample,
-    previous: dict[str, Any],
-    config: dict[str, Any],
-    *,
-    enabled: bool,
-) -> tuple[ResourceSample, str | None, bool]:
-    if not enabled:
-        return sample, None, sample.voice_active
-    hold_seconds = int(config.get("voice_priority_hold_seconds", 300))
-    if hold_seconds < 0:
-        raise ValueError("voice_priority_hold_seconds must not be negative")
-    return apply_voice_hold(
-        sample,
-        previous,
-        now=datetime.now(timezone.utc),
-        hold_seconds=hold_seconds,
-    )
-
-
 def _guard_result(
     sample: ResourceSample,
     config: dict[str, Any],
     *,
     memory_enabled: bool,
-    voice_priority_enabled: bool,
-    voice_priority_until: str | None,
-    voice_observed: bool,
 ) -> dict[str, Any]:
     mode = select_mode(sample, config)
     reasons = assess(sample, config, mode=mode) if memory_enabled else []
-    if voice_priority_enabled and sample.voice_active:
-        reasons.insert(
-            0,
-            "voice_active=true reserves resources for realtime conversation",
-        )
     result: dict[str, Any] = {
         "enabled": memory_enabled,
-        "voice_priority_enabled": voice_priority_enabled,
         "available": True,
         "defer": bool(reasons),
         "reasons": reasons,
@@ -870,22 +654,15 @@ def _guard_result(
         "sample": asdict(sample),
         "checked_at": autopilot_dispatch.isoformat(),
     }
-    if voice_priority_enabled:
-        result["voice_observed"] = voice_observed
-        result["voice_priority_until"] = voice_priority_until
     return result
 
 
 def check(config_path: Path) -> dict[str, Any]:
     config = autopilot_dispatch.read_json(config_path)
     memory_enabled = bool(config.get("memory_guard_enabled", False))
-    voice_priority_enabled = bool(
-        config.get("voice_priority_enabled", False)
-    )
-    if not memory_enabled and not voice_priority_enabled:
+    if not memory_enabled:
         return {
             "enabled": False,
-            "voice_priority_enabled": False,
             "defer": False,
             "reasons": [],
         }
@@ -893,22 +670,12 @@ def check(config_path: Path) -> dict[str, Any]:
         config.get("memory_guard_state_file", "var/resource-health.json")
     )
     state_path = autopilot_dispatch.resolve_path(config_path, state_value)
-    previous = _load_guard_state(state_path)
     try:
         sample = collect()
-        sample, voice_priority_until, voice_observed = _apply_voice_priority(
-            sample,
-            previous,
-            config,
-            enabled=voice_priority_enabled,
-        )
         result = _guard_result(
             sample,
             config,
             memory_enabled=memory_enabled,
-            voice_priority_enabled=voice_priority_enabled,
-            voice_priority_until=voice_priority_until,
-            voice_observed=voice_observed,
         )
     except (OSError, subprocess.SubprocessError, ValueError, KeyError) as error:
         result = {

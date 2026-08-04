@@ -1727,7 +1727,7 @@ class AutopilotBridgeTests(unittest.TestCase):
         )
         self.assertTrue(result["resource_guard"]["defer"])
 
-    def test_voice_priority_defers_without_claiming(self) -> None:
+    def test_legacy_voice_priority_config_does_not_defer(self) -> None:
         payload = json.loads(self.config.read_text(encoding="utf-8"))
         payload.update(
             {
@@ -1736,34 +1736,16 @@ class AutopilotBridgeTests(unittest.TestCase):
             }
         )
         self.config.write_text(json.dumps(payload), encoding="utf-8")
-        self.write_events([self.event()])
-        original_collect = resource_guard.collect
-        resource_guard.collect = lambda: resource_guard.ResourceSample(
-            codex_rss_mb=900,
-            renderer_count=2,
-            node_repl_count=1,
-            mcp_process_count=2,
-            free_percent=60,
-            voice_active=True,
-            voice_input_pids=(123,),
+        event = self.event()
+        self.write_events([event])
+        result = autopilot_bridge.gate(
+            self.config,
+            lease_seconds=1800,
         )
-        try:
-            result = autopilot_bridge.gate(
-                self.config,
-                lease_seconds=1800,
-            )
-        finally:
-            resource_guard.collect = original_collect
 
-        self.assertFalse(result["dispatch"])
-        self.assertEqual(result["status"], "resource_deferred")
-        self.assertIn(
-            "voice_active=true",
-            result["resource_guard"]["reasons"][0],
-        )
-        self.assertFalse(
-            (self.root / "var" / "autopilot-dispatch.json").exists()
-        )
+        self.assertTrue(result["dispatch"])
+        self.assertEqual(result["status"], "ready")
+        self.assertEqual(result["event_ids"], [event["event_id"]])
 
     def test_gate_keeps_active_owner_when_resource_guard_defers(self) -> None:
         self.write_events([self.event()])

@@ -94,8 +94,6 @@ Create ignored `config.json` from the example and set:
   "resource_mode": "auto",
   "memory_guard_enabled": true,
   "memory_guard_swap_blocks_dispatch": false,
-  "voice_priority_enabled": true,
-  "voice_priority_hold_seconds": 300,
   "commenter_memory_limit": 12,
   "conversation_tail_enabled": true,
   "conversation_tail_poll_interval_seconds": 300,
@@ -248,8 +246,7 @@ visible as WARN throughout the handoff and does not reset on repeated kicks.
 - `node_repl_count` and `mcp_process_count` use 64 MiB RSS equivalents.
   Their raw counts remain visible as `node_repl_process_count` and
   `mcp_raw_process_count`, so idle helper shells cannot exhaust the limits.
-- An active voice conversation selects the efficiency profile and holds a
-  post-voice pause.
+- Voice input does not affect the resource profile or defer Browser work.
 - Display lock is not an error. On an awake Mac, the owner performs one
   read-only Browser preflight and continues when `iab` is available.
 - The handoff reservation and global owner lease prevent overlapping relay and

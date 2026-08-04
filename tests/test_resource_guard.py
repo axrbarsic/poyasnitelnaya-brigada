@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import subprocess
 import unittest
-from datetime import datetime, timezone
 from unittest import mock
 
 from scripts import resource_guard
@@ -182,7 +181,7 @@ class ResourceGuardTests(unittest.TestCase):
             resource_guard.select_mode(pressure, config), "efficiency"
         )
 
-    def test_active_voice_forces_efficiency_mode(self) -> None:
+    def test_idle_profile_uses_performance_without_voice_override(self) -> None:
         config = {
             "resource_mode": "auto",
             "memory_guard_profiles": {"balanced": {}},
@@ -200,48 +199,11 @@ class ResourceGuardTests(unittest.TestCase):
             user_idle_seconds=1800,
             on_ac_power=True,
             swap_used_mb=0,
-            voice_active=True,
-            voice_input_pids=(123,),
         )
 
         self.assertEqual(
-            resource_guard.select_mode(sample, config), "efficiency"
+            resource_guard.select_mode(sample, config), "performance"
         )
-
-    def test_codex_audio_command_requires_codex_audio_service(self) -> None:
-        self.assertTrue(
-            resource_guard.is_codex_audio_command(
-                "/Applications/ChatGPT.app/Contents/Frameworks/"
-                "Codex Helper --utility-sub-type=audio.mojom.AudioService"
-            )
-        )
-        self.assertFalse(
-            resource_guard.is_codex_audio_command(
-                "/Applications/ChatGPT.app/Contents/MacOS/ChatGPT"
-            )
-        )
-
-    def test_voice_hold_covers_quiet_gap_between_replies(self) -> None:
-        now = datetime(2026, 7, 26, 13, 50, tzinfo=timezone.utc)
-        sample = resource_guard.ResourceSample(
-            codex_rss_mb=1200,
-            renderer_count=2,
-            node_repl_count=1,
-            mcp_process_count=2,
-            free_percent=60,
-            voice_active=False,
-        )
-
-        held, until, observed = resource_guard.apply_voice_hold(
-            sample,
-            {"voice_priority_until": "2026-07-26T13:52:00Z"},
-            now=now,
-            hold_seconds=300,
-        )
-
-        self.assertTrue(held.voice_active)
-        self.assertEqual(until, "2026-07-26T13:52:00Z")
-        self.assertFalse(observed)
 
     def test_profile_limit_and_hard_cap_both_apply(self) -> None:
         sample = resource_guard.ResourceSample(

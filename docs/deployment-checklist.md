@@ -79,8 +79,8 @@
   duplicate Sol turn.
 - [x] Confirm efficiency, balanced, and performance modes are selected in live
   resource samples without changing Sol Max quality.
-- [x] Confirm unit coverage makes active voice and the post-voice hold defer
-  Browser work while the durable queue remains available.
+- [x] Confirm voice input never changes the resource profile or defers Browser
+  work.
 - [x] Confirm the dispatcher process lock stops a second manual or launchd
   instance before gate or model startup.
 - [x] Confirm a failed pre-resolution worker releases the exact claim.

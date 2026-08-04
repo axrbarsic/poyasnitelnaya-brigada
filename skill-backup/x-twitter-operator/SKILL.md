@@ -142,8 +142,9 @@ start, never the required quality of Sol reasoning or fact checking:
   completion;
 - never let a newly arrived event start a second owner while any global owner
   lease is active.
-- treat a locked display as safe while macOS remains awake. Active voice or
-  system sleep defers Browser work without dropping the durable queue.
+- treat a locked display as safe while macOS remains awake. Voice input does
+  not defer Browser work. System sleep still defers without dropping the
+  durable queue.
 
 Deployment gate: do not install the event dispatcher or retire the paused
 fallback automation until one live in-app handoff and one supervisor launch
@@ -498,7 +499,7 @@ without supplying target IDs.
 - A queued local Sol High follow-up must load the exact recorded local X history and use
   `poyasnitelnaya-brigada-v2` in Sol High by default.
 - Run poll, watchdog, and the Python event dispatcher every minute on
-  the 8 GB iMac. Empty, leased, voice-paused, and resource-deferred checks stop
+  the 8 GB iMac. Empty, leased, and resource-deferred checks stop
   without a model, Browser, or new Codex task.
 - When `dispatch=true`, the supervisor launches Desktop only if needed. The
   existing self-owned heartbeat is already attached to the single Sol High

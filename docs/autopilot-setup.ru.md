@@ -100,8 +100,6 @@ trust_level = "trusted"
   "resource_mode": "auto",
   "memory_guard_enabled": true,
   "memory_guard_swap_blocks_dispatch": false,
-  "voice_priority_enabled": true,
-  "voice_priority_hold_seconds": 300,
   "commenter_memory_limit": 12,
   "conversation_tail_enabled": true,
   "conversation_tail_poll_interval_seconds": 300,
@@ -281,7 +279,7 @@ renew и durable завершение.
 - `node_repl_count` и `mcp_process_count` считаются эквивалентами по 64 МиБ
   RSS. Сырые количества остаются видны как `node_repl_process_count` и
   `mcp_raw_process_count`, поэтому пустые helper-процессы не исчерпывают лимиты.
-- Активный голосовой разговор включает экономный режим и удерживает паузу.
+- Голосовой ввод не меняет профиль ресурсов и не откладывает Browser-работу.
 - Блокировка дисплея не является ошибкой. При awake Mac owner выполняет один
   read-only Browser preflight и продолжает, если `iab` доступен.
 - `reserve-handoff` и глобальный owner lease предотвращают перекрывающиеся
