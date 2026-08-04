@@ -158,6 +158,32 @@
   an LLM. Agent mode is a separate build-time experiment and cannot become a
   runtime dependency without its own canary and promotion.
 
+## Browserbase cloud Browser canary
+
+- The project MCP server `cloudBrowser` connects Codex directly to Browserbase
+  through the filtered local facade in `scripts/browserbase_mcp.py`. Hermes is
+  not part of this route.
+- Idle owns no Browserbase session and incurs no cloud-browser minutes. Start
+  one cloud session only for one bounded Browser-owner claim and call
+  `cloud_browser_end` in every terminal path.
+- Keep the local SQLite queue, exact status IDs, duplicate ledger, evidence,
+  X API verification and durable resolution authoritative. Browserbase replaces
+  only the Chromium execution backend.
+- Use one persistent Browserbase Context for the authenticated `@axrbarsic`
+  profile. Never run two sessions against the same Context concurrently.
+- The facade may expose only the tracked Playwright allowlist. It must not
+  expose `browser_run_code_unsafe`, CDP credentials, Browserbase API keys, or
+  unrestricted local file access.
+- Store the Browserbase API key in the verified native Keychain helper. Keep
+  project and Context IDs in untracked `config.json`. Never put credentials,
+  CDP URLs or stored browser state in Git, prompts, logs, or evidence.
+- Until read-only navigation, persistent login, exact X target inspection,
+  composer dry-run, file upload and one controlled publication all pass, the
+  built-in Browser remains the production backend and immediate fallback.
+- Promotion does not change the one-writer rule. Up to three tabs may prepare
+  independent read-only context, but composer validation, publication, X API
+  proof, evidence commit and resolution remain serial.
+
 ## Managed personality
 
 - Keep the versioned baseline voice in `personality/policy.json`.

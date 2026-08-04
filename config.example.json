@@ -117,6 +117,18 @@
   "keychain_helper": "var/keychain-helper",
   "keychain_service": "axrbarsic-x-mention-watcher",
   "keychain_account": "axrbarsic",
+  "cloud_browser": {
+    "provider": "browserbase",
+    "api_base": "https://api.browserbase.com/v1",
+    "project_id": "REPLACE_BROWSERBASE_PROJECT_ID",
+    "context_id": "REPLACE_BROWSERBASE_CONTEXT_ID",
+    "keychain_service": "axrbarsic-x-mention-watcher-browserbase",
+    "keychain_account": "api-key",
+    "region": "us-east-1",
+    "timeout_seconds": 900,
+    "mcp_package": "@playwright/mcp@0.0.75",
+    "runtime_root": "var/cloud-browser"
+  },
   "queue_direct_replies_only": true,
   "mandatory_response_mode": true,
   "conversation_tail_enabled": true,

@@ -56,3 +56,17 @@ tool_timeout_sec = 40
 
 [mcp_servers.lightpandaReadonly.env]
 PYTHONUTF8 = "1"
+
+[mcp_servers.cloudBrowser]
+command = "python3"
+args = ["/Users/alexlane/Developer/x-mention-watcher/scripts/browserbase_mcp.py", "--config", "/Users/alexlane/Developer/x-mention-watcher/config.json"]
+cwd = "/Users/alexlane/Developer/x-mention-watcher"
+enabled = true
+required = false
+enabled_tools = ["cloud_browser_preflight", "cloud_browser_start", "cloud_browser_call", "cloud_browser_end"]
+default_tools_approval_mode = "auto"
+startup_timeout_sec = 10
+tool_timeout_sec = 180
+
+[mcp_servers.cloudBrowser.env]
+PYTHONUTF8 = "1"
